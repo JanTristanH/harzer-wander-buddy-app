@@ -37,3 +37,6 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# Android for keeping small diff, run npx expo prebuild --clean to regenerate
+android/
