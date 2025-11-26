@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "de.bit-kueste.hwb"
+      "bundleIdentifier": "de.bitkueste.hwb"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +18,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "de.bit-kueste.hwb"
+      "package": "de.bitkueste.hwb"
     },
     "web": {
       "bundler": "metro",
@@ -45,6 +45,26 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a9950c77-24b3-4641-a771-5427c4b311c5",
+        "owner": "jantristanh",
+        
+        "build": {
+          "development": {
+            "developmentClient": true,
+            "distribution": "internal",
+            "android": {
+              "buildType": "apk"
+            },
+            "ios": {
+              "simulator": true
+            }
+          }
+        }
+      }
     }
   }
 }
