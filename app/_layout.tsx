@@ -1,4 +1,3 @@
-import config from "@/auth0-config";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import {
   DarkTheme,
@@ -8,7 +7,6 @@ import {
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React from 'react';
-import { Auth0Provider } from "react-native-auth0";
 import "react-native-reanimated";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -21,7 +19,6 @@ export default function RootLayout() {
     // add the auth0 provider
     // the domain and clientId come from your auth0 account. I have made a separate
     // config file to pull this information from, you don't have to.
-    <Auth0Provider domain={config.domain} clientId={config.clientId}>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -34,6 +31,5 @@ export default function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
       </ThemeProvider>
-    </Auth0Provider>
   );
 }
