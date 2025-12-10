@@ -6,7 +6,6 @@ import {
 } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React from 'react';
 import "react-native-reanimated";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -25,7 +24,7 @@ export default function RootLayout() {
           {/* add this authorisation stack screen, it won't lead to anything at 
               the moment but we will set it up */}
           <Stack.Screen
-            name="authorisation"
+            name="social-sign-in"
             options={{ presentation: "modal", headerShown: false }}
           />
           <Stack.Screen name="+not-found" />
