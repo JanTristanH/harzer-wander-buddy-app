@@ -1,3 +1,3 @@
 export const config = {
-    baseUrl: "http://localhost:4004/odata/v4/api"
+    baseUrl: "https://scaling-umbrella-j757wwx9rj6c5g4v-4004.app.github.dev/odata/v4/api"
 };
