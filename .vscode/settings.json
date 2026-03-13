@@ -1,12 +1,4 @@
 {
-  "terminal.integrated.profiles.windows": {
-    "Git Bash": {
-      "path": "C:\\Program Files\\Git\\bin\\bash.exe",
-      "args": ["--login"],
-      "icon": "terminal-bash"
-    }
-  },
-  "terminal.integrated.defaultProfile.windows": "Git Bash",
   "editor.codeActionsOnSave": {
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
