@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -62,10 +63,14 @@ function formatDistance(distanceKm: number | null) {
 
 function cardGradient(index: number, visited: boolean) {
   if (visited) {
-    return index % 2 === 0 ? ['#4f8b67', '#88bf99'] : ['#4e7f61', '#bfd7ac'];
+    return index % 2 === 0
+      ? (['#458962', '#8fd2a4'] as const)
+      : (['#4a8464', '#c2dfae'] as const);
   }
 
-  return index % 2 === 0 ? ['#bcc2b6', '#ddd8ce'] : ['#aeb7aa', '#d4d1c8'];
+  return index % 2 === 0
+    ? (['#b6beac', '#e1d2bd'] as const)
+    : (['#a6b39c', '#d7cfbb'] as const);
 }
 
 function StampCard({
@@ -93,6 +98,11 @@ function StampCard({
 
         <View style={styles.cardMetaRow}>
           <View style={[styles.statePill, item.hasVisited ? styles.statePillVisited : styles.statePillOpen]}>
+            <Feather
+              color={item.hasVisited ? '#2e6b4b' : '#7a6a4a'}
+              name={item.hasVisited ? 'check' : 'x'}
+              size={11}
+            />
             <Text
               style={[
                 styles.statePillLabel,
@@ -106,7 +116,6 @@ function StampCard({
       </View>
 
       <Feather color="#8b957f" name="chevron-right" size={18} style={styles.cardChevron} />
-      {item.hasVisited ? <Text style={[styles.cardMark, styles.cardMarkVisited]}>✓</Text> : null}
     </Pressable>
   );
 }
@@ -154,9 +163,11 @@ export default function StampsScreen() {
     [accessToken, logout]
   );
 
-  useEffect(() => {
-    void loadStamps();
-  }, [loadStamps]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadStamps();
+    }, [loadStamps])
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -465,7 +476,7 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 6,
-    backgroundColor: '#dde9df',
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -554,6 +565,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   statePillVisited: {
     backgroundColor: '#e2eee6',
@@ -576,17 +590,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
   },
-  cardMark: {
-    fontSize: 18,
-    lineHeight: 20,
-    fontWeight: '600',
-    paddingTop: 2,
-  },
   cardChevron: {
     alignSelf: 'center',
-  },
-  cardMarkVisited: {
-    color: '#2e6b4b',
   },
   centered: {
     flex: 1,

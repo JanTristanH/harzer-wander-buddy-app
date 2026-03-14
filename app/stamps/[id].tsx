@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
-import { fetchStampDetail, type StampDetailData } from '@/lib/api';
+import { createStamping, fetchStampDetail, type StampDetailData } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
 type IdClaims = {
@@ -55,7 +55,9 @@ function formatVisitDate(value?: string) {
 }
 
 function heroGradient(visited: boolean) {
-  return visited ? ['#4f8b67', '#79af82', '#d8c88f'] : ['#b8bdb1', '#cfd3c8', '#e1d7c5'];
+  return visited
+    ? (['#4f8b67', '#79af82', '#d8c88f'] as const)
+    : (['#b8bdb1', '#cfd3c8', '#e1d7c5'] as const);
 }
 
 function Section({
@@ -81,6 +83,16 @@ function StampDetailContent() {
   const [detail, setDetail] = useState<StampDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isStamping, setIsStamping] = useState(false);
+
+  function handleBack() {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace('/(tabs)' as never);
+  }
 
   const loadDetail = useCallback(async () => {
     if (!accessToken || !stampId) {
@@ -133,8 +145,30 @@ function StampDetailContent() {
     await Linking.openURL(url);
   }
 
-  function handleStampVisit() {
-    Alert.alert('Noch nicht verdrahtet', 'Das Stempeln wird im naechsten Schritt angebunden.');
+  async function handleStampVisit() {
+    if (!accessToken || !stampId || isStamping) {
+      return;
+    }
+
+    setIsStamping(true);
+
+    try {
+      await createStamping(accessToken, stampId);
+      await loadDetail();
+      Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
+    } catch (nextError) {
+      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+        await logout();
+        return;
+      }
+
+      Alert.alert(
+        'Stempeln fehlgeschlagen',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    } finally {
+      setIsStamping(false);
+    }
   }
 
   if (!stampId) {
@@ -188,7 +222,7 @@ function StampDetailContent() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}>
         <LinearGradient colors={heroGradient(visited)} style={styles.hero}>
-          <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
+          <Pressable onPress={handleBack} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
             <Feather color="#1e2a1e" name="arrow-left" size={18} />
           </Pressable>
 
@@ -289,15 +323,15 @@ function StampDetailContent() {
             <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
           </Pressable>
           <Pressable
-            disabled={visited}
+            disabled={visited || isStamping}
             onPress={handleStampVisit}
             style={({ pressed }) => [
               styles.primaryButton,
-              visited && styles.primaryButtonDisabled,
-              pressed && !visited && styles.primaryButtonPressed,
+              (visited || isStamping) && styles.primaryButtonDisabled,
+              pressed && !visited && !isStamping && styles.primaryButtonPressed,
             ]}>
             <Text style={styles.primaryButtonLabel}>
-              {visited ? 'Bereits gestempelt' : 'Besuch stempeln'}
+              {visited ? 'Bereits gestempelt' : isStamping ? 'Stemple...' : 'Besuch stempeln'}
             </Text>
           </Pressable>
         </View>

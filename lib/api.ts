@@ -117,6 +117,39 @@ async function fetchOData<T>(accessToken: string, url: string) {
   return (await response.json()) as T;
 }
 
+async function mutateOData<T>(
+  accessToken: string,
+  url: string,
+  init: RequestInit & { body?: string }
+) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error('Unauthorized');
+    error.name = 'UnauthorizedError';
+    throw error;
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(errorBody || `Request failed with status ${response.status}`);
+  }
+
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  return (await response.json()) as T;
+}
+
 async function fetchCollection<T>(
   accessToken: string,
   entitySet: string,
@@ -314,4 +347,15 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     friendVisits,
     myVisits,
   } satisfies StampDetailData;
+}
+
+export async function createStamping(accessToken: string, stampId: string) {
+  return mutateOData<Stamping>(accessToken, buildUrl('Stampings'), {
+    method: 'POST',
+    body: JSON.stringify({
+      stamp: {
+        ID: stampId,
+      },
+    }),
+  });
 }
