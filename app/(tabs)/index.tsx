@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -71,13 +72,15 @@ function StampCard({
   item,
   index,
   distanceKm,
+  onPress,
 }: {
   item: Stampbox;
   index: number;
   distanceKm: number | null;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.card}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
       <LinearGradient colors={cardGradient(index, !!item.hasVisited)} style={styles.cardArtwork} />
 
       <View style={styles.cardBody}>
@@ -102,12 +105,14 @@ function StampCard({
         </View>
       </View>
 
+      <Feather color="#8b957f" name="chevron-right" size={18} style={styles.cardChevron} />
       {item.hasVisited ? <Text style={[styles.cardMark, styles.cardMarkVisited]}>✓</Text> : null}
-    </View>
+    </Pressable>
   );
 }
 
 export default function StampsScreen() {
+  const router = useRouter();
   const { accessToken, logout } = useAuth();
   const [stamps, setStamps] = useState<Stampbox[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -337,7 +342,12 @@ export default function StampsScreen() {
         }
         ListHeaderComponent={header}
         renderItem={({ item, index }) => (
-          <StampCard distanceKm={item.distanceKm} index={index} item={item.stamp} />
+          <StampCard
+            distanceKm={item.distanceKm}
+            index={index}
+            item={item.stamp}
+            onPress={() => router.push(`/stamps/${item.stamp.ID}` as never)}
+          />
         )}
         contentContainerStyle={styles.listContent}
         refreshControl={
@@ -510,6 +520,10 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
+  cardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.995 }],
+  },
   cardArtwork: {
     width: 64,
     height: 64,
@@ -567,6 +581,9 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '600',
     paddingTop: 2,
+  },
+  cardChevron: {
+    alignSelf: 'center',
   },
   cardMarkVisited: {
     color: '#2e6b4b',
