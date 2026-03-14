@@ -30,11 +30,15 @@ type StoredTokenState = {
 type AuthContextValue = {
   accessToken: string | null;
   idToken: string | null;
+  refreshToken: string | null;
+  issuedAt: number | null;
+  expiresIn: number | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   authError: string | null;
   configError: string | null;
   login: () => Promise<void>;
+  signup: () => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -182,7 +186,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     };
   }, [configError]);
 
-  async function login() {
+  async function authenticate(mode: 'login' | 'signup') {
     if (configError) {
       return;
     }
@@ -205,18 +209,19 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         usePKCE: true,
         extraParams: {
           audience: appConfig.auth0Audience,
+          ...(mode === 'signup' ? { screen_hint: 'signup' } : {}),
         },
       });
 
       await request.makeAuthUrlAsync(discovery);
-      console.log('Auth0 redirect URI:', redirectUri);
+      console.log(`Auth0 ${mode} redirect URI:`, redirectUri);
 
       const result = await request.promptAsync(discovery);
-      console.log('Auth0 prompt result type:', result.type);
+      console.log(`Auth0 ${mode} prompt result type:`, result.type);
 
       if (result.type !== 'success' || !result.params.code) {
         if (result.type !== 'dismiss' && result.type !== 'cancel') {
-          setAuthError('Auth0 login did not return an authorization code.');
+          setAuthError(`Auth0 ${mode} did not return an authorization code.`);
         }
         return;
       }
@@ -242,9 +247,17 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         expiresIn: tokenResponse.expiresIn,
       });
     } catch (error) {
-      console.error('Auth0 login failed', error);
-      setAuthError(error instanceof Error ? error.message : 'Auth0 login failed');
+      console.error(`Auth0 ${mode} failed`, error);
+      setAuthError(error instanceof Error ? error.message : `Auth0 ${mode} failed`);
     }
+  }
+
+  async function login() {
+    await authenticate('login');
+  }
+
+  async function signup() {
+    await authenticate('signup');
   }
 
   async function logout() {
@@ -275,14 +288,27 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     () => ({
       accessToken: authState?.accessToken ?? null,
       idToken: authState?.idToken ?? null,
+      refreshToken: authState?.refreshToken ?? null,
+      issuedAt: authState?.issuedAt ?? null,
+      expiresIn: authState?.expiresIn ?? null,
       isAuthenticated: !!authState?.accessToken,
       isLoading,
       authError,
       configError,
       login,
+      signup,
       logout,
     }),
-    [authError, authState?.accessToken, authState?.idToken, configError, isLoading]
+    [
+      authError,
+      authState?.accessToken,
+      authState?.expiresIn,
+      authState?.idToken,
+      authState?.issuedAt,
+      authState?.refreshToken,
+      configError,
+      isLoading,
+    ]
   );
 
   return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
