@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { Feather } from '@expo/vector-icons';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { HapticTab } from '@/components/haptic-tab';
@@ -12,18 +13,27 @@ export default function TabLayout() {
         screenOptions={{
           headerShown: false,
           tabBarButton: HapticTab,
-          tabBarActiveTintColor: '#184f59',
-          tabBarInactiveTintColor: '#836c44',
+          tabBarActiveTintColor: '#2e6b4b',
+          tabBarInactiveTintColor: '#718071',
           tabBarStyle: {
-            backgroundColor: '#fffaf0',
-            borderTopColor: '#ead9b6',
-            height: 84,
+            backgroundColor: '#ffffff',
+            borderTopWidth: 0,
+            height: 80,
             paddingTop: 8,
             paddingBottom: 12,
+            marginHorizontal: 20,
+            marginBottom: 20,
+            borderRadius: 24,
+            position: 'absolute',
+            shadowColor: '#141e14',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.08,
+            shadowRadius: 18,
+            elevation: 6,
           },
           tabBarLabelStyle: {
             fontWeight: '700',
-            fontSize: 12,
+            fontSize: 11,
           },
         }}>
         <Tabs.Screen
@@ -31,6 +41,13 @@ export default function TabLayout() {
           options={{
             title: 'Liste',
             tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="friends"
+          options={{
+            title: 'Freunde',
+            tabBarIcon: ({ color }) => <Feather color={color} name="users" size={24} />,
           }}
         />
         <Tabs.Screen
