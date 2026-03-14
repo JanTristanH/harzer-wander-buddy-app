@@ -48,3 +48,22 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Creating a new development build
+
+`eas build --platform ios --profile development`
+
+`npx expo start` => start the dev server
+
+## Auth0 Config
+
+`app.json` file contains the configuration.
+
+```
+      "backendUrl": "http://localhost:4004", => change to remote url when deploying
+      "auth0Domain": "dev-ijucl08spdudaszc.us.auth0.com",
+      "auth0ClientId": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh", => needs to be a naitve app (can run parallel to web auth)
+      "auth0Audience": "https://app.harzer-wander-buddy.de/api/v2/",
+      "auth0Scope": "openid profile email offline_access",
+      "auth0LogoutReturnPath": "auth/logout",
+```
