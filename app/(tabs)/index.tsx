@@ -1,98 +1,172 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { StampRow } from '@/components/stamp-row';
+import { fetchStampboxes, type Stampbox } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
-export default function HomeScreen() {
+export default function StampsScreen() {
+  const { accessToken, logout } = useAuth();
+  const [stamps, setStamps] = useState<Stampbox[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const loadStamps = useCallback(
+    async (refresh = false) => {
+      if (!accessToken) {
+        return;
+      }
+
+      if (refresh) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+
+      try {
+        const nextStamps = await fetchStampboxes(accessToken);
+        setStamps(nextStamps);
+        setError(null);
+      } catch (nextError) {
+        if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+          await logout();
+          return;
+        }
+
+        setError(nextError instanceof Error ? nextError.message : 'Unknown error');
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [accessToken, logout]
+  );
+
+  useEffect(() => {
+    void loadStamps();
+  }, [loadStamps]);
+
+  const content = (() => {
+    if (isLoading) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#184f59" />
+          <Text style={styles.helperText}>Loading stamps from CAP OData v4…</Text>
+        </View>
+      );
+    }
+
+    if (error) {
+      return (
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>Request failed</Text>
+          <Text style={styles.errorBody}>{error}</Text>
+        </View>
+      );
+    }
+
+    if (stamps.length === 0) {
+      return (
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>No stamps found</Text>
+          <Text style={styles.errorBody}>The service returned an empty Stampboxes collection.</Text>
+        </View>
+      );
+    }
+
+    return (
+      <FlatList
+        data={stamps}
+        keyExtractor={(item) => item.ID}
+        renderItem={({ item }) => <StampRow stamp={item} />}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadStamps(true)}
+            tintColor="#184f59"
+          />
+        }
+      />
+    );
+  })();
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
-
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.header}>
+        <Text style={styles.eyebrow}>Stampboxes</Text>
+        <Text style={styles.title}>All Harzer stamps</Text>
+        <Text style={styles.subtitle}>
+          Authenticated through Auth0, loaded from `/odata/v4/api/Stampboxes`.
+        </Text>
+      </View>
+      {content}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f4efe4',
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 18,
+    gap: 6,
+    backgroundColor: '#184f59',
+  },
+  eyebrow: {
+    color: '#f1dfb8',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  title: {
+    color: '#fff8e7',
+    fontSize: 32,
+    fontWeight: '800',
+  },
+  subtitle: {
+    color: '#d8ece6',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  listContent: {
+    padding: 16,
+    gap: 14,
+  },
+  centered: {
+    flex: 1,
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 10,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  helperText: {
+    color: '#184f59',
+    fontSize: 15,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  errorTitle: {
+    color: '#3d2a15',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  errorBody: {
+    color: '#655d4a',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
   },
 });

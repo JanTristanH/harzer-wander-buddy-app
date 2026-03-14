@@ -10,12 +10,16 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "bundleIdentifier": "de.kuestenbit.harzer-wander-buddy",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "de.kuestenbit.harzerwanderbuddy",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -31,6 +35,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-secure-store",
       [
         "expo-splash-screen",
         {
@@ -49,6 +54,12 @@
       "reactCompiler": true
     },
     "extra": {
+      "backendUrl": "http://localhost:4004",
+      "auth0Domain": "dev-ijucl08spdudaszc.us.auth0.com",
+      "auth0ClientId": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh",
+      "auth0Audience": "https://app.harzer-wander-buddy.de/api/v2/",
+      "auth0Scope": "openid profile email offline_access",
+      "auth0LogoutReturnPath": "auth/logout",
       "router": {},
       "eas": {
         "projectId": "1511f3e0-0255-4c5b-97a4-43e285483bc2"
