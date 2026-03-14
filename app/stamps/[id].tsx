@@ -388,8 +388,19 @@ function StampDetailContent() {
           </Pressable>
 
           <View style={styles.topRightActions}>
-            <View style={styles.statusPill}>
-              <Text style={styles.statusPillLabel}>{visited ? 'Besucht' : 'Unbesucht'}</Text>
+            <View style={[styles.statusPill, visited ? styles.statusPillVisited : styles.statusPillOpen]}>
+              <Feather
+                color={visited ? '#2e6b4b' : '#7a6a4a'}
+                name={visited ? 'check' : 'x'}
+                size={11}
+              />
+              <Text
+                style={[
+                  styles.statusPillLabel,
+                  visited ? styles.statusPillLabelVisited : styles.statusPillLabelOpen,
+                ]}>
+                {visited ? 'Besucht' : 'Unbesucht'}
+              </Text>
             </View>
             <Pressable onPress={handleShare} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
               <Feather color="#1e2a1e" name="share-2" size={18} />
@@ -645,15 +656,27 @@ const styles = StyleSheet.create({
   statusPill: {
     minHeight: 40,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.92)',
     paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
+  },
+  statusPillVisited: {
+    backgroundColor: '#e2eee6',
+  },
+  statusPillOpen: {
+    backgroundColor: '#f0e9dd',
   },
   statusPillLabel: {
-    color: '#1e2a1e',
     fontSize: 12,
     lineHeight: 16,
+  },
+  statusPillLabelVisited: {
+    color: '#2e6b4b',
+  },
+  statusPillLabelOpen: {
+    color: '#7a6a4a',
   },
   heroBadge: {
     position: 'absolute',
