@@ -1,4 +1,7 @@
 import { Feather } from '@expo/vector-icons';
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from '@react-native-community/datetimepicker';
 import * as ExpoLinking from 'expo-linking';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -7,6 +10,8 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -17,7 +22,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
-import { createStamping, fetchStampDetail, type StampDetailData } from '@/lib/api';
+import {
+  createStamping,
+  deleteStamping,
+  fetchStampDetail,
+  type StampDetailData,
+  updateStamping,
+} from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
 type IdClaims = {
@@ -54,6 +65,24 @@ function formatVisitDate(value?: string) {
   });
 }
 
+function getVisitTimestamp(visit: { visitedAt?: string; createdAt?: string }) {
+  return visit.visitedAt || visit.createdAt;
+}
+
+function formatEditableVisitDate(value?: string) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  const yyyy = date.getFullYear();
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${dd}.${mm}.${yyyy} ${hh}:${min}`;
+}
+
 function heroGradient(visited: boolean) {
   return visited
     ? (['#4f8b67', '#79af82', '#d8c88f'] as const)
@@ -62,13 +91,18 @@ function heroGradient(visited: boolean) {
 
 function Section({
   title,
+  action,
   children,
 }: React.PropsWithChildren<{
   title: string;
+  action?: React.ReactNode;
 }>) {
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {action}
+      </View>
       {children}
     </View>
   );
@@ -84,6 +118,14 @@ function StampDetailContent() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isStamping, setIsStamping] = useState(false);
+  const [isEditingVisits, setIsEditingVisits] = useState(false);
+  const [visitDrafts, setVisitDrafts] = useState<Record<string, string>>({});
+  const [busyVisitId, setBusyVisitId] = useState<string | null>(null);
+  const [pickerState, setPickerState] = useState<{
+    visitId: string;
+    value: Date;
+    mode: 'date' | 'time' | 'datetime';
+  } | null>(null);
 
   function handleBack() {
     if (router.canGoBack()) {
@@ -94,16 +136,23 @@ function StampDetailContent() {
     router.replace('/(tabs)' as never);
   }
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (options?: { silent?: boolean }) => {
     if (!accessToken || !stampId) {
       return;
     }
 
-    setIsLoading(true);
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
 
     try {
       const nextDetail = await fetchStampDetail(accessToken, stampId, claims?.sub);
       setDetail(nextDetail);
+      setVisitDrafts(
+        Object.fromEntries(
+          nextDetail.myVisits.map((visit) => [visit.ID, getVisitTimestamp(visit) ?? ''])
+        )
+      );
       setError(null);
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -113,7 +162,9 @@ function StampDetailContent() {
 
       setError(nextError instanceof Error ? nextError.message : 'Unknown error');
     } finally {
-      setIsLoading(false);
+      if (!options?.silent) {
+        setIsLoading(false);
+      }
     }
   }, [accessToken, claims?.sub, logout, stampId]);
 
@@ -154,7 +205,7 @@ function StampDetailContent() {
 
     try {
       await createStamping(accessToken, stampId);
-      await loadDetail();
+      await loadDetail({ silent: true });
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -169,6 +220,116 @@ function StampDetailContent() {
     } finally {
       setIsStamping(false);
     }
+  }
+
+  async function handleDeleteVisit(stampingId: string) {
+    if (!accessToken || busyVisitId) {
+      return;
+    }
+
+    setBusyVisitId(stampingId);
+
+    try {
+      await deleteStamping(accessToken, stampingId);
+      await loadDetail({ silent: true });
+    } catch (nextError) {
+      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+        await logout();
+        return;
+      }
+
+      Alert.alert(
+        'Loeschen fehlgeschlagen',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    } finally {
+      setBusyVisitId(null);
+    }
+  }
+
+  async function persistVisitDate(stampingId: string, nextVisitedAt: string) {
+    if (!accessToken || busyVisitId) {
+      return;
+    }
+
+    const currentVisit = detail?.myVisits.find((visit) => visit.ID === stampingId);
+    if (!currentVisit || nextVisitedAt === (getVisitTimestamp(currentVisit) ?? '')) {
+      return;
+    }
+
+    try {
+      setBusyVisitId(stampingId);
+      setVisitDrafts((current) => ({
+        ...current,
+        [stampingId]: nextVisitedAt,
+      }));
+      await updateStamping(accessToken, stampingId, nextVisitedAt);
+      await loadDetail({ silent: true });
+    } catch (nextError) {
+      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+        await logout();
+        return;
+      }
+
+      Alert.alert(
+        'Speichern fehlgeschlagen',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    } finally {
+      setBusyVisitId(null);
+    }
+  }
+
+  function handleToggleVisitEditing() {
+    setIsEditingVisits((current) => !current);
+  }
+
+  function openVisitPicker(visitId: string, currentValue?: string) {
+    const initial = currentValue ? new Date(currentValue) : new Date();
+    setPickerState({
+      visitId,
+      value: Number.isNaN(initial.getTime()) ? new Date() : initial,
+      mode: Platform.OS === 'ios' ? 'datetime' : 'date',
+    });
+  }
+
+  function handlePickerChange(event: DateTimePickerEvent, selectedDate?: Date) {
+    if (!pickerState) {
+      return;
+    }
+
+    if (event.type === 'dismissed') {
+      setPickerState(null);
+      return;
+    }
+
+    const nextValue = selectedDate ?? pickerState.value;
+
+    if (Platform.OS === 'ios') {
+      setPickerState((current) => (current ? { ...current, value: nextValue } : null));
+      return;
+    }
+
+    if (pickerState.mode === 'date') {
+      setPickerState({
+        visitId: pickerState.visitId,
+        value: nextValue,
+        mode: 'time',
+      });
+      return;
+    }
+
+    void persistVisitDate(pickerState.visitId, nextValue.toISOString());
+    setPickerState(null);
+  }
+
+  function confirmIosPicker() {
+    if (!pickerState) {
+      return;
+    }
+
+    void persistVisitDate(pickerState.visitId, pickerState.value.toISOString());
+    setPickerState(null);
   }
 
   if (!stampId) {
@@ -303,11 +464,60 @@ function StampDetailContent() {
             )}
           </Section>
 
-          <Section title="Meine bisherigen Besuche">
+          <Section
+            title="Meine bisherigen Besuche"
+            action={
+              detail.myVisits.length > 0 ? (
+                <Pressable
+                  disabled={!!busyVisitId}
+                  onPress={handleToggleVisitEditing}
+                  style={({ pressed }) => [
+                    styles.sectionAction,
+                    busyVisitId && styles.visitActionDisabled,
+                    pressed && styles.sectionActionPressed,
+                  ]}>
+                  <Text style={styles.sectionActionLabel}>
+                    {isEditingVisits ? 'Fertig' : 'Bearbeiten'}
+                  </Text>
+                </Pressable>
+              ) : null
+            }>
             {detail.myVisits.length > 0 ? (
               detail.myVisits.map((visit) => (
-                <View key={visit.ID} style={styles.simpleItem}>
-                  <Text style={styles.simpleItemTitle}>{formatVisitDate(visit.createdAt)}</Text>
+                <View key={visit.ID} style={styles.visitCard}>
+                  {isEditingVisits ? (
+                    <View style={styles.visitInlineRow}>
+                      <Pressable
+                        onPress={() => openVisitPicker(visit.ID, visitDrafts[visit.ID])}
+                        style={({ pressed }) => [
+                          styles.visitPickerButton,
+                          pressed && styles.sectionActionPressed,
+                        ]}>
+                        <Text style={styles.visitPickerLabel}>
+                          {visitDrafts[visit.ID]
+                            ? formatEditableVisitDate(visitDrafts[visit.ID])
+                            : 'Zeit waehlen'}
+                        </Text>
+                        <Feather color="#637062" name="calendar" size={16} />
+                      </Pressable>
+                      <Pressable
+                        disabled={busyVisitId === visit.ID}
+                        onPress={() => handleDeleteVisit(visit.ID)}
+                        style={({ pressed }) => [
+                          styles.visitActionButton,
+                          styles.visitDeleteButton,
+                          styles.visitInlineAction,
+                          pressed && busyVisitId !== visit.ID && styles.sectionActionPressed,
+                          busyVisitId === visit.ID && styles.visitActionDisabled,
+                        ]}>
+                        <Text style={styles.visitDeleteLabel}>Loeschen</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Text style={styles.simpleItemTitle}>
+                      {formatVisitDate(getVisitTimestamp(visit))}
+                    </Text>
+                  )}
                 </View>
               ))
             ) : (
@@ -323,19 +533,68 @@ function StampDetailContent() {
             <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
           </Pressable>
           <Pressable
-            disabled={visited || isStamping}
+            disabled={isStamping}
             onPress={handleStampVisit}
             style={({ pressed }) => [
               styles.primaryButton,
-              (visited || isStamping) && styles.primaryButtonDisabled,
-              pressed && !visited && !isStamping && styles.primaryButtonPressed,
+              isStamping && styles.primaryButtonDisabled,
+              pressed && !isStamping && styles.primaryButtonPressed,
             ]}>
             <Text style={styles.primaryButtonLabel}>
-              {visited ? 'Bereits gestempelt' : isStamping ? 'Stemple...' : 'Besuch stempeln'}
+              {isStamping
+                ? 'Stemple...'
+                : visited
+                  ? 'Erneut stempeln'
+                  : 'Besuch stempeln'}
             </Text>
           </Pressable>
         </View>
       </View>
+
+      {pickerState && Platform.OS === 'ios' ? (
+        <Modal animationType="slide" transparent visible>
+          <View style={styles.modalScrim}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Besuchszeit wählen</Text>
+              <DateTimePicker
+                display="spinner"
+                mode="datetime"
+                onChange={handlePickerChange}
+                value={pickerState.value}
+              />
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => setPickerState(null)}
+                  style={({ pressed }) => [
+                    styles.modalButton,
+                    styles.modalButtonSecondary,
+                    pressed && styles.sectionActionPressed,
+                  ]}>
+                  <Text style={styles.modalButtonSecondaryLabel}>Abbrechen</Text>
+                </Pressable>
+                <Pressable
+                  onPress={confirmIosPicker}
+                  style={({ pressed }) => [
+                    styles.modalButton,
+                    styles.modalButtonPrimary,
+                    pressed && styles.sectionActionPressed,
+                  ]}>
+                  <Text style={styles.modalButtonPrimaryLabel}>Uebernehmen</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+
+      {pickerState && Platform.OS === 'android' ? (
+        <DateTimePicker
+          display="default"
+          mode={pickerState.mode}
+          onChange={handlePickerChange}
+          value={pickerState.value}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -438,10 +697,31 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   sectionTitle: {
     color: '#1e2a1e',
     fontSize: 16,
     lineHeight: 20,
+    fontWeight: '600',
+  },
+  sectionAction: {
+    borderRadius: 999,
+    backgroundColor: '#eef4ef',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  sectionActionPressed: {
+    opacity: 0.82,
+  },
+  sectionActionLabel: {
+    color: '#2e6b4b',
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '600',
   },
   rowItem: {
@@ -484,6 +764,51 @@ const styles = StyleSheet.create({
   },
   simpleItem: {
     gap: 2,
+  },
+  visitCard: {
+    gap: 8,
+  },
+  visitInlineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  visitPickerButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 12,
+    backgroundColor: '#f5f3ee',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  visitPickerLabel: {
+    color: '#1e2a1e',
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  visitActionButton: {
+    minHeight: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  visitInlineAction: {
+    flexShrink: 0,
+  },
+  visitDeleteButton: {
+    backgroundColor: '#efe6d8',
+  },
+  visitActionDisabled: {
+    opacity: 0.5,
+  },
+  visitDeleteLabel: {
+    color: '#6f5e40',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   simpleItemTitle: {
     color: '#6b7a6b',
@@ -560,6 +885,56 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 16,
     textAlign: 'center',
+  },
+  modalScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 30, 20, 0.26)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: '#fffaf0',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 28,
+    gap: 12,
+  },
+  modalTitle: {
+    color: '#1e2a1e',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonPrimary: {
+    backgroundColor: '#2e6b4b',
+  },
+  modalButtonSecondary: {
+    backgroundColor: '#e9e2d6',
+  },
+  modalButtonPrimaryLabel: {
+    color: '#f5f3ee',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  modalButtonSecondaryLabel: {
+    color: '#2e3a2e',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   centered: {
     flex: 1,

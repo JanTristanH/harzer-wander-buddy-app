@@ -42,10 +42,13 @@ type ParkingSpot = {
 
 type Stamping = {
   ID: string;
+  visitedAt?: string;
   createdAt?: string;
   createdBy?: string;
   stamp_ID?: string;
 };
+
+export type VisitStamping = Stamping;
 
 type MyFriend = {
   ID: string;
@@ -73,7 +76,7 @@ export type StampDetailData = {
     name: string;
     createdAt?: string;
   }>;
-  myVisits: Stamping[];
+  myVisits: VisitStamping[];
 };
 
 function normalizeBaseUrl(url: string) {
@@ -252,8 +255,8 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
       ['$top', 3],
     ]),
     fetchGuidFilteredCollection<Stamping>(accessToken, 'Stampings', 'stamp_ID', stampId, [
-      ['$select', 'ID,createdAt,createdBy,stamp_ID'],
-      ['$orderby', 'createdAt desc'],
+      ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
+      ['$orderby', 'visitedAt desc,createdAt desc'],
       ['$top', 20],
     ]),
     fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture']]),
@@ -335,7 +338,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
       return {
         id: stamping.ID,
         name: friend?.name || stamping.createdBy || 'Freund',
-        createdAt: stamping.createdAt,
+        createdAt: stamping.visitedAt || stamping.createdAt,
       };
     })
     .slice(0, 5);
@@ -357,5 +360,20 @@ export async function createStamping(accessToken: string, stampId: string) {
         ID: stampId,
       },
     }),
+  });
+}
+
+export async function updateStamping(accessToken: string, stampingId: string, visitedAt: string) {
+  return mutateOData<Stamping>(accessToken, buildUrl(`Stampings(${stampingId})`), {
+    method: 'PATCH',
+    body: JSON.stringify({
+      visitedAt,
+    }),
+  });
+}
+
+export async function deleteStamping(accessToken: string, stampingId: string) {
+  return mutateOData<null>(accessToken, buildUrl(`Stampings(${stampingId})`), {
+    method: 'DELETE',
   });
 }
