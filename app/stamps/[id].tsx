@@ -2,8 +2,8 @@ import { Feather } from '@expo/vector-icons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
-import * as ExpoLinking from 'expo-linking';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -239,12 +239,32 @@ function StampDetailContent() {
       }
 
       Alert.alert(
-        'Loeschen fehlgeschlagen',
+        'Löschen fehlgeschlagen',
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
       );
     } finally {
       setBusyVisitId(null);
     }
+  }
+
+  function confirmDeleteVisit(stampingId: string) {
+    Alert.alert(
+      'Besuch löschen?',
+      'Dieser Besuchseintrag wird dauerhaft entfernt.',
+      [
+        {
+          text: 'Abbrechen',
+          style: 'cancel',
+        },
+        {
+          text: 'Löschen',
+          style: 'destructive',
+          onPress: () => {
+            void handleDeleteVisit(stampingId);
+          },
+        },
+      ]
+    );
   }
 
   async function persistVisitDate(stampingId: string, nextVisitedAt: string) {
@@ -418,7 +438,7 @@ function StampDetailContent() {
             {stamp.description?.trim() || 'Keine Beschreibung fuer diese Stempelstelle verfuegbar.'}
           </Text>
 
-          <Section title="Stempel in der Naehe">
+          <Section title="Stempel in der Nähe">
             {detail.nearbyStamps.length > 0 ? (
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
@@ -426,11 +446,11 @@ function StampDetailContent() {
                   onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
                   style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   <View style={[styles.rowBadge, styles.rowBadgeStamp]}>
-                    <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelStamp]}>S</Text>
+                    <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelStamp]}>{neighbor.number || '--'}</Text>
                   </View>
                   <View style={styles.rowBody}>
                     <Text style={styles.rowTitle}>
-                      Stempel {neighbor.number || '--'} {'\u2022'} {neighbor.name}
+                      {neighbor.name}
                     </Text>
                     <Text style={styles.rowMeta}>
                       {formatDistance(neighbor.distanceKm)}
@@ -445,7 +465,7 @@ function StampDetailContent() {
             )}
           </Section>
 
-          <Section title="Parkplaetze in der Naehe">
+          <Section title="Parkplätze in der Nähe">
             {detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((parking) => (
                 <View key={parking.ID} style={styles.simpleItem}>
@@ -456,7 +476,7 @@ function StampDetailContent() {
                 </View>
               ))
             ) : (
-              <Text style={styles.emptySectionText}>Keine Parkplaetze in der Naehe gefunden.</Text>
+              <Text style={styles.emptySectionText}>Keine Parkplätze in der Nähe gefunden.</Text>
             )}
           </Section>
 
@@ -513,7 +533,7 @@ function StampDetailContent() {
                       </Pressable>
                       <Pressable
                         disabled={busyVisitId === visit.ID}
-                        onPress={() => handleDeleteVisit(visit.ID)}
+                        onPress={() => confirmDeleteVisit(visit.ID)}
                         style={({ pressed }) => [
                           styles.visitActionButton,
                           styles.visitDeleteButton,
@@ -521,7 +541,7 @@ function StampDetailContent() {
                           pressed && busyVisitId !== visit.ID && styles.sectionActionPressed,
                           busyVisitId === visit.ID && styles.visitActionDisabled,
                         ]}>
-                        <Text style={styles.visitDeleteLabel}>Loeschen</Text>
+                        <Text style={styles.visitDeleteLabel}>Löschen</Text>
                       </Pressable>
                     </View>
                   ) : (

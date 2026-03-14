@@ -58,24 +58,24 @@ type MyFriend = {
 
 export type StampDetailData = {
   stamp: Stampbox;
-  nearbyStamps: Array<{
+  nearbyStamps: {
     ID: string;
     number?: string;
     name: string;
     distanceKm: number | null;
     durationMinutes: number | null;
-  }>;
-  nearbyParking: Array<{
+  }[];
+  nearbyParking: {
     ID: string;
     name: string;
     distanceKm: number | null;
     durationMinutes: number | null;
-  }>;
-  friendVisits: Array<{
+  }[];
+  friendVisits: {
     id: string;
     name: string;
     createdAt?: string;
-  }>;
+  }[];
   myVisits: VisitStamping[];
 };
 
@@ -83,7 +83,7 @@ function normalizeBaseUrl(url: string) {
   return url.replace(/\/$/, '');
 }
 
-function buildQuery(query?: Array<[string, string | number | boolean | undefined]>) {
+function buildQuery(query?: [string, string | number | boolean | undefined][]) {
   if (!query) {
     return '';
   }
@@ -95,7 +95,7 @@ function buildQuery(query?: Array<[string, string | number | boolean | undefined
   return parts.length > 0 ? `?${parts.join('&')}` : '';
 }
 
-function buildUrl(path: string, query?: Array<[string, string | number | boolean | undefined]>) {
+function buildUrl(path: string, query?: [string, string | number | boolean | undefined][]) {
   return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v4/api/${path}${buildQuery(query)}`;
 }
 
@@ -156,7 +156,7 @@ async function mutateOData<T>(
 async function fetchCollection<T>(
   accessToken: string,
   entitySet: string,
-  query?: Array<[string, string | number | boolean | undefined]>
+  query?: [string, string | number | boolean | undefined][]
 ) {
   const payload = await fetchOData<ODataCollection<T>>(accessToken, buildUrl(entitySet, query));
   return payload.value ?? [];
@@ -166,7 +166,7 @@ async function fetchEntityById<T>(
   accessToken: string,
   entitySet: string,
   id: string,
-  query?: Array<[string, string | number | boolean | undefined]>
+  query?: [string, string | number | boolean | undefined][]
 ) {
   const fallbacks = [`ID eq ${id}`, `ID eq guid'${id}'`];
 
@@ -194,7 +194,7 @@ async function fetchGuidFilteredCollection<T>(
   entitySet: string,
   field: string,
   id: string,
-  query?: Array<[string, string | number | boolean | undefined]>
+  query?: [string, string | number | boolean | undefined][]
 ) {
   const filters = [`${field} eq ${id}`, `${field} eq guid'${id}'`];
 
@@ -286,7 +286,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
           return {
             ID: neighbor.NeighborsID,
             number: neighbor.NeighborsNumber,
-            name: `Stempel ${neighbor.NeighborsNumber || ''}`.trim(),
+            name: `${neighbor.NeighborsNumber || ''}`.trim(),
             distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
             durationMinutes: estimateMinutes(
               typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null

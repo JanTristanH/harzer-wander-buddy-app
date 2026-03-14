@@ -26,7 +26,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'Alle' },
   { key: 'visited', label: 'Besucht' },
   { key: 'open', label: 'Unbesucht' },
-  { key: 'near', label: 'In der Naehe' },
+  { key: 'near', label: 'In der Nähe' },
 ];
 
 const NEARBY_DISTANCE_KM = 5;
@@ -93,7 +93,7 @@ function StampCard({
           {item.number || '--'} {'\u2022'} {item.name}
         </Text>
         <Text numberOfLines={2} style={styles.cardDescription}>
-          {item.description?.trim() || 'Keine Beschreibung verfuegbar.'}
+          {item.description?.trim() || 'Keine Beschreibung verfügbar.'}
         </Text>
 
         <View style={styles.cardMetaRow}>
