@@ -1,8 +1,9 @@
+import * as Location from 'expo-location';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -28,6 +29,8 @@ type ActionButtonProps = PressableProps & {
   label: string;
   variant?: 'primary' | 'secondary';
 };
+
+type LocationPermissionState = 'unknown' | 'checking' | 'granted' | 'denied';
 
 function ActionButton({
   label,
@@ -66,12 +69,70 @@ export default function LoginScreen() {
   const router = useRouter();
   const { authError, configError, isAuthenticated, login, signup, isLoading } = useAuth();
   const claims = useIdTokenClaims<LoginClaims>();
+  const [locationPermission, setLocationPermission] = useState<LocationPermissionState>('unknown');
+  const [locationError, setLocationError] = useState<string | null>(null);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
   const footerNote = isAuthenticated
-    ? 'Du kannst alles spaeter in den Einstellungen aendern.'
+    ? 'Du kannst alles später in den Einstellungen ändern.'
     : 'Anmelden erforderlich';
+  const locationButtonLabel =
+    locationPermission === 'checking'
+      ? 'Prüfen...'
+      : locationPermission === 'granted'
+        ? 'Erlaubt'
+        : locationPermission === 'denied'
+          ? 'Erneut fragen'
+          : 'Erlauben';
+  const locationDescription =
+    locationPermission === 'granted'
+      ? 'Standortfreigabe ist aktiv fuer Entfernungen, Karte und nahe Parkplaetze.'
+      : 'Fuer Entfernungen, Karte und nahe Parkplaetze.';
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadLocationPermission() {
+      try {
+        const status = await Location.getForegroundPermissionsAsync();
+        if (!isMounted) {
+          return;
+        }
+
+        setLocationPermission(status.granted ? 'granted' : status.status === 'denied' ? 'denied' : 'unknown');
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setLocationError(
+          error instanceof Error ? error.message : 'Standortberechtigung konnte nicht gelesen werden.'
+        );
+      }
+    }
+
+    void loadLocationPermission();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  async function requestLocationPermission() {
+    setLocationError(null);
+    setLocationPermission('checking');
+
+    try {
+      const result = await Location.requestForegroundPermissionsAsync();
+      setLocationPermission(result.granted ? 'granted' : result.status === 'denied' ? 'denied' : 'unknown');
+    } catch (error) {
+      setLocationPermission('unknown');
+      setLocationError(
+        error instanceof Error ? error.message : 'Standortberechtigung konnte nicht angefragt werden.'
+      );
+    }
+  }
 
   return (
     <LinearGradient colors={['#f7f5ef', '#f3efe6', '#f0ebe1']} style={styles.gradient}>
@@ -124,14 +185,27 @@ export default function LoginScreen() {
           </View>
 
           <View style={[styles.card, styles.inlineCard]}>
-            <View style={styles.permissionIcon} />
+            <View
+              style={[
+                styles.permissionIcon,
+                locationPermission === 'granted' && styles.permissionIconGranted,
+              ]}
+            />
             <View style={styles.permissionBody}>
               <Text style={styles.cardTitle}>Standort erlauben</Text>
-              <Text style={styles.cardCopy}>
-                Für Entfernungen, Karte und nahe Parkplätze.
-              </Text>
+              <Text style={styles.cardCopy}>{locationDescription}</Text>
+              {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
             </View>
-            <ActionButton disabled label="Erlauben" style={styles.inlineAction} />
+            <ActionButton
+              disabled={locationPermission === 'checking'}
+              label={locationButtonLabel}
+              onPress={requestLocationPermission}
+              style={[
+                styles.inlineAction,
+                locationPermission === 'granted' && styles.inlineActionGranted,
+              ]}
+              variant={locationPermission === 'granted' ? 'primary' : 'secondary'}
+            />
           </View>
 
           <View style={styles.card}>
@@ -302,6 +376,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: '#dce8df',
   },
+  permissionIconGranted: {
+    backgroundColor: '#c9decf',
+  },
   permissionBody: {
     flex: 1,
     gap: 4,
@@ -313,6 +390,9 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: 14,
     paddingHorizontal: 16,
+  },
+  inlineActionGranted: {
+    backgroundColor: '#397b52',
   },
   fullWidthButton: {
     width: '100%',

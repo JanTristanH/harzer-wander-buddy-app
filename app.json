@@ -15,11 +15,16 @@
       },
       "bundleIdentifier": "de.kuestenbit.harzer-wander-buddy",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
       }
     },
     "android": {
       "package": "de.kuestenbit.harzerwanderbuddy",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -35,6 +40,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
+        }
+      ],
       "expo-secure-store",
       [
         "expo-splash-screen",

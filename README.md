@@ -51,6 +51,11 @@ Join our community of developers creating universal apps.
 
 ## Creating a new development build
 
+### locally
+
+`npx expo run:ios`
+
+###  remote
 `eas build --platform ios --profile development`
 
 `npx expo start` => start the dev server
