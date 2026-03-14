@@ -29,14 +29,14 @@ export default function TabLayout() {
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Stamps',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="map.fill" color={color} />,
+            title: 'Liste',
+            tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
           }}
         />
         <Tabs.Screen
           name="profile"
           options={{
-            title: 'Profile',
+            title: 'Profil',
             tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.fill" color={color} />,
           }}
         />
