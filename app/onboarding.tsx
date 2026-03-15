@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Redirect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -22,8 +23,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FriendsList, type FriendsListItem } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
-import { createFriendRequest, searchUsers, type SearchUserResult } from '@/lib/api';
+import {
+  createFriendRequest,
+  fetchCurrentUserProfile,
+  searchUsers,
+  updateCurrentUserProfile,
+  uploadAttachment,
+  type SearchUserResult,
+} from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
 
@@ -31,12 +40,19 @@ type LoginClaims = {
   given_name?: string;
   name?: string;
   nickname?: string;
+  picture?: string;
 };
 
 type SentRequestPreview = {
   key: string;
   name: string;
   picture?: string;
+};
+
+type SelectedImage = {
+  uri: string;
+  fileName: string;
+  mimeType: string;
 };
 
 type ActionButtonProps = PressableProps & {
@@ -102,9 +118,15 @@ export default function OnboardingScreen() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
   const [sentRequests, setSentRequests] = useState<SentRequestPreview[]>([]);
+  const [profileName, setProfileName] = useState('');
+  const [profilePicture, setProfilePicture] = useState<string | null>(null);
+  const [selectedProfileImage, setSelectedProfileImage] = useState<SelectedImage | null>(null);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
+  const effectiveProfileName = profileName.trim() || displayName;
+  const effectiveProfilePicture = selectedProfileImage?.uri || profilePicture || claims?.picture || null;
   const footerNote = isAuthenticated
     ? 'Du kannst alles später in den Einstellungen ändern.'
     : 'Anmelden erforderlich';
@@ -133,6 +155,60 @@ export default function OnboardingScreen() {
     setIsSearchLoading(false);
     setSubmittingUserId(null);
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setProfileName('');
+      setProfilePicture(null);
+      setSelectedProfileImage(null);
+      return;
+    }
+
+    setProfileName(claims?.name || claims?.nickname || claims?.given_name || '');
+    setProfilePicture(claims?.picture || null);
+  }, [claims?.given_name, claims?.name, claims?.nickname, claims?.picture, isAuthenticated]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      if (!accessToken || !isAuthenticated) {
+        return;
+      }
+
+      try {
+        const currentProfile = await fetchCurrentUserProfile(accessToken);
+        if (cancelled) {
+          return;
+        }
+
+        setProfileName(currentProfile.name || claims?.name || claims?.nickname || claims?.given_name || '');
+        setProfilePicture(currentProfile.picture || claims?.picture || null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        if (error instanceof Error && error.name === 'UnauthorizedError') {
+          await logout();
+        }
+      }
+    }
+
+    void loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accessToken,
+    claims?.given_name,
+    claims?.name,
+    claims?.nickname,
+    claims?.picture,
+    isAuthenticated,
+    logout,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -218,6 +294,87 @@ export default function OnboardingScreen() {
       clearTimeout(timer);
     };
   }, [accessToken, isSearchModalVisible, logout, searchQuery]);
+
+  const handlePickProfileImage = useCallback(async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissionResult.granted) {
+      Alert.alert(
+        'Zugriff auf Fotos benoetigt',
+        'Bitte erlaube den Zugriff auf deine Fotos, um ein Profilbild auszuwaehlen.'
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      mediaTypes: ['images'],
+      quality: 0.8,
+    });
+
+    if (result.canceled || result.assets.length === 0) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    setSelectedProfileImage({
+      uri: asset.uri,
+      fileName: asset.fileName || `profile-${Date.now()}.jpg`,
+      mimeType: asset.mimeType || 'image/jpeg',
+    });
+  }, []);
+
+  const handleSaveProfile = useCallback(async () => {
+    if (!accessToken || !isAuthenticated) {
+      return;
+    }
+
+    const nextName = profileName.trim();
+    if (!nextName) {
+      Alert.alert('Name fehlt', 'Bitte gib einen Namen ein.');
+      return;
+    }
+
+    setIsProfileSaving(true);
+
+    try {
+      let nextPicture = profilePicture || claims?.picture || undefined;
+
+      if (selectedProfileImage) {
+        const uploadedImage = await uploadAttachment(accessToken, selectedProfileImage);
+        nextPicture = uploadedImage.url;
+      }
+
+      await updateCurrentUserProfile(accessToken, {
+        name: nextName,
+        picture: nextPicture,
+      });
+
+      setProfileName(nextName);
+      setProfilePicture(nextPicture || null);
+      setSelectedProfileImage(null);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'UnauthorizedError') {
+        await logout();
+        return;
+      }
+
+      Alert.alert(
+        'Profil konnte nicht gespeichert werden',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+    } finally {
+      setIsProfileSaving(false);
+    }
+  }, [
+    accessToken,
+    claims?.picture,
+    isAuthenticated,
+    logout,
+    profileName,
+    profilePicture,
+    selectedProfileImage,
+  ]);
 
   const handleCreateRequest = useCallback(
     async (userId: string) => {
@@ -340,10 +497,57 @@ export default function OnboardingScreen() {
             </Text>
             {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
             {isAuthenticated ? (
-              <View style={styles.welcomeBox}>
-                <Text style={styles.welcomeEyebrow}>Willkommen</Text>
-                <Text style={styles.welcomeName}>{displayName}</Text>
-              </View>
+              <>
+                <View style={styles.welcomeBox}>
+                  <Text style={styles.welcomeEyebrow}>Willkommen</Text>
+                  <Text style={styles.welcomeName}>{effectiveProfileName}</Text>
+                </View>
+
+                <View style={styles.profileEditor}>
+                  <Pressable
+                    disabled={isProfileSaving}
+                    onPress={() => void handlePickProfileImage()}
+                    style={({ pressed }) => [styles.profileAvatarButton, pressed && styles.actionButtonPressed]}>
+                    {effectiveProfilePicture ? (
+                      <Image
+                        contentFit="cover"
+                        source={buildAuthenticatedImageSource(effectiveProfilePicture, accessToken)}
+                        style={styles.profileAvatarImage}
+                      />
+                    ) : (
+                      <View style={styles.profileAvatarFallback}>
+                        <Feather color="#5F6E5F" name="user" size={26} />
+                      </View>
+                    )}
+                  </Pressable>
+
+                  <View style={styles.profileEditorBody}>
+                    <Text style={styles.cardCopy}>Passe deinen Namen und dein Profilbild direkt hier an.</Text>
+                    <TextInput
+                      autoCapitalize="words"
+                      editable={!isProfileSaving}
+                      onChangeText={setProfileName}
+                      placeholder="Dein Name"
+                      placeholderTextColor="#8A968A"
+                      style={styles.profileInput}
+                      value={profileName}
+                    />
+                    <View style={styles.row}>
+                      <ActionButton
+                        disabled={isProfileSaving}
+                        label="Profilbild waehlen"
+                        onPress={() => void handlePickProfileImage()}
+                      />
+                      <ActionButton
+                        disabled={isProfileSaving}
+                        label={isProfileSaving ? 'Speichert...' : 'Profil speichern'}
+                        onPress={() => void handleSaveProfile()}
+                        variant="primary"
+                      />
+                    </View>
+                  </View>
+                </View>
+              </>
             ) : (
               <View style={styles.row}>
                 <ActionButton
@@ -602,6 +806,41 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 24,
     fontWeight: '700',
+  },
+  profileEditor: {
+    gap: 14,
+  },
+  profileAvatarButton: {
+    alignSelf: 'center',
+    borderRadius: 34,
+  },
+  profileAvatarImage: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+  },
+  profileAvatarFallback: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#E9E2D6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileEditorBody: {
+    gap: 10,
+  },
+  profileInput: {
+    borderWidth: 1,
+    borderColor: '#D7D1C5',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: '#1E2A1E',
+    fontFamily: Fonts.sans,
+    fontSize: 16,
+    lineHeight: 20,
+    backgroundColor: '#FBF9F4',
   },
   actionButton: {
     minHeight: 52,
