@@ -1,20 +1,27 @@
 import * as Location from 'expo-location';
+import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   type PressableStateCallbackType,
   type PressableProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Fonts } from '@/constants/theme';
+import { createFriendRequest, searchUsers, type SearchUserResult } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
@@ -31,6 +38,8 @@ type ActionButtonProps = PressableProps & {
 };
 
 type LocationPermissionState = 'unknown' | 'checking' | 'granted' | 'denied';
+
+const AVATAR_COLORS = ['#DDE9DF', '#EADFCB', '#D7E2EC', '#E6D9E9'];
 
 function ActionButton({
   label,
@@ -65,12 +74,70 @@ function ActionButton({
   );
 }
 
+function SearchResultRow({
+  result,
+  index,
+  status,
+  disabled,
+  onPress,
+}: {
+  result: SearchUserResult;
+  index: number;
+  status: 'request' | 'sent' | 'friend';
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const actionLabel = status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : 'Anfrage';
+
+  return (
+    <View style={styles.searchResultRow}>
+      <View style={styles.searchResultBody}>
+        <View
+          style={[
+            styles.searchAvatar,
+            { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+          ]}
+        />
+        <View style={styles.searchResultText}>
+          <Text style={styles.searchResultName}>{result.name}</Text>
+          <Text style={styles.searchResultMeta}>@{result.id}</Text>
+        </View>
+      </View>
+      <Pressable
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.searchActionButton,
+          status !== 'request' && styles.searchActionButtonMuted,
+          disabled && styles.actionButtonDisabled,
+          pressed && styles.actionButtonPressed,
+        ]}>
+        <Text
+          style={[
+            styles.searchActionLabel,
+            status !== 'request' && styles.searchActionLabelMuted,
+          ]}>
+          {actionLabel}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function LoginScreen() {
   const router = useRouter();
-  const { authError, configError, isAuthenticated, login, signup, isLoading } = useAuth();
+  const { accessToken, authError, configError, isAuthenticated, login, signup, isLoading, logout } =
+    useAuth();
   const claims = useIdTokenClaims<LoginClaims>();
   const [locationPermission, setLocationPermission] = useState<LocationPermissionState>('unknown');
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchUserResult[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
+  const [sentRequestIds, setSentRequestIds] = useState<string[]>([]);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
@@ -89,6 +156,16 @@ export default function LoginScreen() {
     locationPermission === 'granted'
       ? 'Standortfreigabe ist aktiv fuer Entfernungen, Karte und nahe Parkplaetze.'
       : 'Fuer Entfernungen, Karte und nahe Parkplaetze.';
+  const sentRequestIdSet = useMemo(() => new Set(sentRequestIds), [sentRequestIds]);
+
+  const closeSearchModal = useCallback(() => {
+    setIsSearchModalVisible(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchError(null);
+    setIsSearchLoading(false);
+    setSubmittingUserId(null);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -118,6 +195,90 @@ export default function LoginScreen() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSearchModalVisible) {
+      return;
+    }
+
+    const normalizedQuery = searchQuery.trim();
+    if (normalizedQuery.length < 2) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchLoading(false);
+      return;
+    }
+
+    if (!accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchLoading(true);
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const results = await searchUsers(accessToken, normalizedQuery);
+          if (cancelled) {
+            return;
+          }
+
+          setSearchResults(results);
+          setSearchError(null);
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+
+          if (error instanceof Error && error.name === 'UnauthorizedError') {
+            await logout();
+            return;
+          }
+
+          setSearchError(error instanceof Error ? error.message : 'Unknown error');
+          setSearchResults([]);
+        } finally {
+          if (!cancelled) {
+            setIsSearchLoading(false);
+          }
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [accessToken, isSearchModalVisible, logout, searchQuery]);
+
+  const handleCreateRequest = useCallback(
+    async (userId: string) => {
+      if (!accessToken) {
+        return;
+      }
+
+      setSubmittingUserId(userId);
+
+      try {
+        await createFriendRequest(accessToken, userId);
+        setSentRequestIds((current) => (current.includes(userId) ? current : [...current, userId]));
+      } catch (error) {
+        if (error instanceof Error && error.name === 'UnauthorizedError') {
+          await logout();
+          return;
+        }
+
+        Alert.alert(
+          'Anfrage konnte nicht gesendet werden',
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+      } finally {
+        setSubmittingUserId(null);
+      }
+    },
+    [accessToken, logout]
+  );
 
   async function requestLocationPermission() {
     setLocationError(null);
@@ -197,7 +358,9 @@ export default function LoginScreen() {
               {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
             </View>
             <ActionButton
-              disabled={locationPermission === 'checking'}
+              disabled={
+                locationPermission === 'checking' || locationPermission === 'granted'
+              }
               label={locationButtonLabel}
               onPress={requestLocationPermission}
               style={[
@@ -210,7 +373,15 @@ export default function LoginScreen() {
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Hast du schon Wanderbuddies?</Text>
-            <ActionButton disabled label="Freunde Hinzufügen" style={styles.fullWidthButton} />
+            <Text style={styles.cardCopy}>
+              Suche direkt nach Freunden und sende schon waehrend des Onboardings Anfragen.
+            </Text>
+            <ActionButton
+              disabled={!isAuthenticated || !accessToken}
+              label="Freunde hinzufügen"
+              onPress={() => setIsSearchModalVisible(true)}
+              style={styles.fullWidthButton}
+            />
           </View>
         </ScrollView>
 
@@ -226,6 +397,92 @@ export default function LoginScreen() {
             <Text style={styles.footerNote}>{footerNote}</Text>
           </View>
         </View>
+
+        <Modal
+          animationType="fade"
+          transparent
+          visible={isSearchModalVisible}
+          onRequestClose={closeSearchModal}>
+          <View style={styles.modalOverlay}>
+            <Pressable style={styles.modalBackdrop} onPress={closeSearchModal} />
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Freunde finden</Text>
+                <Pressable
+                  accessibilityLabel="Suche schliessen"
+                  onPress={closeSearchModal}
+                  style={({ pressed }) => [styles.modalCloseButton, pressed && styles.actionButtonPressed]}>
+                  <Feather color="#1E2A1E" name="x" size={16} />
+                </Pressable>
+              </View>
+
+              <View style={styles.searchInputShell}>
+                <View style={styles.searchInputIconWrap}>
+                  <Feather color="#6B7A6B" name="search" size={14} />
+                </View>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoFocus
+                  onChangeText={setSearchQuery}
+                  placeholder="Name oder Nutzername suchen"
+                  placeholderTextColor="#6B7A6B"
+                  style={styles.searchInput}
+                  value={searchQuery}
+                />
+              </View>
+
+              <View style={styles.searchResultsColumn}>
+                {isSearchLoading ? (
+                  <View style={styles.searchStatusWrap}>
+                    <ActivityIndicator color="#2E6B4B" size="small" />
+                  </View>
+                ) : null}
+
+                {!isSearchLoading && searchError ? (
+                  <Text style={styles.searchStatusText}>{searchError}</Text>
+                ) : null}
+
+                {!isSearchLoading && !searchError && searchQuery.trim().length < 2 ? (
+                  <Text style={styles.searchStatusText}>
+                    Gib mindestens zwei Zeichen ein, um nach Freunden zu suchen.
+                  </Text>
+                ) : null}
+
+                {!isSearchLoading &&
+                !searchError &&
+                searchQuery.trim().length >= 2 &&
+                searchResults.length === 0 ? (
+                  <Text style={styles.searchStatusText}>Keine passenden Nutzer gefunden.</Text>
+                ) : null}
+
+                {!isSearchLoading && !searchError && searchResults.length > 0
+                  ? searchResults.map((result, index) => {
+                      const status: 'request' | 'sent' | 'friend' =
+                        result.isFriend || sentRequestIdSet.has(result.id) ? (result.isFriend ? 'friend' : 'sent') : 'request';
+
+                      return (
+                        <SearchResultRow
+                          key={result.id}
+                          disabled={status !== 'request' || submittingUserId === result.id}
+                          index={index}
+                          onPress={() => void handleCreateRequest(result.id)}
+                          result={result}
+                          status={status === 'request' && submittingUserId === result.id ? 'sent' : status}
+                        />
+                      );
+                    })
+                  : null}
+              </View>
+
+              <View style={styles.modalHint}>
+                <Text style={styles.modalHintText}>
+                  Profile kannst du nach dem Onboarding in der Freunde-Ansicht oeffnen.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -396,6 +653,151 @@ const styles = StyleSheet.create({
   },
   fullWidthButton: {
     width: '100%',
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-start',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(46,58,46,0.35)',
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    marginHorizontal: 20,
+    marginTop: 120,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
+    elevation: 10,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    color: '#1E2A1E',
+    fontFamily: Fonts.serif,
+    fontSize: 20,
+    lineHeight: 24,
+  },
+  modalCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F0E9DD',
+    borderRadius: 8,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  searchInputShell: {
+    alignItems: 'center',
+    backgroundColor: '#F6F2EA',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  searchInputIconWrap: {
+    alignItems: 'center',
+    height: 14,
+    justifyContent: 'center',
+    width: 14,
+  },
+  searchInput: {
+    color: '#1E2A1E',
+    flex: 1,
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+    padding: 0,
+  },
+  searchResultsColumn: {
+    gap: 10,
+    minHeight: 120,
+  },
+  searchResultRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchResultBody: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchAvatar: {
+    borderRadius: 12,
+    height: 40,
+    width: 40,
+  },
+  searchResultText: {
+    flex: 1,
+  },
+  searchResultName: {
+    color: '#1E2A1E',
+    fontFamily: Fonts.sans,
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 20,
+    marginBottom: 2,
+  },
+  searchResultMeta: {
+    color: '#6B7A6B',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  searchActionButton: {
+    backgroundColor: '#2E6B4B',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  searchActionButtonMuted: {
+    backgroundColor: '#E9E2D6',
+  },
+  searchActionLabel: {
+    color: '#F5F3EE',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  searchActionLabelMuted: {
+    color: '#2E3A2E',
+  },
+  searchStatusWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+  },
+  searchStatusText: {
+    color: '#6B7A6B',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+    paddingVertical: 8,
+  },
+  modalHint: {
+    backgroundColor: '#F8F6F1',
+    borderRadius: 14,
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  modalHintText: {
+    color: '#6B7A6B',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
   },
   bottomDock: {
     position: 'absolute',

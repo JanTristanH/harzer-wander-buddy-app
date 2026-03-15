@@ -17,8 +17,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { StampListItem } from '@/components/stamp-list-item';
-import { fetchStampboxes, type Stampbox } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { fetchLatestVisitedStamp, fetchStampboxes, type LatestVisitedStamp, type Stampbox } from '@/lib/api';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
 type FilterKey = 'all' | 'visited' | 'open' | 'near';
 type LocationState = 'idle' | 'loading' | 'granted' | 'denied';
@@ -65,7 +65,9 @@ function formatDistance(distanceKm: number | null) {
 export default function StampsScreen() {
   const router = useRouter();
   const { accessToken, logout } = useAuth();
+  const claims = useIdTokenClaims<{ sub?: string }>();
   const [stamps, setStamps] = useState<Stampbox[]>([]);
+  const [lastVisited, setLastVisited] = useState<LatestVisitedStamp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -87,8 +89,12 @@ export default function StampsScreen() {
       }
 
       try {
-        const nextStamps = await fetchStampboxes(accessToken);
+        const [nextStamps, nextLastVisited] = await Promise.all([
+          fetchStampboxes(accessToken),
+          fetchLatestVisitedStamp(accessToken, claims?.sub),
+        ]);
         setStamps(nextStamps);
+        setLastVisited(nextLastVisited);
         setError(null);
       } catch (nextError) {
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -102,7 +108,7 @@ export default function StampsScreen() {
         setIsRefreshing(false);
       }
     },
-    [accessToken, logout]
+    [accessToken, claims?.sub, logout]
   );
 
   useFocusEffect(
@@ -164,7 +170,6 @@ export default function StampsScreen() {
   const visitedCount = stamps.filter((stamp) => stamp.hasVisited).length;
   const totalCount = stamps.length;
   const progressPercent = totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0;
-  const lastVisited = stamps.find((stamp) => stamp.hasVisited);
 
   const normalizedQuery = query.trim().toLowerCase();
   const filteredStamps = stampDistances.filter(({ stamp, distanceKm }) => {
@@ -212,7 +217,7 @@ export default function StampsScreen() {
         </View>
         <Text style={styles.progressHint}>
           {lastVisited
-            ? `Letzter Besuch: Stempel ${lastVisited.number || '--'} • ${lastVisited.name}`
+            ? `Letzter Besuch: Stempel ${lastVisited.stampNumber || '--'} • ${lastVisited.stampName}`
             : 'Noch keine besuchten Stempelstellen'}
         </Text>
       </LinearGradient>

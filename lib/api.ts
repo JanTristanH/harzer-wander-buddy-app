@@ -64,6 +64,8 @@ type User = {
   name?: string;
   picture?: string;
   isFriend?: boolean;
+  friends?: User[];
+  Friends?: User[];
 };
 
 type PendingFriendshipRequest = {
@@ -72,6 +74,13 @@ type PendingFriendshipRequest = {
   toUser_ID?: string;
   outgoingFriendship_ID?: string;
   fromUser?: User;
+  toUser?: User;
+};
+
+type FriendshipRecord = {
+  ID: string;
+  fromUser_ID?: string;
+  toUser_ID?: string;
   toUser?: User;
 };
 
@@ -104,6 +113,13 @@ export type ProfileOverviewData = {
   }>;
 };
 
+export type LatestVisitedStamp = {
+  stampId: string;
+  stampNumber?: string;
+  stampName: string;
+  visitedAt?: string;
+};
+
 export type FriendsOverviewData = {
   currentUserId: string;
   friendCount: number;
@@ -118,14 +134,14 @@ export type FriendsOverviewData = {
   }>;
   incomingRequests: Array<{
     id: string;
-    friendshipId: string;
+    pendingRequestId: string;
     userId: string;
     name: string;
     picture?: string;
   }>;
   outgoingRequests: Array<{
     id: string;
-    friendshipId: string;
+    pendingRequestId: string;
     userId: string;
     name: string;
     picture?: string;
@@ -137,6 +153,55 @@ export type SearchUserResult = {
   name: string;
   picture?: string;
   isFriend: boolean;
+};
+
+export type FriendshipRelationshipState =
+  | 'self'
+  | 'friend'
+  | 'incoming_request'
+  | 'outgoing_request'
+  | 'not_connected';
+
+export type UserProfileOverviewData = {
+  userId: string;
+  name: string;
+  picture?: string;
+  relationship: FriendshipRelationshipState;
+  friendshipId: string | null;
+  pendingRequestId: string | null;
+  isAllowedToStampForMe: boolean;
+  visitedCount: number;
+  completionPercent: number;
+  sharedVisitedCount: number;
+  collectorSinceYear: number | null;
+  latestVisits: Array<{
+    id: string;
+    stampId: string;
+    stampNumber?: string;
+    stampName: string;
+    visitedAt?: string;
+  }>;
+  friends: Array<{
+    id: string;
+    name: string;
+    picture?: string;
+  }>;
+  achievements: Array<{
+    id: string;
+    label: string;
+    value: string;
+  }>;
+  stampBuckets: {
+    shared: number;
+    friendOnly: number;
+    meOnly: number;
+    neither: number;
+  };
+  stampComparisons: Array<{
+    stamp: Stampbox;
+    meVisited: boolean;
+    userVisited: boolean;
+  }>;
 };
 
 export type StampDetailData = {
@@ -276,6 +341,63 @@ async function fetchEntityById<T>(
   throw new Error(`${entitySet} ${id} not found`);
 }
 
+async function fetchStringEntityById<T>(
+  accessToken: string,
+  entitySet: string,
+  field: string,
+  value: string,
+  query?: [string, string | number | boolean | undefined][]
+) {
+  const rows = await fetchCollection<T>(accessToken, entitySet, [
+    ...(query ?? []),
+    ['$filter', `${field} eq '${escapeODataString(value)}'`],
+    ['$top', 1],
+  ]);
+
+  if (rows.length > 0) {
+    return rows[0];
+  }
+
+  throw new Error(`${entitySet} ${value} not found`);
+}
+
+async function fetchUserFriends(accessToken: string, userId: string) {
+  const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', [
+    ['$select', 'ID,toUser_ID'],
+    ['$filter', `fromUser_ID eq '${escapeODataString(userId)}'`],
+    ['$expand', 'toUser($select=ID,name,picture)'],
+    ['$top', 250],
+  ]);
+
+  return rows
+    .map((row) => row.toUser)
+    .filter((friend): friend is User => Boolean(friend?.ID));
+}
+
+async function fetchComparisonStampboxes(accessToken: string, groupUserIds: string[]) {
+  const groupFilter = [...new Set(groupUserIds.filter(Boolean))].join(',');
+  if (!groupFilter) {
+    return [] as Stampbox[];
+  }
+
+  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
+    [
+      '$select',
+      'ID,number,orderBy,name,description,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
+    ],
+    ['$skip', 0],
+    ['$top', 250],
+    ['$orderby', 'orderBy asc'],
+    ['$filter', `groupFilterStampings ne '${escapeODataString(groupFilter)}'`],
+  ]);
+
+  return rows.slice().sort((left, right) => {
+    const leftKey = left.orderBy || left.number || '';
+    const rightKey = right.orderBy || right.number || '';
+    return leftKey.localeCompare(rightKey, undefined, { numeric: true });
+  });
+}
+
 async function fetchGuidFilteredCollection<T>(
   accessToken: string,
   entitySet: string,
@@ -338,6 +460,22 @@ function stampContainsFriend(stamp: Stampbox, friend: MyFriend) {
   return false;
 }
 
+function stampContainsUserId(stamp: Stampbox, userId: string) {
+  return tokenizeFriendField(stamp.stampedUserIds).includes(userId.trim().toLowerCase());
+}
+
+function stampContainsUserName(stamp: Stampbox, name?: string) {
+  if (!name) {
+    return false;
+  }
+
+  return tokenizeFriendField(stamp.stampedUsers).includes(name.trim().toLowerCase());
+}
+
+function stampContainsUser(stamp: Stampbox, user: { ID: string; name?: string }) {
+  return stampContainsUserId(stamp, user.ID) || stampContainsUserName(stamp, user.name);
+}
+
 export async function fetchStampboxes(accessToken: string) {
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
     [
@@ -353,6 +491,35 @@ export async function fetchStampboxes(accessToken: string) {
     const rightKey = right.orderBy || right.number || '';
     return leftKey.localeCompare(rightKey, undefined, { numeric: true });
   });
+}
+
+export async function fetchLatestVisitedStamp(accessToken: string, currentUserId?: string) {
+  if (!currentUserId) {
+    return null;
+  }
+
+  const latestStamping = await fetchCollection<Stamping>(accessToken, 'Stampings', [
+    ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
+    ['$filter', `createdBy eq '${escapeODataString(currentUserId)}'`],
+    ['$orderby', 'visitedAt desc,createdAt desc'],
+    ['$top', 1],
+  ]);
+
+  const latestVisit = latestStamping[0];
+  if (!latestVisit?.stamp_ID) {
+    return null;
+  }
+
+  const stamp = await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', latestVisit.stamp_ID, [
+    ['$select', 'ID,number,name'],
+  ]);
+
+  return {
+    stampId: stamp.ID,
+    stampNumber: stamp.number,
+    stampName: stamp.name || 'Stempelstelle',
+    visitedAt: getVisitTimestamp(latestVisit),
+  } satisfies LatestVisitedStamp;
 }
 
 export async function fetchStampDetail(accessToken: string, stampId: string, currentUserId?: string) {
@@ -513,8 +680,18 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
         id: friends[0].ID,
         name: friends[0].name || 'Freund',
         picture: friends[0].picture,
-        visitedCount: null,
-        completionPercent: null,
+        visitedCount: stamps.reduce((count, stamp) => count + (stampContainsFriend(stamp, friends[0]) ? 1 : 0), 0),
+        completionPercent:
+          totalCount > 0
+            ? Math.round(
+                (stamps.reduce(
+                  (count, stamp) => count + (stampContainsFriend(stamp, friends[0]) ? 1 : 0),
+                  0
+                ) /
+                  totalCount) *
+                  100
+              )
+            : 0,
       }
     : null;
   return {
@@ -540,6 +717,146 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
       },
     ],
   } satisfies ProfileOverviewData;
+}
+
+export async function fetchUserProfileOverview(accessToken: string, targetUserId: string) {
+  const [targetUser, currentUser] = await Promise.all([
+    fetchStringEntityById<User>(accessToken, 'Users', 'ID', targetUserId, [['$select', 'ID,name,picture,isFriend']]),
+    fetchOData<User>(accessToken, buildUrl('getCurrentUser()')),
+  ]);
+
+  const [stamps, comparisonStamps, targetStampings, friends, pendingRequests, visibleFriends] =
+    await Promise.all([
+      fetchStampboxes(accessToken),
+      fetchComparisonStampboxes(accessToken, [currentUser.ID, targetUserId]),
+      fetchCollection<Stamping>(accessToken, 'Stampings', [
+        ['$select', 'ID,createdAt,createdBy,stamp_ID'],
+        ['$filter', `createdBy eq '${escapeODataString(targetUserId)}'`],
+        ['$orderby', 'createdAt desc'],
+        ['$top', 200],
+      ]),
+      fetchCollection<MyFriend>(accessToken, 'MyFriends', [
+        ['$select', 'ID,name,picture,FriendshipID,isAllowedToStampForMe,isAllowedToStampForFriend'],
+      ]),
+      fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', [
+        ['$select', 'ID,fromUser_ID,toUser_ID,outgoingFriendship_ID'],
+        ['$expand', 'fromUser($select=ID,name,picture),toUser($select=ID,name,picture)'],
+      ]),
+      fetchUserFriends(accessToken, targetUserId),
+    ]);
+
+  if (currentUser.ID === targetUser.ID) {
+    return {
+      userId: targetUser.ID,
+      name: targetUser.name || targetUser.ID,
+      picture: targetUser.picture,
+      relationship: 'self',
+      friendshipId: null,
+      pendingRequestId: null,
+      isAllowedToStampForMe: false,
+      visitedCount: 0,
+      completionPercent: 0,
+      sharedVisitedCount: 0,
+      collectorSinceYear: null,
+      latestVisits: [],
+      friends: [],
+      achievements: [],
+      stampBuckets: { shared: 0, friendOnly: 0, meOnly: 0, neither: 0 },
+      stampComparisons: [],
+    } satisfies UserProfileOverviewData;
+  }
+
+  const friendMatch = friends.find((friend) => friend.ID === targetUser.ID);
+  const relationship: FriendshipRelationshipState = friendMatch
+    ? 'friend'
+    : pendingRequests.some(
+          (request) => request.fromUser_ID === currentUser.ID && request.toUser_ID === targetUser.ID
+        )
+      ? 'incoming_request'
+      : pendingRequests.some(
+            (request) => request.toUser_ID === currentUser.ID && request.fromUser_ID === targetUser.ID
+          )
+        ? 'outgoing_request'
+        : 'not_connected';
+
+  const friendshipId =
+    friendMatch?.FriendshipID || null;
+
+  const pendingRequestId =
+    pendingRequests.find(
+      (request) =>
+        (request.fromUser_ID === currentUser.ID && request.toUser_ID === targetUser.ID) ||
+        (request.toUser_ID === currentUser.ID && request.fromUser_ID === targetUser.ID)
+    )?.ID || null;
+
+  const targetVisitedCount = stamps.reduce(
+    (count, stamp) => count + (stampContainsUser(stamp, targetUser) ? 1 : 0),
+    0
+  );
+  const sharedVisitedCount = stamps.reduce(
+    (count, stamp) => count + (Boolean(stamp.hasVisited) && stampContainsUser(stamp, targetUser) ? 1 : 0),
+    0
+  );
+  const totalCount = stamps.length;
+  const latestVisits = targetStampings.slice(0, 3).map((visit) => {
+    const stamp = visit.stamp_ID ? stamps.find((item) => item.ID === visit.stamp_ID) : undefined;
+    return {
+      id: visit.ID,
+      stampId: visit.stamp_ID || '',
+      stampNumber: stamp?.number,
+      stampName: stamp?.name || 'Stempelstelle',
+      visitedAt: visit.createdAt,
+    };
+  });
+
+  const earliestVisit = targetStampings[targetStampings.length - 1];
+  const mappedVisibleFriends = visibleFriends
+    .map((friend) => ({
+      id: friend.ID,
+      name: friend.name || friend.ID,
+      picture: friend.picture,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const stampComparisons = comparisonStamps.map((stamp) => ({
+    stamp,
+    meVisited: !!stamp.hasVisited,
+    userVisited: stampContainsUser(stamp, targetUser),
+  }));
+
+  return {
+    userId: targetUser.ID,
+    name: targetUser.name || targetUser.ID,
+    picture: targetUser.picture,
+    relationship,
+    friendshipId,
+    pendingRequestId,
+    isAllowedToStampForMe: !!friendMatch?.isAllowedToStampForMe,
+    visitedCount: targetVisitedCount,
+    completionPercent: totalCount > 0 ? Math.round((targetVisitedCount / totalCount) * 100) : 0,
+    sharedVisitedCount,
+    collectorSinceYear: earliestVisit ? new Date(earliestVisit.createdAt || '').getFullYear() : null,
+    latestVisits,
+    friends: mappedVisibleFriends,
+    achievements: [
+      {
+        id: 'forest-runner',
+        label: 'Waldlaeufer',
+        value: `${targetVisitedCount} Stempel`,
+      },
+      {
+        id: 'shared-hikes',
+        label: 'Gemeinsam',
+        value: `${sharedVisitedCount} zusammen`,
+      },
+    ],
+    stampBuckets: {
+      shared: stampComparisons.filter((item) => item.meVisited && item.userVisited).length,
+      friendOnly: stampComparisons.filter((item) => !item.meVisited && item.userVisited).length,
+      meOnly: stampComparisons.filter((item) => item.meVisited && !item.userVisited).length,
+      neither: stampComparisons.filter((item) => !item.meVisited && !item.userVisited).length,
+    },
+    stampComparisons,
+  } satisfies UserProfileOverviewData;
 }
 
 export async function fetchFriendsOverview(accessToken: string) {
@@ -574,24 +891,24 @@ export async function fetchFriendsOverview(accessToken: string) {
 
   const currentUserId = currentUser.ID;
   const incomingRequests = pendingRequests
-    .filter((request) => request.toUser_ID === currentUserId)
+    .filter((request) => request.fromUser_ID === currentUserId)
     .map((request) => ({
       id: request.ID,
-      friendshipId: request.outgoingFriendship_ID || request.ID,
-      userId: request.fromUser_ID || request.fromUser?.ID || request.ID,
-      name: request.fromUser?.name || 'Unbekannter Nutzer',
-      picture: request.fromUser?.picture,
+      pendingRequestId: request.ID,
+      userId: request.toUser_ID || request.toUser?.ID || request.ID,
+      name: request.toUser?.name || 'Unbekannter Nutzer',
+      picture: request.toUser?.picture,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
   const outgoingRequests = pendingRequests
-    .filter((request) => request.fromUser_ID === currentUserId)
+    .filter((request) => request.toUser_ID === currentUserId)
     .map((request) => ({
       id: request.ID,
-      friendshipId: request.outgoingFriendship_ID || request.ID,
-      userId: request.toUser_ID || request.toUser?.ID || request.ID,
-      name: request.toUser?.name || 'Unbekannter Nutzer',
-      picture: request.toUser?.picture,
+      pendingRequestId: request.ID,
+      userId: request.fromUser_ID || request.fromUser?.ID || request.ID,
+      name: request.fromUser?.name || 'Unbekannter Nutzer',
+      picture: request.fromUser?.picture,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -606,11 +923,11 @@ export async function fetchFriendsOverview(accessToken: string) {
   } satisfies FriendsOverviewData;
 }
 
-export async function acceptPendingFriendshipRequest(accessToken: string, friendshipId: string) {
+export async function acceptPendingFriendshipRequest(accessToken: string, pendingRequestId: string) {
   return mutateOData<string>(accessToken, buildUrl('acceptPendingFriendshipRequest'), {
     method: 'POST',
     body: JSON.stringify({
-      FriendshipID: friendshipId,
+      FriendshipID: pendingRequestId,
     }),
   });
 }
@@ -673,6 +990,25 @@ export async function createFriendRequest(accessToken: string, userId: string) {
     body: JSON.stringify({
       toUser_ID: userId,
     }),
+  });
+}
+
+export async function updateFriendshipPermission(
+  accessToken: string,
+  friendshipId: string,
+  isAllowedToStampForFriend: boolean
+) {
+  return mutateOData<string>(accessToken, buildUrl(`Friendships(${friendshipId})`), {
+    method: 'PATCH',
+    body: JSON.stringify({
+      isAllowedToStampForFriend,
+    }),
+  });
+}
+
+export async function removeFriendship(accessToken: string, friendshipId: string) {
+  return mutateOData<null>(accessToken, buildUrl(`Friendships(${friendshipId})`), {
+    method: 'DELETE',
   });
 }
 

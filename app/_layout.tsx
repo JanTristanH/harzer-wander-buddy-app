@@ -17,6 +17,7 @@ export default function RootLayout() {
           <Stack.Screen name="login" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="profile/edit" />
+          <Stack.Screen name="profile/[userId]" />
           <Stack.Screen name="stamps/[id]" />
         </Stack>
         <StatusBar style="light" />

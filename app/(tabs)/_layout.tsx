@@ -1,10 +1,9 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Feather } from '@expo/vector-icons';
 
 import { AuthGuard } from '@/components/auth-guard';
+import { FloatingBarIcon } from '@/components/floating-bar-icon';
 import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 
 export default function TabLayout() {
   return (
@@ -40,21 +39,27 @@ export default function TabLayout() {
           name="index"
           options={{
             title: 'Liste',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <FloatingBarIcon color={color} focused={focused} name="index" size={28} />
+            ),
           }}
         />
         <Tabs.Screen
           name="friends"
           options={{
             title: 'Freunde',
-            tabBarIcon: ({ color }) => <Feather color={color} name="users" size={24} />,
+            tabBarIcon: ({ color, focused }) => (
+              <FloatingBarIcon color={color} focused={focused} name="friends" size={28} />
+            ),
           }}
         />
         <Tabs.Screen
           name="profile"
           options={{
             title: 'Profil',
-            tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.fill" color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <FloatingBarIcon color={color} focused={focused} name="profile" size={28} />
+            ),
           }}
         />
       </Tabs>

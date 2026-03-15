@@ -1,11 +1,14 @@
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { Image } from 'expo-image';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -35,6 +38,30 @@ const FILTER_LABELS: Record<FriendFilter, string> = {
 
 const AVATAR_COLORS = ['#DDE9DF', '#EADFCB', '#D7E2EC', '#E6D9E9'];
 
+function Avatar({
+  image,
+  index,
+  style,
+}: {
+  image?: string;
+  index: number;
+  style: { height: number; width: number; borderRadius: number };
+}) {
+  if (image) {
+    return <Image contentFit="cover" source={{ uri: image }} style={[style, styles.avatarImage]} />;
+  }
+
+  return (
+    <View
+      style={[
+        style,
+        styles.avatarPlaceholder,
+        { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+      ]}
+    />
+  );
+}
+
 function FriendFilterChip({
   active,
   label,
@@ -61,31 +88,34 @@ function FriendRow({
   name,
   subtitle,
   index,
+  image,
   actionLabel,
   actionMuted,
   actionDisabled,
+  onPress,
   onActionPress,
 }: {
   name: string;
   subtitle: string;
   index: number;
+  image?: string;
   actionLabel?: string;
   actionMuted?: boolean;
   actionDisabled?: boolean;
+  onPress?: () => void;
   onActionPress?: () => void;
 }) {
   return (
-    <Pressable style={({ pressed }) => [styles.friendCard, pressed && styles.pressed]}>
-      <View
-        style={[
-          styles.avatarPlaceholder,
-          { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
-        ]}
-      />
-      <View style={styles.friendBody}>
-        <Text style={styles.friendName}>{name}</Text>
-        <Text style={styles.friendMeta}>{subtitle}</Text>
-      </View>
+    <View style={styles.friendCard}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.friendRowPressable, pressed && styles.pressed]}>
+        <Avatar image={image} index={index} style={styles.avatarPlaceholder} />
+        <View style={styles.friendBody}>
+          <Text style={styles.friendName}>{name}</Text>
+          <Text style={styles.friendMeta}>{subtitle}</Text>
+        </View>
+      </Pressable>
       {actionLabel && onActionPress ? (
         <Pressable
           disabled={actionDisabled}
@@ -103,7 +133,7 @@ function FriendRow({
       ) : (
         <Feather color="#2E6B4B" name="chevron-right" size={18} />
       )}
-    </Pressable>
+    </View>
   );
 }
 
@@ -127,12 +157,14 @@ function SearchResultRow({
   index,
   status,
   disabled,
+  onRowPress,
   onPress,
 }: {
   result: SearchUserResult;
   index: number;
   status: 'request' | 'sent' | 'friend' | 'self';
   disabled: boolean;
+  onRowPress: () => void;
   onPress: () => void;
 }) {
   const actionLabel =
@@ -140,16 +172,15 @@ function SearchResultRow({
 
   return (
     <View style={styles.searchResultRow}>
-      <View
-        style={[
-          styles.searchAvatar,
-          { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
-        ]}
-      />
-      <View style={styles.friendBody}>
-        <Text style={styles.friendName}>{result.name}</Text>
-        <Text style={styles.friendMeta}>@{result.id}</Text>
-      </View>
+      <Pressable
+        onPress={onRowPress}
+        style={({ pressed }) => [styles.searchResultPressable, pressed && styles.pressed]}>
+        <Avatar image={result.picture} index={index} style={styles.searchAvatar} />
+        <View style={styles.friendBody}>
+          <Text style={styles.friendName}>{result.name}</Text>
+          <Text style={styles.friendMeta}>@{result.id}</Text>
+        </View>
+      </Pressable>
       <Pressable
         disabled={disabled}
         onPress={onPress}
@@ -172,12 +203,14 @@ function SearchResultRow({
 }
 
 export default function FriendsScreen() {
+  const router = useRouter();
   const { accessToken, logout } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FriendFilter>('friends');
   const [data, setData] = useState<FriendsOverviewData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [acceptingFriendshipId, setAcceptingFriendshipId] = useState<string | null>(null);
+  const [acceptingPendingRequestId, setAcceptingPendingRequestId] = useState<string | null>(null);
   const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchUserResult[]>([]);
@@ -185,12 +218,16 @@ export default function FriendsScreen() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
 
-  const loadFriends = useCallback(async () => {
+  const loadFriends = useCallback(async (refresh = false) => {
     if (!accessToken) {
       return;
     }
 
-    setIsLoading(true);
+    if (refresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
 
     try {
       const nextData = await fetchFriendsOverview(accessToken);
@@ -205,6 +242,7 @@ export default function FriendsScreen() {
       setError(nextError instanceof Error ? nextError.message : 'Unknown error');
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, logout]);
 
@@ -280,16 +318,26 @@ export default function FriendsScreen() {
     setSubmittingUserId(null);
   }, []);
 
+  const handleSearchProfilePress = useCallback(
+    (userId: string) => {
+      closeSearchModal();
+      requestAnimationFrame(() => {
+        router.push(`/profile/${encodeURIComponent(userId)}` as never);
+      });
+    },
+    [closeSearchModal, router]
+  );
+
   const handleAcceptRequest = useCallback(
-    async (friendshipId: string) => {
+    async (pendingRequestId: string) => {
       if (!accessToken) {
         return;
       }
 
-      setAcceptingFriendshipId(friendshipId);
+      setAcceptingPendingRequestId(pendingRequestId);
 
       try {
-        await acceptPendingFriendshipRequest(accessToken, friendshipId);
+        await acceptPendingFriendshipRequest(accessToken, pendingRequestId);
         await loadFriends();
       } catch (nextError) {
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -302,7 +350,7 @@ export default function FriendsScreen() {
           nextError instanceof Error ? nextError.message : 'Unknown error'
         );
       } finally {
-        setAcceptingFriendshipId(null);
+        setAcceptingPendingRequestId(null);
       }
     },
     [accessToken, loadFriends, logout]
@@ -341,7 +389,16 @@ export default function FriendsScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.safeArea}>
       <View style={styles.screen}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl
+              onRefresh={() => void loadFriends(true)}
+              refreshing={isRefreshing}
+              tintColor="#2E6B4B"
+            />
+          }
+          showsVerticalScrollIndicator={false}>
           <Text style={styles.title}>Freunde</Text>
 
           <View style={styles.filterRow}>
@@ -379,8 +436,10 @@ export default function FriendsScreen() {
                 {data.friends.map((friend, index) => (
                   <FriendRow
                     key={friend.id}
+                    image={friend.picture}
                     index={index}
                     name={friend.name}
+                    onPress={() => router.push(`/profile/${encodeURIComponent(friend.id)}` as never)}
                     subtitle={`${friend.visitedCount} Stempel • ${friend.completionPercent}%`}
                   />
                 ))}
@@ -399,12 +458,14 @@ export default function FriendsScreen() {
                 {data.incomingRequests.map((request, index) => (
                   <FriendRow
                     key={request.id}
+                    image={request.picture}
                     index={index}
                     name={request.name}
+                    onPress={() => router.push(`/profile/${encodeURIComponent(request.userId)}` as never)}
                     subtitle="Moechte mit dir wandern"
-                    actionLabel={acceptingFriendshipId === request.friendshipId ? '...' : 'Annehmen'}
-                    actionDisabled={acceptingFriendshipId === request.friendshipId}
-                    onActionPress={() => void handleAcceptRequest(request.friendshipId)}
+                    actionLabel={acceptingPendingRequestId === request.pendingRequestId ? '...' : 'Annehmen'}
+                    actionDisabled={acceptingPendingRequestId === request.pendingRequestId}
+                    onActionPress={() => void handleAcceptRequest(request.pendingRequestId)}
                   />
                 ))}
               </View>
@@ -422,8 +483,10 @@ export default function FriendsScreen() {
                 {data.outgoingRequests.map((request, index) => (
                   <FriendRow
                     key={request.id}
+                    image={request.picture}
                     index={index}
                     name={request.name}
+                    onPress={() => router.push(`/profile/${encodeURIComponent(request.userId)}` as never)}
                     subtitle="Anfrage gesendet"
                     actionLabel="Gesendet"
                     actionMuted
@@ -522,6 +585,7 @@ export default function FriendsScreen() {
                           key={result.id}
                           disabled={status !== 'request' || submittingUserId === result.id}
                           index={index}
+                          onRowPress={() => handleSearchProfilePress(result.id)}
                           onPress={() => void handleCreateRequest(result.id)}
                           result={result}
                           status={status === 'request' && submittingUserId === result.id ? 'sent' : status}
@@ -618,10 +682,19 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
+  friendRowPressable: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 12,
+  },
   avatarPlaceholder: {
     borderRadius: 16,
     height: 44,
     width: 44,
+  },
+  avatarImage: {
+    overflow: 'hidden',
   },
   friendBody: {
     flex: 1,
@@ -772,6 +845,12 @@ const styles = StyleSheet.create({
   },
   searchResultRow: {
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchResultPressable: {
+    alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
     gap: 10,
   },
