@@ -21,7 +21,7 @@ type StampFilter = 'visited' | 'missing' | 'all';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, logout, resetApp } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims & { sub?: string }>();
   const [data, setData] = useState<ProfileOverviewData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -118,14 +118,24 @@ export default function ProfileScreen() {
       stampItems: filteredStamps.map((stamp) => ({ kind: 'simple' as const, stamp })),
       onStampPress: (stampId) => router.push(`/stamps/${stampId}` as never),
       emptyStampText: 'Keine Stempelstellen fuer diesen Filter verfuegbar.',
-      footerButton: {
-        label: 'Ausloggen',
-        onPress: () => {
-          void logout();
+      footerButtons: [
+        {
+          key: 'reset-app',
+          label: 'Onboarding neu starten',
+          onPress: () => {
+            void resetApp();
+          },
         },
-      },
+        {
+          key: 'logout',
+          label: 'Ausloggen',
+          onPress: () => {
+            void logout();
+          },
+        },
+      ],
     };
-  }, [activeStampFilter, claims?.given_name, claims?.name, claims?.nickname, data, logout, router]);
+  }, [activeStampFilter, claims?.given_name, claims?.name, claims?.nickname, data, logout, resetApp, router]);
 
   if (isLoading) {
     return <ProfileLoadingState label="Profil wird geladen..." />;

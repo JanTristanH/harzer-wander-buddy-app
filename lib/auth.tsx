@@ -3,7 +3,7 @@ import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { jwtDecode } from 'jwt-decode';
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { appConfig, getMissingConfig } from '@/lib/config';
 
@@ -42,6 +42,7 @@ type AuthContextValue = {
   login: () => Promise<void>;
   signup: () => Promise<void>;
   logout: () => Promise<void>;
+  resetApp: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -127,13 +128,13 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const configError =
     missingConfig.length > 0 ? `Missing Expo config: ${missingConfig.join(', ')}` : null;
 
-  async function resolveDiscovery() {
+  const resolveDiscovery = useCallback(async () => {
     if (configError) {
       return null;
     }
 
     return AuthSession.fetchDiscoveryAsync(getIssuer());
-  }
+  }, [configError]);
 
   useEffect(() => {
     let isMounted = true;
@@ -208,7 +209,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     };
   }, [configError]);
 
-  async function authenticate(mode: 'login' | 'signup') {
+  const authenticate = useCallback(async (mode: 'login' | 'signup') => {
     if (configError) {
       return;
     }
@@ -274,17 +275,17 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       console.error(`Auth0 ${mode} failed`, error);
       setAuthError(error instanceof Error ? error.message : `Auth0 ${mode} failed`);
     }
-  }
+  }, [configError, resolveDiscovery]);
 
-  async function login() {
+  const login = useCallback(async () => {
     await authenticate('login');
-  }
+  }, [authenticate]);
 
-  async function signup() {
+  const signup = useCallback(async () => {
     await authenticate('signup');
-  }
+  }, [authenticate]);
 
-  async function logout() {
+  const logout = useCallback(async () => {
     const returnTo = getRedirectUri(appConfig.auth0LogoutReturnPath);
 
     try {
@@ -306,7 +307,13 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       await clearTokenResponse();
       setAuthState(null);
     }
-  }
+  }, [configError, resolveDiscovery]);
+
+  const resetApp = useCallback(async () => {
+    await saveOnboardingState(false);
+    setHasCompletedOnboarding(false);
+    await logout();
+  }, [logout]);
 
   const contextValue = useMemo<AuthContextValue>(
     () => ({
@@ -323,6 +330,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       login,
       signup,
       logout,
+      resetApp,
     }),
     [
       authError,
@@ -332,8 +340,12 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       authState?.issuedAt,
       authState?.refreshToken,
       configError,
+      login,
       hasCompletedOnboarding,
       isLoading,
+      logout,
+      resetApp,
+      signup,
     ]
   );
 

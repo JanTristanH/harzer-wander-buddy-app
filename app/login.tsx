@@ -15,15 +15,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
-import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useAuth } from '@/lib/auth';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
-
-type LoginClaims = {
-  given_name?: string;
-  name?: string;
-  nickname?: string;
-};
 
 type ActionButtonProps = PressableProps & {
   label: string;
@@ -66,14 +60,12 @@ function ActionButton({
 export default function LoginScreen() {
   const { authError, configError, hasCompletedOnboarding, isAuthenticated, isLoading, login, signup } =
     useAuth();
-  const claims = useIdTokenClaims<LoginClaims>();
 
   if (isAuthenticated) {
     return <Redirect href="/(tabs)" />;
   }
 
   const errorMessage = configError || authError;
-  const displayName = claims?.nickname || claims?.name || claims?.given_name;
 
   return (
     <LinearGradient colors={['#f7f5ef', '#f1eee5', '#ece7dc']} style={styles.gradient}>
@@ -97,11 +89,6 @@ export default function LoginScreen() {
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Konto</Text>
-            <Text style={styles.cardCopy}>
-              {displayName
-                ? `Letzte bekannte Anmeldung: ${displayName}`
-                : 'Die Onboarding-Hinweise werden nach deiner ersten Anmeldung ausgeblendet.'}
-            </Text>
             {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
             <View style={styles.buttonColumn}>

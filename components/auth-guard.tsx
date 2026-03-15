@@ -5,7 +5,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/lib/auth';
 
 export function AuthGuard({ children }: React.PropsWithChildren) {
-  const { configError, isAuthenticated, isLoading } = useAuth();
+  const { configError, hasCompletedOnboarding, isAuthenticated, isLoading } = useAuth();
 
   if (configError) {
     return (
@@ -26,7 +26,7 @@ export function AuthGuard({ children }: React.PropsWithChildren) {
   }
 
   if (!isAuthenticated) {
-    return <Redirect href={'/login' as never} />;
+    return <Redirect href={(hasCompletedOnboarding ? '/login' : '/onboarding') as never} />;
   }
 
   return <>{children}</>;

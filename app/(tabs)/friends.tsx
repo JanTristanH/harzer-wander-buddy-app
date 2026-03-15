@@ -507,11 +507,6 @@ export default function FriendsScreen() {
                   : null}
               </View>
 
-              <View style={styles.modalHint}>
-                <Text style={styles.modalHintText}>
-                  Du kannst Freundschaftsanfragen spaeter in „Freunde“ verwalten.
-                </Text>
-              </View>
             </View>
           </View>
         </Modal>
@@ -746,19 +741,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     paddingVertical: 8,
-  },
-  modalHint: {
-    backgroundColor: '#F8F6F1',
-    borderRadius: 14,
-    marginTop: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  modalHintText: {
-    color: '#6B7A6B',
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
   },
   pressed: {
     opacity: 0.88,

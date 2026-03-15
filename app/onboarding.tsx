@@ -1,7 +1,7 @@
-import * as Location from 'expo-location';
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { Redirect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -15,11 +15,12 @@ import {
   Text,
   TextInput,
   View,
-  type PressableStateCallbackType,
   type PressableProps,
+  type PressableStateCallbackType,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { FriendsList, type FriendsListItem } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
 import { createFriendRequest, searchUsers, type SearchUserResult } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
@@ -32,14 +33,18 @@ type LoginClaims = {
   nickname?: string;
 };
 
+type SentRequestPreview = {
+  key: string;
+  name: string;
+  picture?: string;
+};
+
 type ActionButtonProps = PressableProps & {
   label: string;
   variant?: 'primary' | 'secondary';
 };
 
 type LocationPermissionState = 'unknown' | 'checking' | 'granted' | 'denied';
-
-const AVATAR_COLORS = ['#DDE9DF', '#EADFCB', '#D7E2EC', '#E6D9E9'];
 
 function ActionButton({
   label,
@@ -74,56 +79,6 @@ function ActionButton({
   );
 }
 
-function SearchResultRow({
-  result,
-  index,
-  status,
-  disabled,
-  onPress,
-}: {
-  result: SearchUserResult;
-  index: number;
-  status: 'request' | 'sent' | 'friend';
-  disabled: boolean;
-  onPress: () => void;
-}) {
-  const actionLabel = status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : 'Anfrage';
-
-  return (
-    <View style={styles.searchResultRow}>
-      <View style={styles.searchResultBody}>
-        <View
-          style={[
-            styles.searchAvatar,
-            { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
-          ]}
-        />
-        <View style={styles.searchResultText}>
-          <Text style={styles.searchResultName}>{result.name}</Text>
-          <Text style={styles.searchResultMeta}>@{result.id}</Text>
-        </View>
-      </View>
-      <Pressable
-        disabled={disabled}
-        onPress={onPress}
-        style={({ pressed }) => [
-          styles.searchActionButton,
-          status !== 'request' && styles.searchActionButtonMuted,
-          disabled && styles.actionButtonDisabled,
-          pressed && styles.actionButtonPressed,
-        ]}>
-        <Text
-          style={[
-            styles.searchActionLabel,
-            status !== 'request' && styles.searchActionLabelMuted,
-          ]}>
-          {actionLabel}
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
 export default function OnboardingScreen() {
   const router = useRouter();
   const {
@@ -146,7 +101,7 @@ export default function OnboardingScreen() {
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
-  const [sentRequestIds, setSentRequestIds] = useState<string[]>([]);
+  const [sentRequests, setSentRequests] = useState<SentRequestPreview[]>([]);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
@@ -165,7 +120,10 @@ export default function OnboardingScreen() {
     locationPermission === 'granted'
       ? 'Standortfreigabe ist aktiv fuer Entfernungen, Karte und nahe Parkplaetze.'
       : 'Fuer Entfernungen, Karte und nahe Parkplaetze.';
-  const sentRequestIdSet = useMemo(() => new Set(sentRequestIds), [sentRequestIds]);
+  const sentRequestIdSet = useMemo(
+    () => new Set(sentRequests.map((request) => request.key)),
+    [sentRequests]
+  );
 
   const closeSearchModal = useCallback(() => {
     setIsSearchModalVisible(false);
@@ -271,7 +229,21 @@ export default function OnboardingScreen() {
 
       try {
         await createFriendRequest(accessToken, userId);
-        setSentRequestIds((current) => (current.includes(userId) ? current : [...current, userId]));
+        const matchedUser = searchResults.find((result) => result.id === userId);
+        setSentRequests((current) => {
+          if (current.some((request) => request.key === userId)) {
+            return current;
+          }
+
+          return [
+            ...current,
+            {
+              key: userId,
+              name: matchedUser?.name || userId,
+              picture: matchedUser?.picture,
+            },
+          ];
+        });
       } catch (error) {
         if (error instanceof Error && error.name === 'UnauthorizedError') {
           await logout();
@@ -286,7 +258,38 @@ export default function OnboardingScreen() {
         setSubmittingUserId(null);
       }
     },
-    [accessToken, logout]
+    [accessToken, logout, searchResults]
+  );
+  const searchListItems = useMemo<FriendsListItem[]>(
+    () =>
+      searchResults.map((result) => {
+        const status: 'request' | 'sent' | 'friend' =
+          result.isFriend || sentRequestIdSet.has(result.id)
+            ? (result.isFriend ? 'friend' : 'sent')
+            : 'request';
+
+        return {
+          id: result.id,
+          name: result.name,
+          image: result.picture,
+          actionLabel:
+            status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : 'Anfrage',
+          actionMuted: status !== 'request',
+          actionDisabled: status !== 'request' || submittingUserId === result.id,
+          onActionPress: () => void handleCreateRequest(result.id),
+        };
+      }),
+    [handleCreateRequest, searchResults, sentRequestIdSet, submittingUserId]
+  );
+  const sentRequestItems = useMemo<FriendsListItem[]>(
+    () =>
+      sentRequests.map((request) => ({
+        id: request.key,
+        name: request.name,
+        image: request.picture,
+        subtitle: 'Anfrage gesendet',
+      })),
+    [sentRequests]
   );
 
   async function requestLocationPermission() {
@@ -387,7 +390,7 @@ export default function OnboardingScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Hast du schon Wanderbuddies?</Text>
             <Text style={styles.cardCopy}>
-              Suche direkt nach Freunden und sende schon waehrend des Onboardings Anfragen.
+              Suche direkt nach Freunden und sende schon jetzt Anfragen.
             </Text>
             <ActionButton
               disabled={!isAuthenticated || !accessToken}
@@ -395,6 +398,12 @@ export default function OnboardingScreen() {
               onPress={() => setIsSearchModalVisible(true)}
               style={styles.fullWidthButton}
             />
+            {sentRequests.length > 0 ? (
+              <View style={styles.sentRequestsBox}>
+                <Text style={styles.sentRequestsTitle}>Gesendete Anfragen</Text>
+                <FriendsList items={sentRequestItems} />
+              </View>
+            ) : null}
           </View>
         </ScrollView>
 
@@ -469,23 +478,9 @@ export default function OnboardingScreen() {
                   <Text style={styles.searchStatusText}>Keine passenden Nutzer gefunden.</Text>
                 ) : null}
 
-                {!isSearchLoading && !searchError && searchResults.length > 0
-                  ? searchResults.map((result, index) => {
-                      const status: 'request' | 'sent' | 'friend' =
-                        result.isFriend || sentRequestIdSet.has(result.id) ? (result.isFriend ? 'friend' : 'sent') : 'request';
-
-                      return (
-                        <SearchResultRow
-                          key={result.id}
-                          disabled={status !== 'request' || submittingUserId === result.id}
-                          index={index}
-                          onPress={() => void handleCreateRequest(result.id)}
-                          result={result}
-                          status={status === 'request' && submittingUserId === result.id ? 'sent' : status}
-                        />
-                      );
-                    })
-                  : null}
+                {!isSearchLoading && !searchError && searchResults.length > 0 ? (
+                  <FriendsList items={searchListItems} />
+                ) : null}
               </View>
 
               <View style={styles.modalHint}>
@@ -667,6 +662,19 @@ const styles = StyleSheet.create({
   fullWidthButton: {
     width: '100%',
   },
+  sentRequestsBox: {
+    marginTop: 6,
+    backgroundColor: '#f8f6f1',
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+  },
+  sentRequestsTitle: {
+    color: '#263127',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
   modalOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-start',
@@ -735,57 +743,6 @@ const styles = StyleSheet.create({
   searchResultsColumn: {
     gap: 10,
     minHeight: 120,
-  },
-  searchResultRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  searchResultBody: {
-    alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 10,
-  },
-  searchAvatar: {
-    borderRadius: 12,
-    height: 40,
-    width: 40,
-  },
-  searchResultText: {
-    flex: 1,
-  },
-  searchResultName: {
-    color: '#1E2A1E',
-    fontFamily: Fonts.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    lineHeight: 20,
-    marginBottom: 2,
-  },
-  searchResultMeta: {
-    color: '#6B7A6B',
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  searchActionButton: {
-    backgroundColor: '#2E6B4B',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  searchActionButtonMuted: {
-    backgroundColor: '#E9E2D6',
-  },
-  searchActionLabel: {
-    color: '#F5F3EE',
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  searchActionLabelMuted: {
-    color: '#2E3A2E',
   },
   searchStatusWrap: {
     alignItems: 'center',

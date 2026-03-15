@@ -115,10 +115,11 @@ export type ProfileViewModel = {
   stampItems: (SimpleStampItem | CompareStampItem)[];
   onStampPress: (stampId: string) => void;
   emptyStampText: string;
-  footerButton?: {
+  footerButtons?: {
+    key: string;
     label: string;
     onPress: () => void;
-  };
+  }[];
   onRefresh?: () => void;
   refreshing?: boolean;
 };
@@ -556,12 +557,17 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
           )}
         </ProfileSection>
 
-        {data.footerButton ? (
-          <Pressable
-            onPress={data.footerButton.onPress}
-            style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}>
-            <Text style={styles.logoutLabel}>{data.footerButton.label}</Text>
-          </Pressable>
+        {data.footerButtons?.length ? (
+          <View style={styles.footerButtonStack}>
+            {data.footerButtons.map((button) => (
+              <Pressable
+                key={button.key}
+                onPress={button.onPress}
+                style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}>
+                <Text style={styles.logoutLabel}>{button.label}</Text>
+              </Pressable>
+            ))}
+          </View>
         ) : null}
       </ScrollView>
     </SafeAreaView>
@@ -974,6 +980,9 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  footerButtonStack: {
+    gap: 10,
   },
   logoutLabel: {
     color: '#2e3a2e',
