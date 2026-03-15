@@ -115,6 +115,13 @@ export type ProfileOverviewData = {
     visitedCount: number | null;
     completionPercent: number | null;
   } | null;
+  friends: {
+    id: string;
+    name: string;
+    picture?: string;
+    visitedCount: number;
+    completionPercent: number;
+  }[];
   stamps: Stampbox[];
   achievements: Array<{
     id: string;
@@ -408,6 +415,35 @@ async function fetchCurrentUserRecord(accessToken: string) {
   ]);
 }
 
+async function buildFriendProgress(
+  accessToken: string,
+  friends: Array<{
+    ID: string;
+    name?: string;
+    picture?: string;
+  }>,
+  totalCount: number
+) {
+  const friendProgress = await Promise.all(
+    friends.map(async (friend) => {
+      const friendStampboxes = await fetchComparisonStampboxes(accessToken, [friend.ID]);
+      const visitedCount = friendStampboxes.filter((stamp) => Number(stamp.totalGroupStampings || 0) > 0).length;
+
+      return {
+        id: friend.ID,
+        name: friend.name || 'Freund',
+        picture: friend.picture,
+        visitedCount,
+        completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
+      };
+    })
+  );
+
+  return friendProgress.sort(
+    (left, right) => right.visitedCount - left.visitedCount || left.name.localeCompare(right.name)
+  );
+}
+
 async function fetchUserFriends(accessToken: string, userId: string) {
   const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', [
     ['$select', 'ID,toUser_ID'],
@@ -496,23 +532,6 @@ function tokenizeFriendField(value?: string | string[] | number | null) {
   const parts = Array.isArray(value) ? value : String(value).split(/[;,|]/);
 
   return parts.map((part) => safeNormalizedText(part)).filter(Boolean);
-}
-
-function stampContainsFriend(stamp: Stampbox, friend: MyFriend) {
-  const friendId = safeNormalizedText(friend.ID);
-  const friendName = safeNormalizedText(friend.name);
-  const stampedUserIds = tokenizeFriendField(stamp.stampedUserIds);
-  const stampedUsers = tokenizeFriendField(stamp.stampedUsers);
-
-  if (friendId && stampedUserIds.includes(friendId)) {
-    return true;
-  }
-
-  if (friendName && stampedUsers.includes(friendName)) {
-    return true;
-  }
-
-  return false;
 }
 
 function stampContainsUserId(stamp: Stampbox, userId: string) {
@@ -800,23 +819,14 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
   const totalCount = stamps.length;
   const openCount = Math.max(0, totalCount - visitedCount);
   const completionPercent = totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0;
-  const featuredFriend = friends.length
+  const mappedFriends = await buildFriendProgress(accessToken, friends, totalCount);
+  const featuredFriend = mappedFriends[0]
     ? {
-        id: friends[0].ID,
-        name: friends[0].name || 'Freund',
-        picture: friends[0].picture,
-        visitedCount: stamps.reduce((count, stamp) => count + (stampContainsFriend(stamp, friends[0]) ? 1 : 0), 0),
-        completionPercent:
-          totalCount > 0
-            ? Math.round(
-                (stamps.reduce(
-                  (count, stamp) => count + (stampContainsFriend(stamp, friends[0]) ? 1 : 0),
-                  0
-                ) /
-                  totalCount) *
-                  100
-              )
-            : 0,
+        id: mappedFriends[0].id,
+        name: mappedFriends[0].name,
+        picture: mappedFriends[0].picture,
+        visitedCount: mappedFriends[0].visitedCount,
+        completionPercent: mappedFriends[0].completionPercent,
       }
     : null;
   return {
@@ -830,6 +840,7 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
     collectorSinceYear: earliestVisit ? new Date(getVisitTimestamp(earliestVisit) || '').getFullYear() : null,
     latestVisits,
     featuredFriend,
+    friends: mappedFriends,
     stamps,
     achievements: [
       {
@@ -937,21 +948,15 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
   });
 
   const earliestVisit = targetStampings[targetStampings.length - 1];
-  const mappedVisibleFriends = visibleFriends
-    .map((friend) => {
-      const visitedCount = stamps.reduce((count, stamp) => {
-        return count + (stampContainsUser(stamp, friend) ? 1 : 0);
-      }, 0);
-
-      return {
-        id: friend.ID,
-        name: friend.name || friend.ID,
-        picture: friend.picture,
-        visitedCount,
-        completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
-      };
-    })
-    .sort((left, right) => right.visitedCount - left.visitedCount || left.name.localeCompare(right.name));
+  const mappedVisibleFriends = await buildFriendProgress(
+    accessToken,
+    visibleFriends.map((friend) => ({
+      ID: friend.ID,
+      name: friend.name,
+      picture: friend.picture,
+    })),
+    totalCount
+  );
   const stampComparisons = comparisonStamps.map((stamp) => ({
     stamp,
     meVisited: !!stamp.hasVisited,
@@ -1008,21 +1013,7 @@ export async function fetchFriendsOverview(accessToken: string) {
   ]);
 
   const totalCount = stamps.length;
-  const mappedFriends = friends
-    .map((friend) => {
-      const visitedCount = stamps.reduce((count, stamp) => {
-        return count + (stampContainsFriend(stamp, friend) ? 1 : 0);
-      }, 0);
-
-      return {
-        id: friend.ID,
-        name: friend.name || 'Freund',
-        picture: friend.picture,
-        visitedCount,
-        completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
-      };
-    })
-    .sort((left, right) => right.visitedCount - left.visitedCount || left.name.localeCompare(right.name));
+  const mappedFriends = await buildFriendProgress(accessToken, friends, totalCount);
 
   const currentUserId = currentUser.ID;
   const incomingRequests = pendingRequests

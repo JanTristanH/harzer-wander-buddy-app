@@ -98,17 +98,16 @@ export default function ProfileScreen() {
       latestVisits: data.latestVisits,
       latestVisitsEmptyText: 'Noch keine Besuche vorhanden.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),
-      friendSummary: data.featuredFriend
-        ? {
-            name: data.featuredFriend.name,
-            image: data.featuredFriend.picture,
-            subtitle:
-              data.featuredFriend.visitedCount !== null
-                ? `${data.featuredFriend.visitedCount} Stempel • ${data.featuredFriend.completionPercent || 0}%`
-                : `${data.friendCount} Freunde verbunden`,
-            onPress: () => router.push(`/profile/${encodeURIComponent(data.featuredFriend!.id)}` as never),
-          }
-        : undefined,
+      friendsList: {
+        items: data.friends.map((friend) => ({
+          id: friend.id,
+          name: friend.name,
+          image: friend.picture,
+          subtitle: `${friend.visitedCount} Stempel • ${friend.completionPercent}%`,
+          onPress: () => router.push(`/profile/${encodeURIComponent(friend.id)}` as never),
+        })),
+        emptyText: 'Noch keine Freunde verbunden.',
+      },
       stampChips: [
         { key: 'visited', label: `Besucht: ${data.visitedCount}`, tone: 'success' },
         { key: 'missing', label: `Unbesucht: ${data.openCount}`, tone: 'rose' },

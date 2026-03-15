@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -122,6 +122,8 @@ export type ProfileViewModel = {
   onRefresh?: () => void;
   refreshing?: boolean;
 };
+
+const DEFAULT_VISIBLE_FRIENDS = 3;
 
 function formatVisitDate(value?: string) {
   if (!value) {
@@ -352,6 +354,25 @@ export function ProfileErrorState({
 
 export function ProfileView({ data }: { data: ProfileViewModel }) {
   const actionCard = data.actionCard;
+  const [showAllFriends, setShowAllFriends] = useState(false);
+
+  useEffect(() => {
+    setShowAllFriends(false);
+  }, [data.mode, data.name, data.friendsList?.items.length]);
+
+  const visibleFriends = useMemo(() => {
+    if (!data.friendsList) {
+      return [];
+    }
+
+    return showAllFriends
+      ? data.friendsList.items
+      : data.friendsList.items.slice(0, DEFAULT_VISIBLE_FRIENDS);
+  }, [data.friendsList, showAllFriends]);
+
+  const hiddenFriendCount = data.friendsList
+    ? Math.max(0, data.friendsList.items.length - DEFAULT_VISIBLE_FRIENDS)
+    : 0;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -507,15 +528,26 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         {data.friendsList ? (
           <ProfileSection title="Freunde">
             {data.friendsList.items.length > 0 ? (
-              <FriendsList
-                items={data.friendsList.items.map((friend) => ({
-                  id: friend.id,
-                  image: friend.image,
-                  name: friend.name,
-                  onPress: friend.onPress,
-                  subtitle: friend.subtitle,
-                }))}
-              />
+              <>
+                <FriendsList
+                  items={visibleFriends.map((friend) => ({
+                    id: friend.id,
+                    image: friend.image,
+                    name: friend.name,
+                    onPress: friend.onPress,
+                    subtitle: friend.subtitle,
+                  }))}
+                />
+                {hiddenFriendCount > 0 ? (
+                  <Pressable
+                    onPress={() => setShowAllFriends((current) => !current)}
+                    style={({ pressed }) => [styles.expandFriendsButton, pressed && styles.pressed]}>
+                    <Text style={styles.expandFriendsLabel}>
+                      {showAllFriends ? 'Weniger anzeigen' : `${hiddenFriendCount} weitere anzeigen`}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </>
             ) : (
               <Text style={styles.emptyText}>{data.friendsList.emptyText}</Text>
             )}
@@ -993,6 +1025,20 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
+  },
+  expandFriendsButton: {
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: '#f0e9dd',
+  },
+  expandFriendsLabel: {
+    color: '#2e6b4b',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   logoutButton: {
     backgroundColor: '#f0e9dd',
