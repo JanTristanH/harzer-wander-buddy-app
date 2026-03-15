@@ -1,13 +1,15 @@
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,8 +17,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Fonts } from '@/constants/theme';
 import {
   acceptPendingFriendshipRequest,
+  createFriendRequest,
   fetchFriendsOverview,
+  searchUsers,
   type FriendsOverviewData,
+  type SearchUserResult,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
@@ -40,7 +45,13 @@ function FriendFilterChip({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressed]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active && styles.filterChipActive,
+        pressed && styles.pressed,
+      ]}>
       <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>{label}</Text>
     </Pressable>
   );
@@ -51,6 +62,7 @@ function FriendRow({
   subtitle,
   index,
   actionLabel,
+  actionMuted,
   actionDisabled,
   onActionPress,
 }: {
@@ -58,12 +70,18 @@ function FriendRow({
   subtitle: string;
   index: number;
   actionLabel?: string;
+  actionMuted?: boolean;
   actionDisabled?: boolean;
   onActionPress?: () => void;
 }) {
   return (
     <Pressable style={({ pressed }) => [styles.friendCard, pressed && styles.pressed]}>
-      <View style={[styles.avatarPlaceholder, { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] }]} />
+      <View
+        style={[
+          styles.avatarPlaceholder,
+          { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+        ]}
+      />
       <View style={styles.friendBody}>
         <Text style={styles.friendName}>{name}</Text>
         <Text style={styles.friendMeta}>{subtitle}</Text>
@@ -74,10 +92,13 @@ function FriendRow({
           onPress={onActionPress}
           style={({ pressed }) => [
             styles.inlineActionButton,
+            actionMuted && styles.inlineActionButtonMuted,
             actionDisabled && styles.inlineActionButtonDisabled,
             pressed && styles.pressed,
           ]}>
-          <Text style={styles.inlineActionLabel}>{actionLabel}</Text>
+          <Text style={[styles.inlineActionLabel, actionMuted && styles.inlineActionLabelMuted]}>
+            {actionLabel}
+          </Text>
         </Pressable>
       ) : (
         <Feather color="#2E6B4B" name="chevron-right" size={18} />
@@ -101,6 +122,55 @@ function EmptyState({
   );
 }
 
+function SearchResultRow({
+  result,
+  index,
+  status,
+  disabled,
+  onPress,
+}: {
+  result: SearchUserResult;
+  index: number;
+  status: 'request' | 'sent' | 'friend' | 'self';
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const actionLabel =
+    status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : status === 'self' ? 'Du' : 'Anfrage';
+
+  return (
+    <View style={styles.searchResultRow}>
+      <View
+        style={[
+          styles.searchAvatar,
+          { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+        ]}
+      />
+      <View style={styles.friendBody}>
+        <Text style={styles.friendName}>{result.name}</Text>
+        <Text style={styles.friendMeta}>@{result.id}</Text>
+      </View>
+      <Pressable
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.searchActionButton,
+          status !== 'request' && styles.searchActionButtonMuted,
+          disabled && styles.inlineActionButtonDisabled,
+          pressed && styles.pressed,
+        ]}>
+        <Text
+          style={[
+            styles.searchActionLabel,
+            status !== 'request' && styles.searchActionLabelMuted,
+          ]}>
+          {actionLabel}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function FriendsScreen() {
   const { accessToken, logout } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FriendFilter>('friends');
@@ -108,6 +178,12 @@ export default function FriendsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [acceptingFriendshipId, setAcceptingFriendshipId] = useState<string | null>(null);
+  const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchUserResult[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
 
   const loadFriends = useCallback(async () => {
     if (!accessToken) {
@@ -138,8 +214,71 @@ export default function FriendsScreen() {
     }, [loadFriends])
   );
 
+  useEffect(() => {
+    if (!isSearchModalVisible) {
+      return;
+    }
+
+    const normalizedQuery = searchQuery.trim();
+    if (normalizedQuery.length < 2) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchLoading(false);
+      return;
+    }
+
+    if (!accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchLoading(true);
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const results = await searchUsers(accessToken, normalizedQuery);
+          if (cancelled) {
+            return;
+          }
+
+          setSearchResults(results);
+          setSearchError(null);
+        } catch (nextError) {
+          if (cancelled) {
+            return;
+          }
+
+          setSearchError(nextError instanceof Error ? nextError.message : 'Unknown error');
+          setSearchResults([]);
+        } finally {
+          if (!cancelled) {
+            setIsSearchLoading(false);
+          }
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [accessToken, isSearchModalVisible, searchQuery]);
+
   const requestsLabel = `Anfragen (${data?.incomingRequestCount ?? 0})`;
   const sentLabel = `Gesendet${data && data.outgoingRequestCount > 0 ? ` (${data.outgoingRequestCount})` : ''}`;
+
+  const sentRequestIds = useMemo(() => new Set((data?.outgoingRequests ?? []).map((item) => item.userId)), [data]);
+  const friendIds = useMemo(() => new Set((data?.friends ?? []).map((item) => item.id)), [data]);
+
+  const closeSearchModal = useCallback(() => {
+    setIsSearchModalVisible(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchError(null);
+    setIsSearchLoading(false);
+    setSubmittingUserId(null);
+  }, []);
 
   const handleAcceptRequest = useCallback(
     async (friendshipId: string) => {
@@ -167,6 +306,36 @@ export default function FriendsScreen() {
       }
     },
     [accessToken, loadFriends, logout]
+  );
+
+  const handleCreateRequest = useCallback(
+    async (userId: string) => {
+      if (!accessToken) {
+        return;
+      }
+
+      setSubmittingUserId(userId);
+
+      try {
+        await createFriendRequest(accessToken, userId);
+        const refreshed = await fetchFriendsOverview(accessToken);
+        setData(refreshed);
+        setSearchResults((current) => current.slice());
+      } catch (nextError) {
+        if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+          await logout();
+          return;
+        }
+
+        Alert.alert(
+          'Anfrage konnte nicht gesendet werden',
+          nextError instanceof Error ? nextError.message : 'Unknown error'
+        );
+      } finally {
+        setSubmittingUserId(null);
+      }
+    },
+    [accessToken, logout]
   );
 
   return (
@@ -256,6 +425,10 @@ export default function FriendsScreen() {
                     index={index}
                     name={request.name}
                     subtitle="Anfrage gesendet"
+                    actionLabel="Gesendet"
+                    actionMuted
+                    actionDisabled
+                    onActionPress={() => undefined}
                   />
                 ))}
               </View>
@@ -270,9 +443,102 @@ export default function FriendsScreen() {
 
         <Pressable
           accessibilityLabel="Freunde suchen"
+          onPress={() => setIsSearchModalVisible(true)}
           style={({ pressed }) => [styles.searchButton, pressed && styles.pressed]}>
           <Feather color="#F5F3EE" name="search" size={24} />
         </Pressable>
+
+        <Modal
+          animationType="fade"
+          transparent
+          visible={isSearchModalVisible}
+          onRequestClose={closeSearchModal}>
+          <View style={styles.modalOverlay}>
+            <Pressable style={styles.modalBackdrop} onPress={closeSearchModal} />
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Freunde finden</Text>
+                <Pressable
+                  accessibilityLabel="Suche schliessen"
+                  onPress={closeSearchModal}
+                  style={({ pressed }) => [styles.modalCloseButton, pressed && styles.pressed]}>
+                  <Feather color="#1E2A1E" name="x" size={16} />
+                </Pressable>
+              </View>
+
+              <View style={styles.searchInputShell}>
+                <View style={styles.searchInputIconWrap}>
+                  <Feather color="#6B7A6B" name="search" size={14} />
+                </View>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoFocus
+                  onChangeText={setSearchQuery}
+                  placeholder="Name oder Nutzername suchen"
+                  placeholderTextColor="#6B7A6B"
+                  style={styles.searchInput}
+                  value={searchQuery}
+                />
+              </View>
+
+              <View style={styles.searchResultsColumn}>
+                {isSearchLoading ? (
+                  <View style={styles.searchStatusWrap}>
+                    <ActivityIndicator color="#2E6B4B" size="small" />
+                  </View>
+                ) : null}
+
+                {!isSearchLoading && searchError ? (
+                  <Text style={styles.searchStatusText}>{searchError}</Text>
+                ) : null}
+
+                {!isSearchLoading && !searchError && searchQuery.trim().length < 2 ? (
+                  <Text style={styles.searchStatusText}>
+                    Gib mindestens zwei Zeichen ein, um nach Freunden zu suchen.
+                  </Text>
+                ) : null}
+
+                {!isSearchLoading &&
+                !searchError &&
+                searchQuery.trim().length >= 2 &&
+                searchResults.length === 0 ? (
+                  <Text style={styles.searchStatusText}>Keine passenden Nutzer gefunden.</Text>
+                ) : null}
+
+                {!isSearchLoading && !searchError && searchResults.length > 0
+                  ? searchResults.map((result, index) => {
+                      const status: 'request' | 'sent' | 'friend' | 'self' =
+                        result.id === data?.currentUserId
+                          ? 'self'
+                          : friendIds.has(result.id) || result.isFriend
+                            ? 'friend'
+                            : sentRequestIds.has(result.id)
+                              ? 'sent'
+                              : 'request';
+
+                      return (
+                        <SearchResultRow
+                          key={result.id}
+                          disabled={status !== 'request' || submittingUserId === result.id}
+                          index={index}
+                          onPress={() => void handleCreateRequest(result.id)}
+                          result={result}
+                          status={status === 'request' && submittingUserId === result.id ? 'sent' : status}
+                        />
+                      );
+                    })
+                  : null}
+              </View>
+
+              <View style={styles.modalHint}>
+                <Text style={styles.modalHintText}>
+                  Du kannst Freundschaftsanfragen spaeter in „Freunde“ verwalten.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -376,19 +642,24 @@ const styles = StyleSheet.create({
   },
   inlineActionButton: {
     backgroundColor: '#2E6B4B',
-    borderRadius: 999,
-    paddingHorizontal: 12,
+    borderRadius: 12,
+    paddingHorizontal: 10,
     paddingVertical: 8,
   },
+  inlineActionButtonMuted: {
+    backgroundColor: '#E9E2D6',
+  },
   inlineActionButtonDisabled: {
-    opacity: 0.65,
+    opacity: 0.7,
   },
   inlineActionLabel: {
     color: '#F5F3EE',
     fontFamily: Fonts.sans,
     fontSize: 12,
-    fontWeight: '700',
     lineHeight: 16,
+  },
+  inlineActionLabelMuted: {
+    color: '#2E3A2E',
   },
   emptyCard: {
     backgroundColor: '#FFFFFF',
@@ -429,6 +700,128 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 20,
     width: 52,
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-start',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(46,58,46,0.35)',
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    marginHorizontal: 20,
+    marginTop: 120,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
+    elevation: 10,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    color: '#1E2A1E',
+    fontFamily: Fonts.serif,
+    fontSize: 20,
+    lineHeight: 24,
+  },
+  modalCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F0E9DD',
+    borderRadius: 8,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  searchInputShell: {
+    alignItems: 'center',
+    backgroundColor: '#F6F2EA',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  searchInputIconWrap: {
+    alignItems: 'center',
+    height: 14,
+    justifyContent: 'center',
+    width: 14,
+  },
+  searchInput: {
+    color: '#1E2A1E',
+    flex: 1,
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+    padding: 0,
+  },
+  searchResultsColumn: {
+    gap: 10,
+    minHeight: 120,
+  },
+  searchResultRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchAvatar: {
+    borderRadius: 12,
+    height: 40,
+    width: 40,
+  },
+  searchActionButton: {
+    backgroundColor: '#2E6B4B',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  searchActionButtonMuted: {
+    backgroundColor: '#E9E2D6',
+  },
+  searchActionLabel: {
+    color: '#F5F3EE',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  searchActionLabelMuted: {
+    color: '#2E3A2E',
+  },
+  searchStatusWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+  },
+  searchStatusText: {
+    color: '#6B7A6B',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+    paddingVertical: 8,
+  },
+  modalHint: {
+    backgroundColor: '#F8F6F1',
+    borderRadius: 14,
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  modalHintText: {
+    color: '#6B7A6B',
+    fontFamily: Fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
   },
   pressed: {
     opacity: 0.88,

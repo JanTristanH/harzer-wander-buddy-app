@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { StampListItem } from '@/components/stamp-list-item';
 import { fetchProfileOverview, type ProfileOverviewData } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
@@ -36,18 +37,6 @@ function formatVisitDate(value?: string) {
   const hh = String(date.getHours()).padStart(2, '0');
   const min = String(date.getMinutes()).padStart(2, '0');
   return `${dd}.${mm}.${yyyy} • ${hh}:${min}`;
-}
-
-function mainListCardGradient(index: number, visited: boolean) {
-  if (visited) {
-    return index % 2 === 0
-      ? (['#458962', '#8fd2a4'] as const)
-      : (['#4a8464', '#c2dfae'] as const);
-  }
-
-  return index % 2 === 0
-    ? (['#b6beac', '#e1d2bd'] as const)
-    : (['#a6b39c', '#d7cfbb'] as const);
 }
 
 function ProfileSection({
@@ -143,7 +132,12 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        contentInset={{ bottom: 160 }}
+        scrollIndicatorInsets={{ bottom: 160 }}
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollView}>
         <View style={styles.headerRow}>
           <View style={styles.avatarPlaceholder} />
           <View style={styles.headerBody}>
@@ -169,18 +163,6 @@ export default function ProfileScreen() {
           <View style={styles.statBlock}>
             <Text style={styles.statLabel}>Freunde</Text>
             <Text style={styles.statValue}>{data.friendCount}</Text>
-          </View>
-        </View>
-
-        <View style={styles.group}>
-          <Text style={styles.groupTitle}>Erfolge & Meilensteine</Text>
-          <View style={styles.achievementRow}>
-            {data.achievements.map((achievement) => (
-              <View key={achievement.id} style={styles.achievementCard}>
-                <Text style={styles.achievementLabel}>{achievement.label}</Text>
-                <Text style={styles.achievementValue}>{achievement.value}</Text>
-              </View>
-            ))}
           </View>
         </View>
 
@@ -265,7 +247,7 @@ export default function ProfileScreen() {
                   styles.countChipLabel,
                   activeStampFilter === 'missing' && styles.countChipLabelActive,
                 ]}>
-                Fehlend: {data.openCount}
+                Unbesucht: {data.openCount}
               </Text>
             </Pressable>
             <Pressable
@@ -289,46 +271,12 @@ export default function ProfileScreen() {
 
           {filteredStamps.length > 0 ? (
             filteredStamps.map((stamp, index) => (
-              <Pressable
+              <StampListItem
                 key={stamp.ID}
+                index={index}
+                item={stamp}
                 onPress={() => router.push(`/stamps/${stamp.ID}` as never)}
-                style={({ pressed }) => [styles.stampCard, pressed && styles.pressed]}>
-                <LinearGradient
-                  colors={mainListCardGradient(index, !!stamp.hasVisited)}
-                  style={styles.stampCardArtwork}
-                />
-                <View style={styles.rowBody}>
-                  <Text style={styles.rowTitle}>
-                    {stamp.number || '--'} {'\u2022'} {stamp.name}
-                  </Text>
-                  <Text numberOfLines={2} style={styles.rowSubtitle}>
-                    {stamp.description?.trim() || 'Keine Beschreibung verfuegbar.'}
-                  </Text>
-                  <View style={styles.stampMetaRow}>
-                    <View
-                      style={[
-                        styles.statePill,
-                        stamp.hasVisited ? styles.statePillVisited : styles.statePillOpen,
-                      ]}>
-                      <Feather
-                        color={stamp.hasVisited ? '#2e6b4b' : '#7a6a4a'}
-                        name={stamp.hasVisited ? 'check' : 'x'}
-                        size={11}
-                      />
-                      <Text
-                        style={[
-                          styles.statePillLabel,
-                          stamp.hasVisited
-                            ? styles.statePillLabelVisited
-                            : styles.statePillLabelOpen,
-                        ]}>
-                        {stamp.hasVisited ? 'Besucht' : 'Unbesucht'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-                <Feather color="#8b957f" name="chevron-right" size={18} />
-              </Pressable>
+              />
             ))
           ) : (
             <Text style={styles.emptyText}>Keine Stempelstellen fuer diesen Filter verfuegbar.</Text>
@@ -351,8 +299,11 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 20,
     paddingTop: 22,
-    paddingBottom: 28,
+    paddingBottom: 220,
     gap: 12,
+  },
+  scrollView: {
+    flex: 1,
   },
   centered: {
     flex: 1,
@@ -453,42 +404,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: '700',
   },
-  group: {
-    gap: 8,
-  },
-  groupTitle: {
-    color: '#1e2a1e',
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: '600',
-  },
-  achievementRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  achievementCard: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 2,
-  },
-  achievementLabel: {
-    color: '#6b7a6b',
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  achievementValue: {
-    color: '#1e2a1e',
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '600',
-  },
   section: {
     backgroundColor: '#ffffff',
     borderRadius: 18,
@@ -541,54 +456,6 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
-  },
-  stampCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 2,
-  },
-  stampCardArtwork: {
-    width: 64,
-    height: 64,
-    borderRadius: 14,
-  },
-  stampMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  statePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  statePillVisited: {
-    backgroundColor: '#e2eee6',
-  },
-  statePillOpen: {
-    backgroundColor: '#f0e9dd',
-  },
-  statePillLabel: {
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  statePillLabelVisited: {
-    color: '#2e6b4b',
-  },
-  statePillLabelOpen: {
-    color: '#7a6a4a',
   },
   chipRow: {
     flexDirection: 'row',

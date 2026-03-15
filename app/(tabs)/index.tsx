@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { StampListItem } from '@/components/stamp-list-item';
 import { fetchStampboxes, type Stampbox } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
@@ -59,65 +60,6 @@ function formatDistance(distanceKm: number | null) {
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
-}
-
-function cardGradient(index: number, visited: boolean) {
-  if (visited) {
-    return index % 2 === 0
-      ? (['#458962', '#8fd2a4'] as const)
-      : (['#4a8464', '#c2dfae'] as const);
-  }
-
-  return index % 2 === 0
-    ? (['#b6beac', '#e1d2bd'] as const)
-    : (['#a6b39c', '#d7cfbb'] as const);
-}
-
-function StampCard({
-  item,
-  index,
-  distanceKm,
-  onPress,
-}: {
-  item: Stampbox;
-  index: number;
-  distanceKm: number | null;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
-      <LinearGradient colors={cardGradient(index, !!item.hasVisited)} style={styles.cardArtwork} />
-
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>
-          {item.number || '--'} {'\u2022'} {item.name}
-        </Text>
-        <Text numberOfLines={2} style={styles.cardDescription}>
-          {item.description?.trim() || 'Keine Beschreibung verfügbar.'}
-        </Text>
-
-        <View style={styles.cardMetaRow}>
-          <View style={[styles.statePill, item.hasVisited ? styles.statePillVisited : styles.statePillOpen]}>
-            <Feather
-              color={item.hasVisited ? '#2e6b4b' : '#7a6a4a'}
-              name={item.hasVisited ? 'check' : 'x'}
-              size={11}
-            />
-            <Text
-              style={[
-                styles.statePillLabel,
-                item.hasVisited ? styles.statePillLabelVisited : styles.statePillLabelOpen,
-              ]}>
-              {item.hasVisited ? 'Besucht' : 'Unbesucht'}
-            </Text>
-          </View>
-          <Text style={styles.distanceLabel}>{formatDistance(distanceKm)}</Text>
-        </View>
-      </View>
-
-      <Feather color="#8b957f" name="chevron-right" size={18} style={styles.cardChevron} />
-    </Pressable>
-  );
 }
 
 export default function StampsScreen() {
@@ -353,14 +295,15 @@ export default function StampsScreen() {
         }
         ListHeaderComponent={header}
         renderItem={({ item, index }) => (
-          <StampCard
-            distanceKm={item.distanceKm}
+          <StampListItem
             index={index}
             item={item.stamp}
+            metaLabel={formatDistance(item.distanceKm)}
             onPress={() => router.push(`/stamps/${item.stamp.ID}` as never)}
           />
         )}
         contentContainerStyle={styles.listContent}
+        contentInset={{ bottom: 160 }}
         refreshControl={
           <RefreshControl
             onRefresh={() => loadStamps(true)}
@@ -368,7 +311,9 @@ export default function StampsScreen() {
             tintColor="#2e6b4b"
           />
         }
+        scrollIndicatorInsets={{ bottom: 160 }}
         showsVerticalScrollIndicator={false}
+        style={styles.list}
       />
     </SafeAreaView>
   );
@@ -379,10 +324,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f3ee',
   },
+  list: {
+    flex: 1,
+  },
   listContent: {
     paddingHorizontal: 20,
     paddingTop: 20,
-    paddingBottom: 28,
+    paddingBottom: 220,
     gap: 12,
   },
   headerContent: {
@@ -517,81 +465,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     paddingHorizontal: 4,
-  },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 12,
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'flex-start',
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 3,
-  },
-  cardPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.995 }],
-  },
-  cardArtwork: {
-    width: 64,
-    height: 64,
-    borderRadius: 14,
-  },
-  cardBody: {
-    flex: 1,
-    gap: 4,
-  },
-  cardTitle: {
-    color: '#243024',
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  cardDescription: {
-    color: '#6b7a6b',
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  cardMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 2,
-  },
-  statePill: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  statePillVisited: {
-    backgroundColor: '#e2eee6',
-  },
-  statePillOpen: {
-    backgroundColor: '#f0e9dd',
-  },
-  statePillLabel: {
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  statePillLabelVisited: {
-    color: '#2e6b4b',
-  },
-  statePillLabelOpen: {
-    color: '#7a6a4a',
-  },
-  distanceLabel: {
-    color: '#6b7a6b',
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  cardChevron: {
-    alignSelf: 'center',
   },
   centered: {
     flex: 1,

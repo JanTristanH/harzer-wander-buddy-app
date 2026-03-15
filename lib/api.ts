@@ -11,8 +11,8 @@ export type Stampbox = {
   longitude?: number;
   hasVisited?: boolean;
   totalGroupStampings?: number;
-  stampedUsers?: string;
-  stampedUserIds?: string;
+  stampedUsers?: string | string[];
+  stampedUserIds?: string | string[];
 };
 
 type ODataCollection<T> = {
@@ -105,6 +105,7 @@ export type ProfileOverviewData = {
 };
 
 export type FriendsOverviewData = {
+  currentUserId: string;
   friendCount: number;
   incomingRequestCount: number;
   outgoingRequestCount: number;
@@ -129,6 +130,13 @@ export type FriendsOverviewData = {
     name: string;
     picture?: string;
   }>;
+};
+
+export type SearchUserResult = {
+  id: string;
+  name: string;
+  picture?: string;
+  isFriend: boolean;
 };
 
 export type StampDetailData = {
@@ -172,6 +180,10 @@ function buildQuery(query?: [string, string | number | boolean | undefined][]) {
 
 function buildUrl(path: string, query?: [string, string | number | boolean | undefined][]) {
   return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v4/api/${path}${buildQuery(query)}`;
+}
+
+function escapeODataString(value: string) {
+  return value.replace(/'/g, "''");
 }
 
 async function fetchOData<T>(accessToken: string, url: string) {
@@ -299,15 +311,14 @@ function getVisitTimestamp(stamping: Stamping) {
   return stamping.visitedAt || stamping.createdAt;
 }
 
-function tokenizeFriendField(value?: string) {
+function tokenizeFriendField(value?: string | string[] | number | null) {
   if (!value) {
     return [];
   }
 
-  return value
-    .split(/[;,|]/)
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
+  const parts = Array.isArray(value) ? value : String(value).split(/[;,|]/);
+
+  return parts.map((part) => String(part).trim().toLowerCase()).filter(Boolean);
 }
 
 function stampContainsFriend(stamp: Stampbox, friend: MyFriend) {
@@ -585,6 +596,7 @@ export async function fetchFriendsOverview(accessToken: string) {
     .sort((left, right) => left.name.localeCompare(right.name));
 
   return {
+    currentUserId,
     friendCount: mappedFriends.length,
     incomingRequestCount: incomingRequests.length,
     outgoingRequestCount: outgoingRequests.length,
@@ -599,6 +611,67 @@ export async function acceptPendingFriendshipRequest(accessToken: string, friend
     method: 'POST',
     body: JSON.stringify({
       FriendshipID: friendshipId,
+    }),
+  });
+}
+
+export async function searchUsers(accessToken: string, rawQuery: string) {
+  const query = rawQuery.trim();
+  if (!query) {
+    return [] as SearchUserResult[];
+  }
+
+  const escapedQuery = escapeODataString(query);
+  const filters = [
+    `contains(name,'${escapedQuery}') or contains(ID,'${escapedQuery}')`,
+    `startswith(name,'${escapedQuery}') or startswith(ID,'${escapedQuery}')`,
+  ];
+
+  for (const filter of filters) {
+    try {
+      const users = await fetchCollection<User>(accessToken, 'Users', [
+        ['$select', 'ID,name,picture,isFriend'],
+        ['$filter', filter],
+        ['$top', 12],
+      ]);
+
+      return users.map((user) => ({
+        id: user.ID,
+        name: user.name || user.ID,
+        picture: user.picture,
+        isFriend: !!user.isFriend,
+      }));
+    } catch {
+      continue;
+    }
+  }
+
+  const users = await fetchCollection<User>(accessToken, 'Users', [
+    ['$select', 'ID,name,picture,isFriend'],
+    ['$top', 50],
+  ]);
+
+  const normalizedQuery = query.toLowerCase();
+  return users
+    .filter((user) => {
+      const name = (user.name || '').toLowerCase();
+      const id = user.ID.toLowerCase();
+      return name.includes(normalizedQuery) || id.includes(normalizedQuery);
+    })
+    .slice(0, 12)
+    .map((user) => ({
+      id: user.ID,
+      name: user.name || user.ID,
+      picture: user.picture,
+      isFriend: !!user.isFriend,
+    }));
+}
+
+export async function createFriendRequest(accessToken: string, userId: string) {
+  return mutateOData<string>(accessToken, buildUrl('Friendships'), {
+    method: 'POST',
+    body: JSON.stringify({
+      toUser_ID: userId,
     }),
   });
 }
