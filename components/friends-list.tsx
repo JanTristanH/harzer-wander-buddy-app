@@ -4,6 +4,8 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Fonts } from '@/constants/theme';
+import { useAuth } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 
 const AVATAR_COLORS = ['#DDE9DF', '#EADFCB', '#D7E2EC', '#E6D9E9'];
 
@@ -30,6 +32,7 @@ export function FriendAvatar({
   size?: number;
   radius?: number;
 }) {
+  const { accessToken } = useAuth();
   const avatarStyle = {
     borderRadius: radius,
     height: size,
@@ -37,7 +40,13 @@ export function FriendAvatar({
   } as const;
 
   if (image) {
-    return <Image contentFit="cover" source={{ uri: image }} style={[avatarStyle, styles.avatarImage]} />;
+    return (
+      <Image
+        contentFit="cover"
+        source={buildAuthenticatedImageSource(image, accessToken)}
+        style={[avatarStyle, styles.avatarImage]}
+      />
+    );
   }
 
   return (

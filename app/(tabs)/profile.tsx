@@ -11,13 +11,12 @@ import {
 import { fetchProfileOverview, type ProfileOverviewData } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 
-type ProfileClaims = {
-  given_name?: string;
-  name?: string;
-  nickname?: string;
-};
-
 type StampFilter = 'visited' | 'missing' | 'all';
+type ProfileClaims = {
+  sub?: string;
+  name?: string;
+  picture?: string;
+};
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -62,10 +61,11 @@ export default function ProfileScreen() {
       return null;
     }
 
-    const displayName = claims?.name || claims?.nickname || claims?.given_name || 'Wanderbuddy';
     const collectorSinceText = data.collectorSinceYear
       ? `Stempel-Sammler seit ${data.collectorSinceYear}`
       : 'Stempel-Sammler';
+    const profileName = data.name || claims?.name || claims?.sub || 'Profil';
+    const profilePicture = data.picture || claims?.picture;
 
     const filteredStamps = data.stamps.filter((stamp) => {
       if (activeStampFilter === 'visited') {
@@ -81,7 +81,7 @@ export default function ProfileScreen() {
 
     return {
       mode: 'self',
-      name: displayName,
+      name: profileName,
       subtitle: collectorSinceText,
       headerAction: {
         type: 'edit',
@@ -89,6 +89,7 @@ export default function ProfileScreen() {
         onPress: () => router.push('/profile/edit' as never),
       },
       avatarColor: '#dde9df',
+      avatarImage: profilePicture,
       stats: [
         { label: 'Besucht', value: String(data.visitedCount) },
         { label: 'Abschluss', value: `${data.completionPercent}%` },
@@ -135,7 +136,7 @@ export default function ProfileScreen() {
         },
       ],
     };
-  }, [activeStampFilter, claims?.given_name, claims?.name, claims?.nickname, data, logout, resetApp, router]);
+  }, [activeStampFilter, claims?.name, claims?.picture, claims?.sub, data, logout, resetApp, router]);
 
   if (isLoading) {
     return <ProfileLoadingState label="Profil wird geladen..." />;

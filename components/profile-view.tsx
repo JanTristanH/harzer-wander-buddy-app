@@ -1,5 +1,4 @@
 import { Feather } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import {
@@ -14,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FriendsList } from '@/components/friends-list';
+import { FriendAvatar, FriendsList } from '@/components/friends-list';
 import type { Stampbox } from '@/lib/api';
 
 type HeaderAction =
@@ -143,6 +142,15 @@ function avatarColor(index = 0) {
   return colors[index % colors.length];
 }
 
+function getTrimmedText(value: unknown, fallback: string) {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const trimmedValue = value.trim();
+  return trimmedValue || fallback;
+}
+
 function artworkGradient(index: number, visited: boolean) {
   if (visited) {
     return index % 2 === 0
@@ -164,13 +172,25 @@ function HeaderAvatar({
   color: string;
   compact: boolean;
 }) {
-  const style = compact ? styles.avatarCompact : styles.avatarPlaceholder;
-
   if (image) {
-    return <Image contentFit="cover" source={{ uri: image }} style={[style, styles.avatarImage]} />;
+    return (
+      <FriendAvatar
+        image={image}
+        index={0}
+        radius={compact ? 20 : 28}
+        size={compact ? 60 : 88}
+      />
+    );
   }
 
-  return <View style={[style, { backgroundColor: color }]} />;
+  return (
+    <View
+      style={[
+        compact ? styles.avatarCompact : styles.avatarPlaceholder,
+        { backgroundColor: color },
+      ]}
+    />
+  );
 }
 
 function chipToneStyle(tone?: StampChip['tone']) {
@@ -255,7 +275,7 @@ function StampComparisonRow({
           {item.stamp.number || '--'} {'\u2022'} {item.stamp.name}
         </Text>
         <Text numberOfLines={2} style={styles.rowSubtitle}>
-          {item.stamp.description?.trim() || 'Keine Beschreibung verfuegbar.'}
+          {getTrimmedText(item.stamp.description, 'Keine Beschreibung verfuegbar.')}
         </Text>
       </View>
       <View style={styles.stampCompareStatus}>
@@ -294,7 +314,7 @@ function SimpleStampRow({
           {item.stamp.number || '--'} {'\u2022'} {item.stamp.name}
         </Text>
         <Text numberOfLines={2} style={styles.rowSubtitle}>
-          {item.stamp.description?.trim() || 'Keine Beschreibung verfuegbar.'}
+          {getTrimmedText(item.stamp.description, 'Keine Beschreibung verfuegbar.')}
         </Text>
       </View>
       <Feather color="#2e6b4b" name="chevron-right" size={18} />

@@ -93,6 +93,8 @@ type FriendshipRecord = {
 };
 
 export type ProfileOverviewData = {
+  name: string;
+  picture?: string;
   visitedCount: number;
   totalCount: number;
   openCount: number;
@@ -277,6 +279,10 @@ function buildUrl(path: string, query?: [string, string | number | boolean | und
   return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v4/api/${path}${buildQuery(query)}`;
 }
 
+function buildV2Url(path: string) {
+  return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v2/api/${path}`;
+}
+
 function buildStringKeyPath(entitySet: string, id: string) {
   return `${entitySet}('${escapeODataString(id)}')`;
 }
@@ -395,6 +401,13 @@ async function fetchStringEntityById<T>(
   throw new Error(`${entitySet} ${value} not found`);
 }
 
+async function fetchCurrentUserRecord(accessToken: string) {
+  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
+  return fetchStringEntityById<User>(accessToken, 'Users', 'ID', currentUser.ID, [
+    ['$select', 'ID,name,picture,isFriend'],
+  ]);
+}
+
 async function fetchUserFriends(accessToken: string, userId: string) {
   const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', [
     ['$select', 'ID,toUser_ID'],
@@ -467,6 +480,14 @@ function getVisitTimestamp(stamping: Stamping) {
   return stamping.visitedAt || stamping.createdAt;
 }
 
+function safeTrim(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function safeNormalizedText(value: unknown) {
+  return safeTrim(value).toLowerCase();
+}
+
 function tokenizeFriendField(value?: string | string[] | number | null) {
   if (!value) {
     return [];
@@ -474,12 +495,12 @@ function tokenizeFriendField(value?: string | string[] | number | null) {
 
   const parts = Array.isArray(value) ? value : String(value).split(/[;,|]/);
 
-  return parts.map((part) => String(part).trim().toLowerCase()).filter(Boolean);
+  return parts.map((part) => safeNormalizedText(part)).filter(Boolean);
 }
 
 function stampContainsFriend(stamp: Stampbox, friend: MyFriend) {
-  const friendId = friend.ID.trim().toLowerCase();
-  const friendName = (friend.name || '').trim().toLowerCase();
+  const friendId = safeNormalizedText(friend.ID);
+  const friendName = safeNormalizedText(friend.name);
   const stampedUserIds = tokenizeFriendField(stamp.stampedUserIds);
   const stampedUsers = tokenizeFriendField(stamp.stampedUsers);
 
@@ -495,15 +516,21 @@ function stampContainsFriend(stamp: Stampbox, friend: MyFriend) {
 }
 
 function stampContainsUserId(stamp: Stampbox, userId: string) {
-  return tokenizeFriendField(stamp.stampedUserIds).includes(userId.trim().toLowerCase());
-}
-
-function stampContainsUserName(stamp: Stampbox, name?: string) {
-  if (!name) {
+  const normalizedUserId = safeNormalizedText(userId);
+  if (!normalizedUserId) {
     return false;
   }
 
-  return tokenizeFriendField(stamp.stampedUsers).includes(name.trim().toLowerCase());
+  return tokenizeFriendField(stamp.stampedUserIds).includes(normalizedUserId);
+}
+
+function stampContainsUserName(stamp: Stampbox, name?: string) {
+  const normalizedName = safeNormalizedText(name);
+  if (!normalizedName) {
+    return false;
+  }
+
+  return tokenizeFriendField(stamp.stampedUsers).includes(normalizedName);
 }
 
 function stampContainsUser(stamp: Stampbox, user: { ID: string; name?: string }) {
@@ -610,7 +637,7 @@ export async function fetchLatestVisitedStamp(accessToken: string, currentUserId
 }
 
 export async function fetchCurrentUserProfile(accessToken: string) {
-  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
+  const currentUser = await fetchCurrentUserRecord(accessToken);
 
   return {
     id: currentUser.ID,
@@ -735,7 +762,8 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
 }
 
 export async function fetchProfileOverview(accessToken: string, currentUserId?: string) {
-  const [stamps, stampings, friends] = await Promise.all([
+  const [currentUser, stamps, stampings, friends] = await Promise.all([
+    fetchCurrentUserRecord(accessToken),
     fetchStampboxes(accessToken),
     fetchCollection<Stamping>(accessToken, 'Stampings', [
       ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
@@ -792,6 +820,8 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
       }
     : null;
   return {
+    name: currentUser.name || currentUser.ID,
+    picture: currentUser.picture,
     visitedCount,
     totalCount,
     openCount,
@@ -1105,7 +1135,7 @@ export async function updateCurrentUserProfile(
     picture?: string;
   }
 ) {
-  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
+  const currentUser = await fetchCurrentUserRecord(accessToken);
 
   return mutateOData<User>(accessToken, buildUrl(buildStringKeyPath('Users', currentUser.ID)), {
     method: 'PATCH',
@@ -1131,7 +1161,7 @@ export async function uploadAttachment(
 
   const fileResponse = await fetch(file.uri);
   const fileBlob = await fileResponse.blob();
-  const contentUrl = buildUrl(`Attachments(${attachment.ID})/content`);
+  const contentUrl = buildV2Url(`Attachments/${attachment.ID}/content`);
   const uploadResponse = await fetch(contentUrl, {
     method: 'PUT',
     headers: {
@@ -1153,16 +1183,9 @@ export async function uploadAttachment(
     throw new Error(errorBody || `Request failed with status ${uploadResponse.status}`);
   }
 
-  const uploadedAttachment = await fetchEntityById<Attachment>(
-    accessToken,
-    'Attachments',
-    attachment.ID,
-    [['$select', 'ID,url,filename,mimeType']]
-  );
-
   return {
-    id: uploadedAttachment.ID,
-    url: uploadedAttachment.url || contentUrl,
+    id: attachment.ID,
+    url: contentUrl,
   };
 }
 

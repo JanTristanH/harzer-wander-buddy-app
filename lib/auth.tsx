@@ -52,13 +52,22 @@ function getIssuer() {
   return `https://${domain}`;
 }
 
-function getRedirectUri(path: string) {
+function normalizePath(path?: string | null) {
+  if (typeof path !== 'string') {
+    return 'auth/logout';
+  }
+
+  const normalizedPath = path.trim();
+  return normalizedPath.length > 0 ? normalizedPath : 'auth/logout';
+}
+
+function getRedirectUri(path?: string | null) {
   const configScheme = Constants.expoConfig?.scheme;
   const scheme = Array.isArray(configScheme) ? configScheme[0] : configScheme;
 
   return AuthSession.makeRedirectUri({
     scheme: scheme ?? 'harzerwanderbuddyapp',
-    path,
+    path: normalizePath(path),
   });
 }
 
@@ -207,7 +216,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [configError]);
+  }, [configError, resolveDiscovery]);
 
   const authenticate = useCallback(async (mode: 'login' | 'signup') => {
     if (configError) {
@@ -286,16 +295,13 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   }, [authenticate]);
 
   const logout = useCallback(async () => {
-    const returnTo = getRedirectUri(appConfig.auth0LogoutReturnPath);
+    setAuthError(null);
+    await clearTokenResponse();
+    setAuthState(null);
 
     try {
-      if (!configError) {
-        const discovery = await resolveDiscovery();
-        if (!discovery) {
-          setAuthError('Could not load Auth0 discovery.');
-          return;
-        }
-
+      if (!configError && appConfig.auth0ClientId && appConfig.auth0Domain) {
+        const returnTo = getRedirectUri(appConfig.auth0LogoutReturnPath);
         const logoutUrl =
           `${getIssuer()}/v2/logout?client_id=${encodeURIComponent(appConfig.auth0ClientId)}` +
           `&returnTo=${encodeURIComponent(returnTo)}`;
@@ -303,11 +309,8 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       }
     } catch (error) {
       console.error('Auth0 logout failed', error);
-    } finally {
-      await clearTokenResponse();
-      setAuthState(null);
     }
-  }, [configError, resolveDiscovery]);
+  }, [configError]);
 
   const resetApp = useCallback(async () => {
     await saveOnboardingState(false);

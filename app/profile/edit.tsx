@@ -23,7 +23,8 @@ import {
   uploadAttachment,
   type CurrentUserProfileData,
 } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 
 type SelectedImage = {
   uri: string;
@@ -31,9 +32,16 @@ type SelectedImage = {
   mimeType: string;
 };
 
+type ProfileClaims = {
+  sub?: string;
+  name?: string;
+  picture?: string;
+};
+
 function ProfileEditContent() {
   const router = useRouter();
   const { accessToken, logout } = useAuth();
+  const claims = useIdTokenClaims<ProfileClaims>();
   const [profile, setProfile] = useState<CurrentUserProfileData | null>(null);
   const [name, setName] = useState('');
   const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
@@ -50,8 +58,13 @@ function ProfileEditContent() {
 
     try {
       const nextProfile = await fetchCurrentUserProfile(accessToken);
-      setProfile(nextProfile);
-      setName(nextProfile.name);
+      const resolvedProfile = {
+        ...nextProfile,
+        name: nextProfile.name || claims?.name || claims?.sub || nextProfile.id,
+        picture: nextProfile.picture || claims?.picture,
+      };
+      setProfile(resolvedProfile);
+      setName(resolvedProfile.name);
       setSelectedImage(null);
       setError(null);
     } catch (nextError) {
@@ -64,13 +77,13 @@ function ProfileEditContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, logout]);
+  }, [accessToken, claims?.name, claims?.picture, claims?.sub, logout]);
 
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
 
-  const previewImage = selectedImage?.uri || profile?.picture;
+  const previewImage = selectedImage?.uri || profile?.picture || claims?.picture;
   const trimmedName = name.trim();
   const hasChanges =
     !!profile &&
@@ -214,7 +227,11 @@ function ProfileEditContent() {
 
           <View style={styles.avatarSection}>
             {previewImage ? (
-              <Image contentFit="cover" source={{ uri: previewImage }} style={styles.avatarPreview} />
+              <Image
+                contentFit="cover"
+                source={buildAuthenticatedImageSource(previewImage, accessToken)}
+                style={styles.avatarPreview}
+              />
             ) : (
               <View style={styles.avatarFallback}>
                 <Feather color="#5F6E5F" name="user" size={28} />
