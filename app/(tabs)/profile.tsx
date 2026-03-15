@@ -94,7 +94,6 @@ export default function ProfileScreen() {
         { label: 'Abschluss', value: `${data.completionPercent}%` },
         { label: 'Freunde', value: String(data.friendCount) },
       ],
-      achievements: data.achievements,
       latestVisits: data.latestVisits,
       latestVisitsEmptyText: 'Noch keine Besuche vorhanden.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),

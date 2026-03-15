@@ -17,9 +17,9 @@ export default function TabLayout() {
           tabBarStyle: {
             backgroundColor: '#ffffff',
             borderTopWidth: 0,
-            height: 80,
-            paddingTop: 8,
-            paddingBottom: 12,
+            height: 72,
+            paddingTop: 6,
+            paddingBottom: 6,
             marginHorizontal: 20,
             marginBottom: 20,
             borderRadius: 24,
@@ -41,6 +41,15 @@ export default function TabLayout() {
             title: 'Liste',
             tabBarIcon: ({ color, focused }) => (
               <FloatingBarIcon color={color} focused={focused} name="index" size={28} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="map"
+          options={{
+            title: 'Karte',
+            tabBarIcon: ({ color, focused }) => (
+              <FloatingBarIcon color={color} focused={focused} name="map" size={28} />
             ),
           }}
         />

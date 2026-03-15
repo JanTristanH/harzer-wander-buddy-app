@@ -1,6 +1,5 @@
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -17,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { FriendsList, FriendAvatar } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
 import {
   acceptPendingFriendshipRequest,
@@ -35,32 +35,6 @@ const FILTER_LABELS: Record<FriendFilter, string> = {
   requests: 'Anfragen',
   sent: 'Gesendet',
 };
-
-const AVATAR_COLORS = ['#DDE9DF', '#EADFCB', '#D7E2EC', '#E6D9E9'];
-
-function Avatar({
-  image,
-  index,
-  style,
-}: {
-  image?: string;
-  index: number;
-  style: { height: number; width: number; borderRadius: number };
-}) {
-  if (image) {
-    return <Image contentFit="cover" source={{ uri: image }} style={[style, styles.avatarImage]} />;
-  }
-
-  return (
-    <View
-      style={[
-        style,
-        styles.avatarPlaceholder,
-        { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
-      ]}
-    />
-  );
-}
 
 function FriendFilterChip({
   active,
@@ -81,59 +55,6 @@ function FriendFilterChip({
       ]}>
       <Text style={[styles.filterChipLabel, active && styles.filterChipLabelActive]}>{label}</Text>
     </Pressable>
-  );
-}
-
-function FriendRow({
-  name,
-  subtitle,
-  index,
-  image,
-  actionLabel,
-  actionMuted,
-  actionDisabled,
-  onPress,
-  onActionPress,
-}: {
-  name: string;
-  subtitle: string;
-  index: number;
-  image?: string;
-  actionLabel?: string;
-  actionMuted?: boolean;
-  actionDisabled?: boolean;
-  onPress?: () => void;
-  onActionPress?: () => void;
-}) {
-  return (
-    <View style={styles.friendCard}>
-      <Pressable
-        onPress={onPress}
-        style={({ pressed }) => [styles.friendRowPressable, pressed && styles.pressed]}>
-        <Avatar image={image} index={index} style={styles.avatarPlaceholder} />
-        <View style={styles.friendBody}>
-          <Text style={styles.friendName}>{name}</Text>
-          <Text style={styles.friendMeta}>{subtitle}</Text>
-        </View>
-      </Pressable>
-      {actionLabel && onActionPress ? (
-        <Pressable
-          disabled={actionDisabled}
-          onPress={onActionPress}
-          style={({ pressed }) => [
-            styles.inlineActionButton,
-            actionMuted && styles.inlineActionButtonMuted,
-            actionDisabled && styles.inlineActionButtonDisabled,
-            pressed && styles.pressed,
-          ]}>
-          <Text style={[styles.inlineActionLabel, actionMuted && styles.inlineActionLabelMuted]}>
-            {actionLabel}
-          </Text>
-        </Pressable>
-      ) : (
-        <Feather color="#2E6B4B" name="chevron-right" size={18} />
-      )}
-    </View>
   );
 }
 
@@ -175,7 +96,7 @@ function SearchResultRow({
       <Pressable
         onPress={onRowPress}
         style={({ pressed }) => [styles.searchResultPressable, pressed && styles.pressed]}>
-        <Avatar image={result.picture} index={index} style={styles.searchAvatar} />
+        <FriendAvatar image={result.picture} index={index} radius={12} size={40} />
         <View style={styles.friendBody}>
           <Text style={styles.friendName}>{result.name}</Text>
           <Text style={styles.friendMeta}>@{result.id}</Text>
@@ -432,18 +353,15 @@ export default function FriendsScreen() {
 
           {!isLoading && !error && activeFilter === 'friends' ? (
             data && data.friends.length > 0 ? (
-              <View style={styles.cardsColumn}>
-                {data.friends.map((friend, index) => (
-                  <FriendRow
-                    key={friend.id}
-                    image={friend.picture}
-                    index={index}
-                    name={friend.name}
-                    onPress={() => router.push(`/profile/${encodeURIComponent(friend.id)}` as never)}
-                    subtitle={`${friend.visitedCount} Stempel • ${friend.completionPercent}%`}
-                  />
-                ))}
-              </View>
+              <FriendsList
+                items={data.friends.map((friend) => ({
+                  id: friend.id,
+                  image: friend.picture,
+                  name: friend.name,
+                  onPress: () => router.push(`/profile/${encodeURIComponent(friend.id)}` as never),
+                  subtitle: `${friend.visitedCount} Stempel • ${friend.completionPercent}%`,
+                }))}
+              />
             ) : (
               <EmptyState
                 title="Noch keine Freunde"
@@ -454,21 +372,18 @@ export default function FriendsScreen() {
 
           {!isLoading && !error && activeFilter === 'requests' ? (
             data && data.incomingRequests.length > 0 ? (
-              <View style={styles.cardsColumn}>
-                {data.incomingRequests.map((request, index) => (
-                  <FriendRow
-                    key={request.id}
-                    image={request.picture}
-                    index={index}
-                    name={request.name}
-                    onPress={() => router.push(`/profile/${encodeURIComponent(request.userId)}` as never)}
-                    subtitle="Moechte mit dir wandern"
-                    actionLabel={acceptingPendingRequestId === request.pendingRequestId ? '...' : 'Annehmen'}
-                    actionDisabled={acceptingPendingRequestId === request.pendingRequestId}
-                    onActionPress={() => void handleAcceptRequest(request.pendingRequestId)}
-                  />
-                ))}
-              </View>
+              <FriendsList
+                items={data.incomingRequests.map((request) => ({
+                  id: request.id,
+                  image: request.picture,
+                  name: request.name,
+                  onPress: () => router.push(`/profile/${encodeURIComponent(request.userId)}` as never),
+                  subtitle: 'Moechte mit dir wandern',
+                  actionLabel: acceptingPendingRequestId === request.pendingRequestId ? '...' : 'Annehmen',
+                  actionDisabled: acceptingPendingRequestId === request.pendingRequestId,
+                  onActionPress: () => void handleAcceptRequest(request.pendingRequestId),
+                }))}
+              />
             ) : (
               <EmptyState
                 title="Keine offenen Anfragen"
@@ -479,22 +394,19 @@ export default function FriendsScreen() {
 
           {!isLoading && !error && activeFilter === 'sent' ? (
             data && data.outgoingRequests.length > 0 ? (
-              <View style={styles.cardsColumn}>
-                {data.outgoingRequests.map((request, index) => (
-                  <FriendRow
-                    key={request.id}
-                    image={request.picture}
-                    index={index}
-                    name={request.name}
-                    onPress={() => router.push(`/profile/${encodeURIComponent(request.userId)}` as never)}
-                    subtitle="Anfrage gesendet"
-                    actionLabel="Gesendet"
-                    actionMuted
-                    actionDisabled
-                    onActionPress={() => undefined}
-                  />
-                ))}
-              </View>
+              <FriendsList
+                items={data.outgoingRequests.map((request) => ({
+                  id: request.id,
+                  image: request.picture,
+                  name: request.name,
+                  onPress: () => router.push(`/profile/${encodeURIComponent(request.userId)}` as never),
+                  subtitle: 'Anfrage gesendet',
+                  actionLabel: 'Gesendet',
+                  actionMuted: true,
+                  actionDisabled: true,
+                  onActionPress: () => undefined,
+                }))}
+              />
             ) : (
               <EmptyState
                 title="Nichts ausstehend"
@@ -665,37 +577,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 12,
   },
-  cardsColumn: {
-    gap: 16,
-  },
-  friendCard: {
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    shadowColor: '#141E14',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 3,
-  },
-  friendRowPressable: {
-    alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 12,
-  },
-  avatarPlaceholder: {
-    borderRadius: 16,
-    height: 44,
-    width: 44,
-  },
-  avatarImage: {
-    overflow: 'hidden',
-  },
   friendBody: {
     flex: 1,
   },
@@ -713,26 +594,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  inlineActionButton: {
-    backgroundColor: '#2E6B4B',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  inlineActionButtonMuted: {
-    backgroundColor: '#E9E2D6',
-  },
   inlineActionButtonDisabled: {
     opacity: 0.7,
-  },
-  inlineActionLabel: {
-    color: '#F5F3EE',
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  inlineActionLabelMuted: {
-    color: '#2E3A2E',
   },
   emptyCard: {
     backgroundColor: '#FFFFFF',
@@ -853,11 +716,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     gap: 10,
-  },
-  searchAvatar: {
-    borderRadius: 12,
-    height: 40,
-    width: 40,
   },
   searchActionButton: {
     backgroundColor: '#2E6B4B',

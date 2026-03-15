@@ -32,10 +32,11 @@ type NeighborParkingRow = {
   distanceKm?: number;
 };
 
-type ParkingSpot = {
+export type ParkingSpot = {
   ID: string;
   name?: string;
   description?: string;
+  image?: string;
   latitude?: number;
   longitude?: number;
 };
@@ -66,6 +67,13 @@ type User = {
   isFriend?: boolean;
   friends?: User[];
   Friends?: User[];
+};
+
+type Attachment = {
+  ID: string;
+  url?: string;
+  filename?: string;
+  mimeType?: string;
 };
 
 type PendingFriendshipRequest = {
@@ -155,6 +163,12 @@ export type SearchUserResult = {
   isFriend: boolean;
 };
 
+export type CurrentUserProfileData = {
+  id: string;
+  name: string;
+  picture?: string;
+};
+
 export type FriendshipRelationshipState =
   | 'self'
   | 'friend'
@@ -185,6 +199,8 @@ export type UserProfileOverviewData = {
     id: string;
     name: string;
     picture?: string;
+    visitedCount: number;
+    completionPercent: number;
   }>;
   achievements: Array<{
     id: string;
@@ -227,6 +243,20 @@ export type StampDetailData = {
   myVisits: VisitStamping[];
 };
 
+export type MapStamp = Stampbox & {
+  kind: 'visited-stamp' | 'open-stamp';
+  visitedAt?: string;
+};
+
+export type MapParkingSpot = ParkingSpot & {
+  kind: 'parking';
+};
+
+export type MapData = {
+  stamps: MapStamp[];
+  parkingSpots: MapParkingSpot[];
+};
+
 function normalizeBaseUrl(url: string) {
   return url.replace(/\/$/, '');
 }
@@ -245,6 +275,10 @@ function buildQuery(query?: [string, string | number | boolean | undefined][]) {
 
 function buildUrl(path: string, query?: [string, string | number | boolean | undefined][]) {
   return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v4/api/${path}${buildQuery(query)}`;
+}
+
+function buildStringKeyPath(entitySet: string, id: string) {
+  return `${entitySet}('${escapeODataString(id)}')`;
 }
 
 function escapeODataString(value: string) {
@@ -493,6 +527,59 @@ export async function fetchStampboxes(accessToken: string) {
   });
 }
 
+export async function fetchMapData(accessToken: string, currentUserId?: string) {
+  const [stamps, parkingSpots, myStampings] = await Promise.all([
+    fetchStampboxes(accessToken),
+    fetchCollection<ParkingSpot>(accessToken, 'ParkingSpots', [
+      ['$select', 'ID,name,description,image,latitude,longitude'],
+      ['$top', 500],
+    ]),
+    currentUserId
+      ? fetchCollection<Stamping>(accessToken, 'Stampings', [
+          ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
+          ['$filter', `createdBy eq '${escapeODataString(currentUserId)}'`],
+          ['$orderby', 'visitedAt desc,createdAt desc'],
+          ['$top', 1000],
+        ])
+      : Promise.resolve([] as Stamping[]),
+  ]);
+
+  const latestVisitByStampId = new Map<string, string>();
+  for (const stamping of myStampings) {
+    if (!stamping.stamp_ID) {
+      continue;
+    }
+
+    const visitTimestamp = getVisitTimestamp(stamping);
+    const currentTimestamp = latestVisitByStampId.get(stamping.stamp_ID);
+    if (!visitTimestamp) {
+      continue;
+    }
+
+    if (!currentTimestamp || new Date(visitTimestamp).getTime() > new Date(currentTimestamp).getTime()) {
+      latestVisitByStampId.set(stamping.stamp_ID, visitTimestamp);
+    }
+  }
+
+  return {
+    stamps: stamps.map((stamp) => {
+      const visitedAt = latestVisitByStampId.get(stamp.ID);
+      const hasVisited = Boolean(stamp.hasVisited || visitedAt);
+
+      return {
+        ...stamp,
+        hasVisited,
+        visitedAt,
+        kind: hasVisited ? ('visited-stamp' as const) : ('open-stamp' as const),
+      };
+    }),
+    parkingSpots: parkingSpots.map((parkingSpot) => ({
+      ...parkingSpot,
+      kind: 'parking' as const,
+    })),
+  } satisfies MapData;
+}
+
 export async function fetchLatestVisitedStamp(accessToken: string, currentUserId?: string) {
   if (!currentUserId) {
     return null;
@@ -520,6 +607,16 @@ export async function fetchLatestVisitedStamp(accessToken: string, currentUserId
     stampName: stamp.name || 'Stempelstelle',
     visitedAt: getVisitTimestamp(latestVisit),
   } satisfies LatestVisitedStamp;
+}
+
+export async function fetchCurrentUserProfile(accessToken: string) {
+  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
+
+  return {
+    id: currentUser.ID,
+    name: currentUser.name || currentUser.ID,
+    picture: currentUser.picture,
+  } satisfies CurrentUserProfileData;
 }
 
 export async function fetchStampDetail(accessToken: string, stampId: string, currentUserId?: string) {
@@ -811,12 +908,20 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
 
   const earliestVisit = targetStampings[targetStampings.length - 1];
   const mappedVisibleFriends = visibleFriends
-    .map((friend) => ({
-      id: friend.ID,
-      name: friend.name || friend.ID,
-      picture: friend.picture,
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .map((friend) => {
+      const visitedCount = stamps.reduce((count, stamp) => {
+        return count + (stampContainsUser(stamp, friend) ? 1 : 0);
+      }, 0);
+
+      return {
+        id: friend.ID,
+        name: friend.name || friend.ID,
+        picture: friend.picture,
+        visitedCount,
+        completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
+      };
+    })
+    .sort((left, right) => right.visitedCount - left.visitedCount || left.name.localeCompare(right.name));
   const stampComparisons = comparisonStamps.map((stamp) => ({
     stamp,
     meVisited: !!stamp.hasVisited,
@@ -991,6 +1096,74 @@ export async function createFriendRequest(accessToken: string, userId: string) {
       toUser_ID: userId,
     }),
   });
+}
+
+export async function updateCurrentUserProfile(
+  accessToken: string,
+  updates: {
+    name?: string;
+    picture?: string;
+  }
+) {
+  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
+
+  return mutateOData<User>(accessToken, buildUrl(buildStringKeyPath('Users', currentUser.ID)), {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function uploadAttachment(
+  accessToken: string,
+  file: {
+    uri: string;
+    fileName: string;
+    mimeType: string;
+  }
+) {
+  const attachment = await mutateOData<Attachment>(accessToken, buildUrl('Attachments'), {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: file.fileName,
+      mimeType: file.mimeType,
+    }),
+  });
+
+  const fileResponse = await fetch(file.uri);
+  const fileBlob = await fileResponse.blob();
+  const contentUrl = buildUrl(`Attachments(${attachment.ID})/content`);
+  const uploadResponse = await fetch(contentUrl, {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': file.mimeType,
+    },
+    body: fileBlob,
+  });
+
+  if (uploadResponse.status === 401 || uploadResponse.status === 403) {
+    const error = new Error('Unauthorized');
+    error.name = 'UnauthorizedError';
+    throw error;
+  }
+
+  if (!uploadResponse.ok) {
+    const errorBody = await uploadResponse.text();
+    throw new Error(errorBody || `Request failed with status ${uploadResponse.status}`);
+  }
+
+  const uploadedAttachment = await fetchEntityById<Attachment>(
+    accessToken,
+    'Attachments',
+    attachment.ID,
+    [['$select', 'ID,url,filename,mimeType']]
+  );
+
+  return {
+    id: uploadedAttachment.ID,
+    url: uploadedAttachment.url || contentUrl,
+  };
 }
 
 export async function updateFriendshipPermission(

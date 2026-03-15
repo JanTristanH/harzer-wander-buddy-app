@@ -3,11 +3,15 @@ import { Redirect } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 
 export default function IndexScreen() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { hasCompletedOnboarding, isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return null;
   }
 
-  return <Redirect href={(isAuthenticated ? '/(tabs)' : '/login') as never} />;
+  return (
+    <Redirect
+      href={(isAuthenticated ? '/(tabs)' : hasCompletedOnboarding ? '/login' : '/onboarding') as never}
+    />
+  );
 }

@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "harzerwanderbuddyapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "config": {
@@ -16,7 +16,9 @@
       "bundleIdentifier": "de.kuestenbit.harzer-wander-buddy",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocationWhenInUseUsageDescription": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
+        "NSLocationWhenInUseUsageDescription": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze.",
+        "NSPhotoLibraryUsageDescription": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst.",
+        "NSPhotoLibraryAddUsageDescription": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, falls du ein bearbeitetes Profilbild speichern moechtest."
       }
     },
     "android": {
@@ -44,6 +46,12 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst."
         }
       ],
       "expo-secure-store",

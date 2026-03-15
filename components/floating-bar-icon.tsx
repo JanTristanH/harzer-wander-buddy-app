@@ -1,11 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 
-type FloatingBarIconName = 'index' | 'friends' | 'profile';
+type FloatingBarIconName = 'index' | 'map' | 'friends' | 'profile';
 
 const ICONS: Record<FloatingBarIconName, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
   index: {
     active: 'list',
     inactive: 'list-outline',
+  },
+  map: {
+    active: 'map',
+    inactive: 'map-outline',
   },
   friends: {
     active: 'people',

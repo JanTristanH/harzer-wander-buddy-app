@@ -260,6 +260,7 @@ export default function FriendProfileScreen() {
           id: friend.id,
           name: friend.name,
           image: friend.picture,
+          subtitle: `${friend.visitedCount} Stempel • ${friend.completionPercent}%`,
           onPress: () => router.push(`/profile/${encodeURIComponent(friend.id)}` as never),
         })),
         emptyText: 'Dieses Profil hat aktuell keine Freunde sichtbar.',

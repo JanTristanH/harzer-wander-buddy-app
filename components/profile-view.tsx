@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { FriendsList } from '@/components/friends-list';
 import type { Stampbox } from '@/lib/api';
 
 type HeaderAction =
@@ -102,6 +103,7 @@ export type ProfileViewModel = {
       id: string;
       name: string;
       image?: string;
+      subtitle?: string;
       onPress: () => void;
     }[];
     emptyText: string;
@@ -228,33 +230,6 @@ function VisitRow({
         <Text style={styles.rowSubtitle}>{formatVisitDate(visit.visitedAt)}</Text>
       </View>
       {!disabled ? <Feather color="#2e6b4b" name="chevron-right" size={18} /> : null}
-    </Pressable>
-  );
-}
-
-function FriendRow({
-  name,
-  subtitle,
-  image,
-  onPress,
-}: {
-  name: string;
-  subtitle: string;
-  image?: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.rowCard, pressed && styles.pressed]}>
-      {image ? (
-        <Image contentFit="cover" source={{ uri: image }} style={[styles.friendAvatar, styles.avatarImage]} />
-      ) : (
-        <View style={[styles.friendAvatar, { backgroundColor: avatarColor(1) }]} />
-      )}
-      <View style={styles.rowBody}>
-        <Text style={styles.rowTitle}>{name}</Text>
-        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
-      </View>
-      <Feather color="#2e6b4b" name="chevron-right" size={18} />
     </Pressable>
   );
 }
@@ -494,11 +469,16 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
 
         {data.friendSummary ? (
           <ProfileSection title="Freunde">
-            <FriendRow
-              image={data.friendSummary.image}
-              name={data.friendSummary.name}
-              onPress={data.friendSummary.onPress}
-              subtitle={data.friendSummary.subtitle}
+            <FriendsList
+              items={[
+                {
+                  id: 'friend-summary',
+                  image: data.friendSummary.image,
+                  name: data.friendSummary.name,
+                  onPress: data.friendSummary.onPress,
+                  subtitle: data.friendSummary.subtitle,
+                },
+              ]}
             />
           </ProfileSection>
         ) : null}
@@ -506,15 +486,15 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         {data.friendsList ? (
           <ProfileSection title="Freunde">
             {data.friendsList.items.length > 0 ? (
-              data.friendsList.items.map((friend) => (
-                <FriendRow
-                  key={friend.id}
-                  image={friend.image}
-                  name={friend.name}
-                  onPress={friend.onPress}
-                  subtitle=""
-                />
-              ))
+              <FriendsList
+                items={data.friendsList.items.map((friend) => ({
+                  id: friend.id,
+                  image: friend.image,
+                  name: friend.name,
+                  onPress: friend.onPress,
+                  subtitle: friend.subtitle,
+                }))}
+              />
             ) : (
               <Text style={styles.emptyText}>{data.friendsList.emptyText}</Text>
             )}
@@ -884,11 +864,6 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 12,
-  },
-  friendAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
   },
   rowBody: {
     flex: 1,

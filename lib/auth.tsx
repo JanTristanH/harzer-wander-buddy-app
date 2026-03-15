@@ -10,6 +10,7 @@ import { appConfig, getMissingConfig } from '@/lib/config';
 WebBrowser.maybeCompleteAuthSession();
 
 const TOKEN_STORAGE_KEY = 'hwb-auth-token-response';
+const ONBOARDING_STORAGE_KEY = 'hwb-auth-onboarding-complete';
 
 type AuthState = {
   accessToken: string;
@@ -33,6 +34,7 @@ type AuthContextValue = {
   refreshToken: string | null;
   issuedAt: number | null;
   expiresIn: number | null;
+  hasCompletedOnboarding: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   authError: string | null;
@@ -103,8 +105,21 @@ async function clearTokenResponse() {
   await SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY);
 }
 
+async function saveOnboardingState(hasCompletedOnboarding: boolean) {
+  await SecureStore.setItemAsync(
+    ONBOARDING_STORAGE_KEY,
+    hasCompletedOnboarding ? 'true' : 'false'
+  );
+}
+
+async function loadOnboardingState() {
+  const storedValue = await SecureStore.getItemAsync(ONBOARDING_STORAGE_KEY);
+  return storedValue === 'true';
+}
+
 export function AuthProvider({ children }: React.PropsWithChildren) {
   const [authState, setAuthState] = useState<AuthState | null>(null);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -134,6 +149,11 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         if (!discovery) {
           setAuthError('Could not load Auth0 discovery.');
           return;
+        }
+
+        const storedOnboardingState = await loadOnboardingState();
+        if (isMounted) {
+          setHasCompletedOnboarding(storedOnboardingState);
         }
 
         const tokenResponse = await loadTokenResponse();
@@ -168,6 +188,8 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           issuedAt: nextTokenResponse.issuedAt,
           expiresIn: nextTokenResponse.expiresIn,
         });
+        setHasCompletedOnboarding(true);
+        await saveOnboardingState(true);
       } catch (error) {
         console.error('Failed to restore auth session', error);
         setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
@@ -239,6 +261,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       );
 
       await saveTokenResponse(tokenResponse);
+      await saveOnboardingState(true);
       setAuthState({
         accessToken: tokenResponse.accessToken,
         idToken: tokenResponse.idToken,
@@ -246,6 +269,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         issuedAt: tokenResponse.issuedAt,
         expiresIn: tokenResponse.expiresIn,
       });
+      setHasCompletedOnboarding(true);
     } catch (error) {
       console.error(`Auth0 ${mode} failed`, error);
       setAuthError(error instanceof Error ? error.message : `Auth0 ${mode} failed`);
@@ -291,6 +315,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       refreshToken: authState?.refreshToken ?? null,
       issuedAt: authState?.issuedAt ?? null,
       expiresIn: authState?.expiresIn ?? null,
+      hasCompletedOnboarding,
       isAuthenticated: !!authState?.accessToken,
       isLoading,
       authError,
@@ -307,6 +332,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       authState?.issuedAt,
       authState?.refreshToken,
       configError,
+      hasCompletedOnboarding,
       isLoading,
     ]
   );
