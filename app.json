@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "harzer-wander-buddy-app",
+    "name": "Harzer Wanderbuddy",
     "slug": "harzer-wander-buddy-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "harzerwanderbuddyapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "config": {
@@ -16,9 +16,9 @@
       "bundleIdentifier": "de.kuestenbit.harzer-wander-buddy",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocationWhenInUseUsageDescription": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze.",
-        "NSPhotoLibraryUsageDescription": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst.",
-        "NSPhotoLibraryAddUsageDescription": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, falls du ein bearbeitetes Profilbild speichern moechtest."
+        "NSLocationWhenInUseUsageDescription": "Harzer Wanderbuddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze.",
+        "NSPhotoLibraryUsageDescription": "Harzer Wanderbuddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst.",
+        "NSPhotoLibraryAddUsageDescription": "Harzer Wanderbuddy benoetigt Zugriff auf deine Fotos, falls du ein bearbeitetes Profilbild speichern moechtest."
       }
     },
     "android": {
@@ -45,13 +45,13 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Harzer Wander Buddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
+          "locationWhenInUsePermission": "Harzer Wanderbuddy verwendet deinen Standort fuer Karte, Entfernungen und nahe Parkplaetze."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Harzer Wander Buddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst."
+          "photosPermission": "Harzer Wanderbuddy benoetigt Zugriff auf deine Fotos, damit du ein Profilbild auswaehlen kannst."
         }
       ],
       "expo-secure-store",
