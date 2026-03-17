@@ -8,6 +8,9 @@ export function MapSelectionSheet({
   bottomOffset,
   item,
   metadata,
+  primaryActionLabel,
+  onPrimaryActionPress,
+  primaryActionDisabled,
   onDetailsPress,
   onHeightChange,
 }: {
@@ -18,14 +21,24 @@ export function MapSelectionSheet({
     description: string;
   };
   metadata: string;
+  primaryActionLabel?: string;
+  onPrimaryActionPress?: () => void;
+  primaryActionDisabled?: boolean;
   onDetailsPress?: () => void;
   onHeightChange?: (height: number) => void;
 }) {
+  const isInteractive = Boolean(onDetailsPress);
+
   return (
-    <View
+    <Pressable
       onLayout={(event: LayoutChangeEvent) => onHeightChange?.(event.nativeEvent.layout.height)}
-      style={[styles.bottomSheet, { bottom: bottomOffset }]}>
-      <View style={styles.detailRow}>
+      onPress={onDetailsPress}
+      style={({ pressed }) => [
+        styles.bottomSheet,
+        { bottom: bottomOffset },
+        pressed && isInteractive && styles.pressed,
+      ]}>
+      <View pointerEvents="none" style={styles.detailRow}>
         <LinearGradient
           colors={
             item.kind === 'visited-stamp'
@@ -73,18 +86,36 @@ export function MapSelectionSheet({
         </View>
       </View>
 
-      <View style={styles.detailMetaRow}>
+      <View pointerEvents="none" style={styles.detailMetaRow}>
         <Text numberOfLines={1} style={styles.detailMeta}>
           {metadata}
         </Text>
       </View>
 
-      {onDetailsPress ? (
-        <Pressable onPress={onDetailsPress} style={({ pressed }) => [styles.detailAction, pressed && styles.pressed]}>
-          <Text style={styles.detailActionLabel}>Details oeffnen</Text>
-        </Pressable>
+      {primaryActionLabel || onDetailsPress ? (
+        <View style={styles.actionRow}>
+          {primaryActionLabel ? (
+            <Pressable
+              disabled={primaryActionDisabled}
+              onPress={onPrimaryActionPress}
+              style={({ pressed }) => [
+                styles.primaryAction,
+                primaryActionDisabled && styles.primaryActionDisabled,
+                pressed && !primaryActionDisabled && styles.pressed,
+              ]}>
+              <Text style={styles.primaryActionLabel}>{primaryActionLabel}</Text>
+            </Pressable>
+          ) : null}
+          {onDetailsPress ? (
+            <Pressable
+              onPress={onDetailsPress}
+              style={({ pressed }) => [styles.detailAction, pressed && styles.pressed]}>
+              <Text style={styles.detailActionLabel}>Details oeffnen</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
@@ -175,7 +206,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  detailAction: {
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  primaryAction: {
+    flex: 1,
     backgroundColor: '#2e6b4b',
     borderRadius: 12,
     paddingVertical: 10,
@@ -183,11 +219,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  detailActionLabel: {
+  primaryActionDisabled: {
+    backgroundColor: '#b8c7bb',
+  },
+  primaryActionLabel: {
     color: '#f5f3ee',
     fontSize: 13,
     lineHeight: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+  },
+  detailAction: {
+    flex: 1,
+    backgroundColor: '#eef3ed',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailActionLabel: {
+    color: '#2e6b4b',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   pressed: {
     opacity: 0.85,

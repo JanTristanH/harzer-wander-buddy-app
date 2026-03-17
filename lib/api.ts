@@ -56,6 +56,7 @@ type MyFriend = {
   name?: string;
   picture?: string;
   FriendshipID?: string;
+  status?: 'pending' | 'accepted';
   isAllowedToStampForMe?: boolean;
   isAllowedToStampForFriend?: boolean;
 };
@@ -74,6 +75,16 @@ type Attachment = {
   url?: string;
   filename?: string;
   mimeType?: string;
+};
+
+type StampFriendVisitRow = {
+  friendId: string;
+  name?: string;
+  picture?: string;
+  stampingId?: string;
+  visitedAt?: string | null;
+  createdAt?: string | null;
+  timestamp?: string | null;
 };
 
 type PendingFriendshipRequest = {
@@ -170,6 +181,8 @@ export type SearchUserResult = {
   name: string;
   picture?: string;
   isFriend: boolean;
+  visitedCount: number;
+  completionPercent: number;
 };
 
 export type CurrentUserProfileData = {
@@ -247,6 +260,7 @@ export type StampDetailData = {
   friendVisits: {
     id: string;
     name: string;
+    picture?: string;
     createdAt?: string;
   }[];
   myVisits: VisitStamping[];
@@ -352,6 +366,23 @@ async function mutateOData<T>(
   return (await response.json()) as T;
 }
 
+function parseActionStringResult(payload: unknown) {
+  if (typeof payload === 'string') {
+    return payload;
+  }
+
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'value' in payload &&
+    typeof (payload as { value?: unknown }).value === 'string'
+  ) {
+    return (payload as { value: string }).value;
+  }
+
+  return '';
+}
+
 async function fetchCollection<T>(
   accessToken: string,
   entitySet: string,
@@ -444,6 +475,44 @@ async function buildFriendProgress(
   );
 }
 
+async function attachUserProgress<T extends { id: string }>(
+  accessToken: string,
+  users: T[]
+) {
+  if (users.length === 0) {
+    return [] as Array<T & { visitedCount: number; completionPercent: number }>;
+  }
+
+  const totalCount = (
+    await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
+      ['$select', 'ID'],
+      ['$top', 300],
+    ])
+  ).length;
+
+  const progressEntries = await Promise.all(
+    users.map(async (user) => {
+      const stampboxes = await fetchComparisonStampboxes(accessToken, [user.id]);
+      const visitedCount = stampboxes.filter((stamp) => Number(stamp.totalGroupStampings || 0) > 0).length;
+
+      return [
+        user.id,
+        {
+          visitedCount,
+          completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
+        },
+      ] as const;
+    })
+  );
+
+  const progressByUserId = new Map(progressEntries);
+
+  return users.map((user) => ({
+    ...user,
+    ...(progressByUserId.get(user.id) ?? { visitedCount: 0, completionPercent: 0 }),
+  }));
+}
+
 async function fetchUserFriends(accessToken: string, userId: string) {
   const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', [
     ['$select', 'ID,toUser_ID'],
@@ -502,6 +571,65 @@ async function fetchGuidFilteredCollection<T>(
   }
 
   return [];
+}
+
+async function fetchStampingForStampAndUser(
+  accessToken: string,
+  stampId: string,
+  userId: string
+) {
+  const stampFilters = [`stamp_ID eq ${stampId}`, `stamp_ID eq guid'${stampId}'`];
+
+  for (const stampFilter of stampFilters) {
+    try {
+      const rows = await fetchCollection<Stamping>(accessToken, 'Stampings', [
+        ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
+        [
+          '$filter',
+          `${stampFilter} and createdBy eq '${escapeODataString(userId)}'`,
+        ],
+        ['$orderby', 'visitedAt desc,createdAt desc'],
+        ['$top', 1],
+      ]);
+
+      if (rows.length > 0) {
+        return rows[0];
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function fetchStampFriendVisits(
+  accessToken: string,
+  stampId: string,
+  friendIds: string[]
+) {
+  if (friendIds.length === 0) {
+    return [] as StampFriendVisitRow[];
+  }
+
+  const actionResponse = await mutateOData<unknown>(accessToken, buildUrl('getStampFriendVisits'), {
+    method: 'POST',
+    body: JSON.stringify({
+      sStampId: stampId,
+      sGroupUserIds: [...new Set(friendIds.filter(Boolean))].join(','),
+    }),
+  });
+  const rawValue = parseActionStringResult(actionResponse);
+  if (!rawValue) {
+    return [] as StampFriendVisitRow[];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? (parsed as StampFriendVisitRow[]) : [];
+  } catch {
+    return [] as StampFriendVisitRow[];
+  }
 }
 
 function estimateMinutes(distanceKm: number | null) {
@@ -673,7 +801,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     ],
   ]);
 
-  const [neighborStampRows, neighborParkingRows, stampings, friends] = await Promise.all([
+  const [neighborStampRows, neighborParkingRows, stampings, friendships] = await Promise.all([
     fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsStampStamp', 'ID', stampId, [
       ['$orderby', 'distanceKm asc'],
       ['$top', 3],
@@ -685,10 +813,11 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     fetchGuidFilteredCollection<Stamping>(accessToken, 'Stampings', 'stamp_ID', stampId, [
       ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
       ['$orderby', 'visitedAt desc,createdAt desc'],
-      ['$top', 20],
+      ['$top', 200],
     ]),
-    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture']]),
+    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture,status']]),
   ]);
+  const friends = friendships.filter((friend) => friend.status === 'accepted');
 
   const nearbyStamps = (
     await Promise.all(
@@ -758,18 +887,92 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
 
   const friendMap = new Map(friends.map((friend) => [friend.ID, friend]));
   const myVisits = stampings.filter((stamping) => stamping.createdBy === currentUserId);
+  const latestFriendStampings = new Map<string, Stamping>();
 
-  const friendVisits = stampings
-    .filter((stamping) => stamping.createdBy && stamping.createdBy !== currentUserId)
-    .map((stamping) => {
-      const friend = stamping.createdBy ? friendMap.get(stamping.createdBy) : undefined;
+  for (const stamping of stampings) {
+    if (!stamping.createdBy || stamping.createdBy === currentUserId || !friendMap.has(stamping.createdBy)) {
+      continue;
+    }
+
+    const current = latestFriendStampings.get(stamping.createdBy);
+    const nextTimestamp = getVisitTimestamp(stamping);
+    const currentTimestamp = current ? getVisitTimestamp(current) : undefined;
+
+    if (
+      !current ||
+      new Date(nextTimestamp || 0).getTime() > new Date(currentTimestamp || 0).getTime()
+    ) {
+      latestFriendStampings.set(stamping.createdBy, stamping);
+    }
+  }
+
+  const friendIds = friends.map((friend) => friend.ID);
+  const endpointFriendVisits = await fetchStampFriendVisits(accessToken, stampId, friendIds).catch(() => []);
+
+  for (const visit of endpointFriendVisits) {
+    if (!visit?.friendId || !friendMap.has(visit.friendId)) {
+      continue;
+    }
+
+    const incomingStamping = {
+      ID: visit.stampingId || `group-${stampId}-${visit.friendId}`,
+      createdBy: visit.friendId,
+      stamp_ID: stampId,
+      visitedAt: visit.visitedAt || undefined,
+      createdAt: visit.createdAt || visit.timestamp || undefined,
+    } satisfies Stamping;
+
+    const current = latestFriendStampings.get(visit.friendId);
+    const nextTimestamp = getVisitTimestamp(incomingStamping);
+    const currentTimestamp = current ? getVisitTimestamp(current) : undefined;
+    if (
+      !current ||
+      new Date(nextTimestamp || 0).getTime() > new Date(currentTimestamp || 0).getTime()
+    ) {
+      latestFriendStampings.set(visit.friendId, incomingStamping);
+    }
+  }
+
+  const unresolvedFriendIds = friendIds.filter((friendId) => !latestFriendStampings.has(friendId));
+  const FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE = 10;
+
+  for (
+    let index = 0;
+    index < unresolvedFriendIds.length;
+    index += FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE
+  ) {
+    const friendIdBatch = unresolvedFriendIds.slice(index, index + FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE);
+    const batchStampings = await Promise.all(
+      friendIdBatch.map(async (friendId) => {
+        const stamping = await fetchStampingForStampAndUser(accessToken, stampId, friendId);
+        return stamping ? [friendId, stamping] : null;
+      })
+    );
+
+    for (const entry of batchStampings) {
+      if (!entry) {
+        continue;
+      }
+
+      latestFriendStampings.set(entry[0], entry[1]);
+    }
+  }
+
+  const friendVisits = Array.from(latestFriendStampings.entries())
+    .map(([friendId, stamping]) => {
+      const friend = friendMap.get(friendId);
+
       return {
         id: stamping.ID,
-        name: friend?.name || stamping.createdBy || 'Freund',
+        name: friend?.name || friendId || 'Freund',
+        picture: friend?.picture,
         createdAt: getVisitTimestamp(stamping),
       };
     })
-    .slice(0, 5);
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+    );
 
   return {
     stamp,
@@ -781,7 +984,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
 }
 
 export async function fetchProfileOverview(accessToken: string, currentUserId?: string) {
-  const [currentUser, stamps, stampings, friends] = await Promise.all([
+  const [currentUser, stamps, stampings, friendships] = await Promise.all([
     fetchCurrentUserRecord(accessToken),
     fetchStampboxes(accessToken),
     fetchCollection<Stamping>(accessToken, 'Stampings', [
@@ -789,8 +992,9 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
       ['$orderby', 'visitedAt desc,createdAt desc'],
       ['$top', 100],
     ]),
-    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture']]),
+    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture,status']]),
   ]);
+  const friends = friendships.filter((friend) => friend.status === 'accepted');
 
   const stampMap = new Map(stamps.map((stamp) => [stamp.ID, stamp]));
   const myStampings = currentUserId
@@ -863,7 +1067,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     fetchOData<User>(accessToken, buildUrl('getCurrentUser()')),
   ]);
 
-  const [stamps, comparisonStamps, targetStampings, friends, pendingRequests, visibleFriends] =
+  const [stamps, comparisonStamps, targetStampings, friendships, pendingRequests, visibleFriends] =
     await Promise.all([
       fetchStampboxes(accessToken),
       fetchComparisonStampboxes(accessToken, [currentUser.ID, targetUserId]),
@@ -874,7 +1078,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
         ['$top', 200],
       ]),
       fetchCollection<MyFriend>(accessToken, 'MyFriends', [
-        ['$select', 'ID,name,picture,FriendshipID,isAllowedToStampForMe,isAllowedToStampForFriend'],
+        ['$select', 'ID,name,picture,FriendshipID,status,isAllowedToStampForMe,isAllowedToStampForFriend'],
       ]),
       fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', [
         ['$select', 'ID,fromUser_ID,toUser_ID,outgoingFriendship_ID'],
@@ -904,28 +1108,25 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     } satisfies UserProfileOverviewData;
   }
 
-  const friendMatch = friends.find((friend) => friend.ID === targetUser.ID);
+  const friendMatch = friendships.find(
+    (friend) => friend.ID === targetUser.ID && friend.status === 'accepted'
+  );
+  const outgoingPendingMatch = friendships.find(
+    (friend) => friend.ID === targetUser.ID && friend.status === 'pending'
+  );
+  const incomingPendingMatch = pendingRequests.find(
+    (request) => request.fromUser_ID === currentUser.ID && request.toUser_ID === targetUser.ID
+  );
   const relationship: FriendshipRelationshipState = friendMatch
     ? 'friend'
-    : pendingRequests.some(
-          (request) => request.fromUser_ID === currentUser.ID && request.toUser_ID === targetUser.ID
-        )
+    : incomingPendingMatch
       ? 'incoming_request'
-      : pendingRequests.some(
-            (request) => request.toUser_ID === currentUser.ID && request.fromUser_ID === targetUser.ID
-          )
+      : outgoingPendingMatch
         ? 'outgoing_request'
         : 'not_connected';
 
-  const friendshipId =
-    friendMatch?.FriendshipID || null;
-
-  const pendingRequestId =
-    pendingRequests.find(
-      (request) =>
-        (request.fromUser_ID === currentUser.ID && request.toUser_ID === targetUser.ID) ||
-        (request.toUser_ID === currentUser.ID && request.fromUser_ID === targetUser.ID)
-    )?.ID || null;
+  const friendshipId = friendMatch?.FriendshipID || null;
+  const pendingRequestId = incomingPendingMatch?.ID || null;
 
   const targetVisitedCount = stamps.reduce(
     (count, stamp) => count + (stampContainsUser(stamp, targetUser) ? 1 : 0),
@@ -943,7 +1144,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       stampId: visit.stamp_ID || '',
       stampNumber: stamp?.number,
       stampName: stamp?.name || 'Stempelstelle',
-      visitedAt: visit.createdAt,
+      visitedAt: getVisitTimestamp(visit),
     };
   });
 
@@ -1000,10 +1201,10 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
 }
 
 export async function fetchFriendsOverview(accessToken: string) {
-  const [stamps, friends, currentUser, pendingRequests] = await Promise.all([
+  const [stamps, friendships, currentUser, pendingRequests] = await Promise.all([
     fetchStampboxes(accessToken),
     fetchCollection<MyFriend>(accessToken, 'MyFriends', [
-      ['$select', 'ID,name,picture,FriendshipID,isAllowedToStampForMe,isAllowedToStampForFriend'],
+      ['$select', 'ID,name,picture,FriendshipID,status,isAllowedToStampForMe,isAllowedToStampForFriend'],
     ]),
     fetchOData<User>(accessToken, buildUrl('getCurrentUser()')),
     fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', [
@@ -1013,7 +1214,9 @@ export async function fetchFriendsOverview(accessToken: string) {
   ]);
 
   const totalCount = stamps.length;
-  const mappedFriends = await buildFriendProgress(accessToken, friends, totalCount);
+  const acceptedFriendships = friendships.filter((friend) => friend.status === 'accepted');
+  const pendingSentFriendships = friendships.filter((friend) => friend.status === 'pending');
+  const mappedFriends = await buildFriendProgress(accessToken, acceptedFriendships, totalCount);
 
   const currentUserId = currentUser.ID;
   const incomingRequests = pendingRequests
@@ -1027,14 +1230,13 @@ export async function fetchFriendsOverview(accessToken: string) {
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
-  const outgoingRequests = pendingRequests
-    .filter((request) => request.toUser_ID === currentUserId)
-    .map((request) => ({
-      id: request.ID,
-      pendingRequestId: request.ID,
-      userId: request.fromUser_ID || request.fromUser?.ID || request.ID,
-      name: request.fromUser?.name || 'Unbekannter Nutzer',
-      picture: request.fromUser?.picture,
+  const outgoingRequests = pendingSentFriendships
+    .map((friendship) => ({
+      id: friendship.FriendshipID || friendship.ID,
+      pendingRequestId: friendship.FriendshipID || friendship.ID,
+      userId: friendship.ID,
+      name: friendship.name || friendship.ID,
+      picture: friendship.picture,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -1078,12 +1280,15 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
         ['$top', 12],
       ]);
 
-      return users.map((user) => ({
-        id: user.ID,
-        name: user.name || user.ID,
-        picture: user.picture,
-        isFriend: !!user.isFriend,
-      }));
+      return attachUserProgress(
+        accessToken,
+        users.map((user) => ({
+          id: user.ID,
+          name: user.name || user.ID,
+          picture: user.picture,
+          isFriend: !!user.isFriend,
+        }))
+      );
     } catch {
       continue;
     }
@@ -1095,19 +1300,22 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
   ]);
 
   const normalizedQuery = query.toLowerCase();
-  return users
-    .filter((user) => {
-      const name = (user.name || '').toLowerCase();
-      const id = user.ID.toLowerCase();
-      return name.includes(normalizedQuery) || id.includes(normalizedQuery);
-    })
-    .slice(0, 12)
-    .map((user) => ({
-      id: user.ID,
-      name: user.name || user.ID,
-      picture: user.picture,
-      isFriend: !!user.isFriend,
-    }));
+  return attachUserProgress(
+    accessToken,
+    users
+      .filter((user) => {
+        const name = (user.name || '').toLowerCase();
+        const id = user.ID.toLowerCase();
+        return name.includes(normalizedQuery) || id.includes(normalizedQuery);
+      })
+      .slice(0, 12)
+      .map((user) => ({
+        id: user.ID,
+        name: user.name || user.ID,
+        picture: user.picture,
+        isFriend: !!user.isFriend,
+      }))
+  );
 }
 
 export async function createFriendRequest(accessToken: string, userId: string) {

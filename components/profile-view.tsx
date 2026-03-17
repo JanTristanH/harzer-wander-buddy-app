@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -13,7 +14,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FriendAvatar, FriendsList } from '@/components/friends-list';
+import { FriendsList } from '@/components/friends-list';
+import { useAuth } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 import type { Stampbox } from '@/lib/api';
 
 type HeaderAction =
@@ -121,6 +124,8 @@ export type ProfileViewModel = {
   }[];
   onRefresh?: () => void;
   refreshing?: boolean;
+  refreshHint?: string;
+  showDeferredSkeletons?: boolean;
 };
 
 const DEFAULT_VISIBLE_FRIENDS = 3;
@@ -174,13 +179,17 @@ function HeaderAvatar({
   color: string;
   compact: boolean;
 }) {
+  const { accessToken } = useAuth();
+
   if (image) {
     return (
-      <FriendAvatar
-        image={image}
-        index={0}
-        radius={compact ? 20 : 28}
-        size={compact ? 60 : 88}
+      <Image
+        contentFit="cover"
+        source={buildAuthenticatedImageSource(image, accessToken)}
+        style={[
+          compact ? styles.avatarCompact : styles.avatarPlaceholder,
+          styles.avatarImage,
+        ]}
       />
     );
   }
@@ -324,6 +333,34 @@ function SimpleStampRow({
   );
 }
 
+function SkeletonBar({ width }: { width: number | `${number}%` }) {
+  return <View style={[styles.skeletonBar, { width }]} />;
+}
+
+function SkeletonVisitRow() {
+  return (
+    <View style={styles.skeletonRow}>
+      <View style={styles.skeletonArtwork} />
+      <View style={styles.skeletonBody}>
+        <SkeletonBar width="58%" />
+        <SkeletonBar width="42%" />
+      </View>
+    </View>
+  );
+}
+
+function SkeletonFriendRow() {
+  return (
+    <View style={styles.skeletonFriendRow}>
+      <View style={styles.skeletonAvatar} />
+      <View style={styles.skeletonBody}>
+        <SkeletonBar width="46%" />
+        <SkeletonBar width="34%" />
+      </View>
+    </View>
+  );
+}
+
 export function ProfileLoadingState({ label }: { label: string }) {
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -417,16 +454,33 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
           ) : null}
         </View>
 
+        {data.refreshHint ? <Text style={styles.refreshHint}>{data.refreshHint}</Text> : null}
+
         <View style={styles.statsCard}>
-          {data.stats.map((stat) => (
-            <View key={stat.label} style={styles.statBlock}>
-              <Text style={styles.statLabel}>{stat.label}</Text>
-              <Text style={styles.statValue}>{stat.value}</Text>
-            </View>
-          ))}
+          {data.showDeferredSkeletons
+            ? Array.from({ length: 3 }).map((_, index) => (
+                <View key={`stat-skeleton-${index}`} style={styles.statBlock}>
+                  <SkeletonBar width="54%" />
+                  <View style={styles.statSkeletonGap} />
+                  <SkeletonBar width="38%" />
+                </View>
+              ))
+            : data.stats.map((stat) => (
+                <View key={stat.label} style={styles.statBlock}>
+                  <Text style={styles.statLabel}>{stat.label}</Text>
+                  <Text style={styles.statValue}>{stat.value}</Text>
+                </View>
+              ))}
         </View>
 
-        {actionCard ? (
+        {data.showDeferredSkeletons ? (
+          <View style={styles.actionCard}>
+            <SkeletonBar width="34%" />
+            <View style={styles.actionCardSkeletonGap} />
+            <SkeletonBar width="72%" />
+            <SkeletonBar width="48%" />
+          </View>
+        ) : actionCard ? (
           <View style={styles.actionCard}>
             <Text style={styles.actionCardTitle}>Freundschaft</Text>
             {actionCard.type === 'friendship' ? (
@@ -500,7 +554,12 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         ) : null}
 
         <ProfileSection title="Letzte Besuche">
-          {data.latestVisits.length > 0 ? (
+          {data.showDeferredSkeletons ? (
+            <>
+              <SkeletonVisitRow />
+              <SkeletonVisitRow />
+            </>
+          ) : data.latestVisits.length > 0 ? (
             data.latestVisits.map((visit, index) => (
               <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
             ))
@@ -527,7 +586,13 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
 
         {data.friendsList ? (
           <ProfileSection title="Freunde">
-            {data.friendsList.items.length > 0 ? (
+            {data.showDeferredSkeletons ? (
+              <>
+                <SkeletonFriendRow />
+                <SkeletonFriendRow />
+                <SkeletonFriendRow />
+              </>
+            ) : data.friendsList.items.length > 0 ? (
               <>
                 <FriendsList
                   items={visibleFriends.map((friend) => ({
@@ -555,38 +620,51 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         ) : null}
 
         <ProfileSection title={data.stampsTitle || 'Stempelstellen'}>
-          <ScrollView
-            contentContainerStyle={styles.chipRow}
-            horizontal
-            showsHorizontalScrollIndicator={false}>
-            {data.stampChips.map((chip) => {
-              const [backgroundStyle, labelToneStyle] = chipToneStyle(chip.tone);
-              const active = data.activeStampChip === chip.key;
-              return (
-                <Pressable
-                  key={chip.key}
-                  onPress={() => data.onSelectStampChip(chip.key)}
-                  style={({ pressed }) => [
-                    styles.countChip,
-                    backgroundStyle,
-                    active && styles.countChipActive,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.countChipLabel,
-                      labelToneStyle,
-                      active && styles.countChipLabelActive,
+          {data.showDeferredSkeletons ? (
+            <>
+              <View style={styles.skeletonChipRow}>
+                <View style={styles.skeletonChip} />
+                <View style={styles.skeletonChip} />
+                <View style={styles.skeletonChipShort} />
+              </View>
+              <SkeletonVisitRow />
+              <SkeletonVisitRow />
+              <SkeletonVisitRow />
+            </>
+          ) : (
+            <ScrollView
+              contentContainerStyle={styles.chipRow}
+              horizontal
+              showsHorizontalScrollIndicator={false}>
+              {data.stampChips.map((chip) => {
+                const [backgroundStyle, labelToneStyle] = chipToneStyle(chip.tone);
+                const active = data.activeStampChip === chip.key;
+                return (
+                  <Pressable
+                    key={chip.key}
+                    onPress={() => data.onSelectStampChip(chip.key)}
+                    style={({ pressed }) => [
+                      styles.countChip,
+                      backgroundStyle,
+                      active && styles.countChipActive,
+                      pressed && styles.pressed,
                     ]}>
-                    {chip.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.countChipLabel,
+                        labelToneStyle,
+                        active && styles.countChipLabelActive,
+                      ]}>
+                      {chip.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
 
-          {data.stampItems.length > 0 ? (
+          {!data.showDeferredSkeletons && data.stampItems.length > 0 ? (
             data.stampItems.map((item, index) =>
               item.kind === 'compare' ? (
                 <StampComparisonRow
@@ -604,9 +682,9 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
                 />
               )
             )
-          ) : (
+          ) : !data.showDeferredSkeletons ? (
             <Text style={styles.emptyText}>{data.emptyStampText}</Text>
-          )}
+          ) : null}
         </ProfileSection>
 
         {data.footerButtons?.length ? (
@@ -750,6 +828,9 @@ const styles = StyleSheet.create({
   statBlock: {
     flex: 1,
   },
+  statSkeletonGap: {
+    height: 10,
+  },
   statLabel: {
     color: '#6b7a6b',
     fontSize: 12,
@@ -773,6 +854,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 18,
     elevation: 2,
+  },
+  actionCardSkeletonGap: {
+    height: 6,
   },
   actionCardTitle: {
     color: '#1e2a1e',
@@ -885,6 +969,59 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '600',
+  },
+  refreshHint: {
+    color: '#4d6d56',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: -6,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  skeletonFriendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  skeletonArtwork: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: '#ece6db',
+  },
+  skeletonAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: '#ece6db',
+  },
+  skeletonBody: {
+    flex: 1,
+    gap: 8,
+  },
+  skeletonBar: {
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#ece6db',
+  },
+  skeletonChipRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  skeletonChip: {
+    height: 34,
+    width: 120,
+    borderRadius: 999,
+    backgroundColor: '#ece6db',
+  },
+  skeletonChipShort: {
+    height: 34,
+    width: 88,
+    borderRadius: 999,
+    backgroundColor: '#ece6db',
   },
   achievementRow: {
     flexDirection: 'row',

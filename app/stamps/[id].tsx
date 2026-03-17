@@ -2,10 +2,11 @@ import { Feather } from '@expo/vector-icons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
+import { useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -22,14 +23,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
+import { FriendsList } from '@/components/friends-list';
 import {
   createStamping,
   deleteStamping,
-  fetchStampDetail,
-  type StampDetailData,
   updateStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { queryKeys, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
   sub?: string;
@@ -59,9 +60,7 @@ function formatVisitDate(value?: string) {
   return new Date(value).toLocaleString('de-DE', {
     day: 'numeric',
     month: 'long',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    year: 'numeric'
   });
 }
 
@@ -89,6 +88,28 @@ function heroGradient(visited: boolean) {
     : (['#b8bdb1', '#cfd3c8', '#e1d7c5'] as const);
 }
 
+function SkeletonLine({
+  width,
+  height = 14,
+}: {
+  width: number | `${number}%`;
+  height?: number;
+}) {
+  return <View style={[styles.skeletonLine, { width, height }]} />;
+}
+
+function SkeletonRow() {
+  return (
+    <View style={styles.skeletonRow}>
+      <View style={styles.skeletonBadge} />
+      <View style={styles.skeletonColumn}>
+        <SkeletonLine width="68%" />
+        <SkeletonLine height={12} width="44%" />
+      </View>
+    </View>
+  );
+}
+
 function Section({
   title,
   action,
@@ -113,10 +134,10 @@ function StampDetailContent() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<IdClaims>();
+  const queryClient = useQueryClient();
   const stampId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const [detail, setDetail] = useState<StampDetailData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
+    useStampDetailQuery(stampId);
   const [isStamping, setIsStamping] = useState(false);
   const [isEditingVisits, setIsEditingVisits] = useState(false);
   const [visitDrafts, setVisitDrafts] = useState<Record<string, string>>({});
@@ -136,41 +157,15 @@ function StampDetailContent() {
     router.replace('/(tabs)' as never);
   }
 
-  const loadDetail = useCallback(async (options?: { silent?: boolean }) => {
-    if (!accessToken || !stampId) {
+  useEffect(() => {
+    if (!detail) {
       return;
     }
 
-    if (!options?.silent) {
-      setIsLoading(true);
-    }
-
-    try {
-      const nextDetail = await fetchStampDetail(accessToken, stampId, claims?.sub);
-      setDetail(nextDetail);
-      setVisitDrafts(
-        Object.fromEntries(
-          nextDetail.myVisits.map((visit) => [visit.ID, getVisitTimestamp(visit) ?? ''])
-        )
-      );
-      setError(null);
-    } catch (nextError) {
-      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
-        await logout();
-        return;
-      }
-
-      setError(nextError instanceof Error ? nextError.message : 'Unknown error');
-    } finally {
-      if (!options?.silent) {
-        setIsLoading(false);
-      }
-    }
-  }, [accessToken, claims?.sub, logout, stampId]);
-
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail]);
+    setVisitDrafts(
+      Object.fromEntries(detail.myVisits.map((visit) => [visit.ID, getVisitTimestamp(visit) ?? '']))
+    );
+  }, [detail]);
 
   async function handleShare() {
     if (!detail) {
@@ -196,6 +191,17 @@ function StampDetailContent() {
     await Linking.openURL(url);
   }
 
+  function handleShowOnMap() {
+    if (!detail?.stamp.ID) {
+      return;
+    }
+
+    router.push({
+      pathname: '/(tabs)/map',
+      params: { stampId: detail.stamp.ID },
+    } as never);
+  }
+
   async function handleStampVisit() {
     if (!accessToken || !stampId || isStamping) {
       return;
@@ -205,7 +211,12 @@ function StampDetailContent() {
 
     try {
       await createStamping(accessToken, stampId);
-      await loadDetail({ silent: true });
+      await refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+      ]);
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -231,7 +242,12 @@ function StampDetailContent() {
 
     try {
       await deleteStamping(accessToken, stampingId);
-      await loadDetail({ silent: true });
+      await refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+      ]);
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -284,7 +300,12 @@ function StampDetailContent() {
         [stampingId]: nextVisitedAt,
       }));
       await updateStamping(accessToken, stampingId, nextVisitedAt);
-      await loadDetail({ silent: true });
+      await refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+      ]);
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -362,7 +383,7 @@ function StampDetailContent() {
     );
   }
 
-  if (isLoading) {
+  if (isPending && !detail) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
@@ -373,12 +394,12 @@ function StampDetailContent() {
     );
   }
 
-  if (error) {
+  if (error && !detail) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
           <Text style={styles.errorTitle}>Details konnten nicht geladen werden</Text>
-          <Text style={styles.errorBody}>{error}</Text>
+          <Text style={styles.errorBody}>{error.message}</Text>
         </View>
       </SafeAreaView>
     );
@@ -396,6 +417,7 @@ function StampDetailContent() {
 
   const { stamp } = detail;
   const visited = !!stamp.hasVisited;
+  const showDeferredSkeletons = isFetching && isPlaceholderData;
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
@@ -434,12 +456,26 @@ function StampDetailContent() {
 
         <View style={styles.body}>
           <Text style={styles.title}>{stamp.name}</Text>
-          <Text style={styles.description}>
-            {stamp.description?.trim() || 'Keine Beschreibung fuer diese Stempelstelle verfuegbar.'}
-          </Text>
+          {stamp.description?.trim() ? (
+            <Text style={styles.description}>{stamp.description.trim()}</Text>
+          ) : showDeferredSkeletons ? (
+            <View style={styles.descriptionSkeleton}>
+              <SkeletonLine width="100%" />
+              <SkeletonLine width="92%" />
+              <SkeletonLine width="64%" />
+            </View>
+          ) : (
+            <Text style={styles.description}>Keine Beschreibung fuer diese Stempelstelle verfuegbar.</Text>
+          )}
 
           <Section title="Stempel in der Nähe">
-            {detail.nearbyStamps.length > 0 ? (
+            {showDeferredSkeletons ? (
+              <>
+                <SkeletonRow />
+                <SkeletonRow />
+                <SkeletonRow />
+              </>
+            ) : detail.nearbyStamps.length > 0 ? (
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
                   key={neighbor.ID}
@@ -466,7 +502,13 @@ function StampDetailContent() {
           </Section>
 
           <Section title="Parkplätze in der Nähe">
-            {detail.nearbyParking.length > 0 ? (
+            {showDeferredSkeletons ? (
+              <>
+                <SkeletonLine width="86%" />
+                <SkeletonLine width="78%" />
+                <SkeletonLine width="82%" />
+              </>
+            ) : detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((parking) => (
                 <View key={parking.ID} style={styles.simpleItem}>
                   <Text style={styles.simpleItemTitle}>
@@ -481,15 +523,20 @@ function StampDetailContent() {
           </Section>
 
           <Section title="Freunde hier gewesen">
-            {detail.friendVisits.length > 0 ? (
-              detail.friendVisits.map((visit, index) => (
-                <View key={visit.id} style={styles.friendRow}>
-                  <View style={[styles.avatarDot, index % 2 === 0 ? styles.avatarDotGreen : styles.avatarDotSand]} />
-                  <Text style={styles.friendRowText}>
-                    {visit.name} {'\u2022'} {formatVisitDate(visit.createdAt)}
-                  </Text>
-                </View>
-              ))
+            {showDeferredSkeletons ? (
+              <>
+                <SkeletonRow />
+                <SkeletonRow />
+              </>
+            ) : detail.friendVisits.length > 0 ? (
+              <FriendsList
+                items={detail.friendVisits.map((visit) => ({
+                  id: visit.id,
+                  name: visit.name,
+                  image: visit.picture,
+                  subtitle: `Zuletzt besucht: ${formatVisitDate(visit.createdAt)}`,
+                }))}
+              />
             ) : (
               <Text style={styles.emptySectionText}>Noch keine Freundesbesuche fuer diese Stelle.</Text>
             )}
@@ -513,7 +560,12 @@ function StampDetailContent() {
                 </Pressable>
               ) : null
             }>
-            {detail.myVisits.length > 0 ? (
+            {showDeferredSkeletons ? (
+              <>
+                <SkeletonLine width="72%" />
+                <SkeletonLine width="58%" />
+              </>
+            ) : detail.myVisits.length > 0 ? (
               detail.myVisits.map((visit) => (
                 <View key={visit.ID} style={styles.visitCard}>
                   {isEditingVisits ? (
@@ -560,17 +612,40 @@ function StampDetailContent() {
 
       <View pointerEvents="box-none" style={styles.bottomDock}>
         <View style={styles.bottomActions}>
-          <Pressable onPress={handleStartNavigation} style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}>
-            <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
-          </Pressable>
+          <View style={styles.secondaryButtonRow}>
+            <Pressable
+              onPress={handleStartNavigation}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                styles.secondaryButtonHalf,
+                styles.secondaryButtonWithIcon,
+                pressed && styles.secondaryButtonPressed,
+              ]}>
+              <Feather color="#2e3a2e" name="navigation" size={16} />
+              <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleShowOnMap}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                styles.secondaryButtonHalf,
+                styles.secondaryButtonWithIcon,
+                pressed && styles.secondaryButtonPressed,
+              ]}>
+              <Feather color="#2e3a2e" name="map-pin" size={16} />
+              <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
+            </Pressable>
+          </View>
           <Pressable
             disabled={isStamping}
             onPress={handleStampVisit}
             style={({ pressed }) => [
               styles.primaryButton,
+              styles.primaryButtonWithIcon,
               isStamping && styles.primaryButtonDisabled,
               pressed && !isStamping && styles.primaryButtonPressed,
             ]}>
+            <Feather color="#f5f3ee" name={visited ? 'refresh-cw' : 'check-circle'} size={16} />
             <Text style={styles.primaryButtonLabel}>
               {isStamping
                 ? 'Stemple...'
@@ -717,6 +792,9 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     gap: 12,
   },
+  descriptionSkeleton: {
+    gap: 8,
+  },
   title: {
     color: '#1e2a1e',
     fontSize: 24,
@@ -808,6 +886,25 @@ const styles = StyleSheet.create({
   simpleItem: {
     gap: 2,
   },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  skeletonBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#ece6db',
+  },
+  skeletonColumn: {
+    flex: 1,
+    gap: 8,
+  },
+  skeletonLine: {
+    borderRadius: 999,
+    backgroundColor: '#ece6db',
+  },
   visitCard: {
     gap: 8,
   },
@@ -858,28 +955,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  friendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  avatarDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-  },
-  avatarDotGreen: {
-    backgroundColor: '#dde9df',
-  },
-  avatarDotSand: {
-    backgroundColor: '#eadfcb',
-  },
-  friendRowText: {
-    color: '#1e2a1e',
-    fontSize: 12,
-    lineHeight: 16,
-    flex: 1,
-  },
   emptySectionText: {
     color: '#6b7a6b',
     fontSize: 12,
@@ -894,12 +969,24 @@ const styles = StyleSheet.create({
   bottomActions: {
     gap: 8,
   },
+  secondaryButtonRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   secondaryButton: {
     height: 45,
     borderRadius: 14,
     backgroundColor: '#e9e2d6',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  secondaryButtonHalf: {
+    flex: 1,
+  },
+  secondaryButtonWithIcon: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 12,
   },
   secondaryButtonPressed: {
     opacity: 0.9,
@@ -916,6 +1003,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#2e6b4b',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  primaryButtonWithIcon: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
   },
   primaryButtonDisabled: {
     backgroundColor: '#7aa287',

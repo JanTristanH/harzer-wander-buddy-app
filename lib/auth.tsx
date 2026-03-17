@@ -5,6 +5,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { jwtDecode } from 'jwt-decode';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import { fetchCurrentUserProfile, type CurrentUserProfileData } from '@/lib/api';
 import { appConfig, getMissingConfig } from '@/lib/config';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -34,6 +35,7 @@ type AuthContextValue = {
   refreshToken: string | null;
   issuedAt: number | null;
   expiresIn: number | null;
+  currentUserProfile: CurrentUserProfileData | null;
   hasCompletedOnboarding: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -43,6 +45,8 @@ type AuthContextValue = {
   signup: () => Promise<void>;
   logout: () => Promise<void>;
   resetApp: () => Promise<void>;
+  preloadCurrentUserProfile: () => Promise<CurrentUserProfileData | null>;
+  setCurrentUserProfile: (profile: CurrentUserProfileData | null) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -127,8 +131,17 @@ async function loadOnboardingState() {
   return storedValue === 'true';
 }
 
+function isMissingCurrentUserProfile(error: unknown) {
+  return (
+    error instanceof Error &&
+    /not found/i.test(error.message) &&
+    /Users/i.test(error.message)
+  );
+}
+
 export function AuthProvider({ children }: React.PropsWithChildren) {
   const [authState, setAuthState] = useState<AuthState | null>(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfileData | null>(null);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -144,6 +157,40 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
 
     return AuthSession.fetchDiscoveryAsync(getIssuer());
   }, [configError]);
+
+  const preloadCurrentUserProfileForToken = useCallback(async (accessToken: string | null) => {
+    if (!accessToken) {
+      setCurrentUserProfile(null);
+      setHasCompletedOnboarding(false);
+      await saveOnboardingState(false);
+      return null;
+    }
+
+    try {
+      const profile = await fetchCurrentUserProfile(accessToken);
+      setCurrentUserProfile(profile);
+      setHasCompletedOnboarding(true);
+      await saveOnboardingState(true);
+      return profile;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'UnauthorizedError') {
+        throw error;
+      }
+
+      if (isMissingCurrentUserProfile(error)) {
+        setCurrentUserProfile(null);
+        setHasCompletedOnboarding(false);
+        await saveOnboardingState(false);
+        return null;
+      }
+
+      throw error;
+    }
+  }, []);
+
+  const preloadCurrentUserProfile = useCallback(async () => {
+    return preloadCurrentUserProfileForToken(authState?.accessToken ?? null);
+  }, [authState?.accessToken, preloadCurrentUserProfileForToken]);
 
   useEffect(() => {
     let isMounted = true;
@@ -198,12 +245,18 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           issuedAt: nextTokenResponse.issuedAt,
           expiresIn: nextTokenResponse.expiresIn,
         });
-        setHasCompletedOnboarding(true);
-        await saveOnboardingState(true);
+        await preloadCurrentUserProfileForToken(nextTokenResponse.accessToken);
+        if (!isMounted) {
+          return;
+        }
       } catch (error) {
         console.error('Failed to restore auth session', error);
         setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
         await clearTokenResponse();
+        if (isMounted) {
+          setAuthState(null);
+          setCurrentUserProfile(null);
+        }
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -224,6 +277,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     }
 
     setAuthError(null);
+    setIsLoading(true);
 
     try {
       const discovery = await resolveDiscovery();
@@ -271,7 +325,6 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       );
 
       await saveTokenResponse(tokenResponse);
-      await saveOnboardingState(true);
       setAuthState({
         accessToken: tokenResponse.accessToken,
         idToken: tokenResponse.idToken,
@@ -279,12 +332,14 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         issuedAt: tokenResponse.issuedAt,
         expiresIn: tokenResponse.expiresIn,
       });
-      setHasCompletedOnboarding(true);
+      await preloadCurrentUserProfileForToken(tokenResponse.accessToken);
     } catch (error) {
       console.error(`Auth0 ${mode} failed`, error);
       setAuthError(error instanceof Error ? error.message : `Auth0 ${mode} failed`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [configError, resolveDiscovery]);
+  }, [configError, preloadCurrentUserProfileForToken, resolveDiscovery]);
 
   const login = useCallback(async () => {
     await authenticate('login');
@@ -298,6 +353,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     setAuthError(null);
     await clearTokenResponse();
     setAuthState(null);
+    setCurrentUserProfile(null);
 
     try {
       if (!configError && appConfig.auth0ClientId && appConfig.auth0Domain) {
@@ -315,6 +371,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const resetApp = useCallback(async () => {
     await saveOnboardingState(false);
     setHasCompletedOnboarding(false);
+    setCurrentUserProfile(null);
     await logout();
   }, [logout]);
 
@@ -325,6 +382,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       refreshToken: authState?.refreshToken ?? null,
       issuedAt: authState?.issuedAt ?? null,
       expiresIn: authState?.expiresIn ?? null,
+      currentUserProfile,
       hasCompletedOnboarding,
       isAuthenticated: !!authState?.accessToken,
       isLoading,
@@ -334,6 +392,8 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       signup,
       logout,
       resetApp,
+      preloadCurrentUserProfile,
+      setCurrentUserProfile,
     }),
     [
       authError,
@@ -343,11 +403,14 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       authState?.issuedAt,
       authState?.refreshToken,
       configError,
+      currentUserProfile,
       login,
       hasCompletedOnboarding,
       isLoading,
       logout,
+      preloadCurrentUserProfile,
       resetApp,
+      setCurrentUserProfile,
       signup,
     ]
   );

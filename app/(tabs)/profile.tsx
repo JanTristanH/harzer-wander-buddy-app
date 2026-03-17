@@ -1,6 +1,5 @@
-import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
 import {
   ProfileErrorState,
@@ -8,8 +7,8 @@ import {
   ProfileView,
   type ProfileViewModel,
 } from '@/components/profile-view';
-import { fetchProfileOverview, type ProfileOverviewData } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useProfileOverviewQuery } from '@/lib/queries';
 
 type StampFilter = 'visited' | 'missing' | 'all';
 type ProfileClaims = {
@@ -20,41 +19,12 @@ type ProfileClaims = {
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { accessToken, logout, resetApp } = useAuth();
+  const { currentUserProfile, logout, resetApp } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims & { sub?: string }>();
-  const [data, setData] = useState<ProfileOverviewData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [activeStampFilter, setActiveStampFilter] = useState<StampFilter>('visited');
-
-  const loadProfile = useCallback(async () => {
-    if (!accessToken) {
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const nextData = await fetchProfileOverview(accessToken, claims?.sub);
-      setData(nextData);
-      setError(null);
-    } catch (nextError) {
-      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
-        await logout();
-        return;
-      }
-
-      setError(nextError instanceof Error ? nextError.message : 'Unknown error');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [accessToken, claims?.sub, logout]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadProfile();
-    }, [loadProfile])
-  );
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const { data, error, isFetching, isPending, isPlaceholderData, refetch } = useProfileOverviewQuery();
+  const blockingError = !data ? error : null;
 
   const viewModel = useMemo<ProfileViewModel | null>(() => {
     if (!data) {
@@ -64,8 +34,8 @@ export default function ProfileScreen() {
     const collectorSinceText = data.collectorSinceYear
       ? `Stempel-Sammler seit ${data.collectorSinceYear}`
       : 'Stempel-Sammler';
-    const profileName = data.name || claims?.name || claims?.sub || 'Profil';
-    const profilePicture = data.picture || claims?.picture;
+    const profileName = data.name || currentUserProfile?.name || claims?.name || claims?.sub || 'Profil';
+    const profilePicture = data.picture || currentUserProfile?.picture || claims?.picture;
 
     const filteredStamps = data.stamps.filter((stamp) => {
       if (activeStampFilter === 'visited') {
@@ -118,6 +88,19 @@ export default function ProfileScreen() {
       stampItems: filteredStamps.map((stamp) => ({ kind: 'simple' as const, stamp })),
       onStampPress: (stampId) => router.push(`/stamps/${stampId}` as never),
       emptyStampText: 'Keine Stempelstellen fuer diesen Filter verfuegbar.',
+      onRefresh: () => {
+        void (async () => {
+          setIsPullRefreshing(true);
+          try {
+            await refetch();
+          } finally {
+            setIsPullRefreshing(false);
+          }
+        })();
+      },
+      refreshing: isPullRefreshing,
+      refreshHint: isFetching && !isPending ? 'Aktualisiere Daten im Hintergrund...' : undefined,
+      showDeferredSkeletons: isPlaceholderData,
       footerButtons: [
         {
           key: 'reset-app',
@@ -135,16 +118,32 @@ export default function ProfileScreen() {
         },
       ],
     };
-  }, [activeStampFilter, claims?.name, claims?.picture, claims?.sub, data, logout, resetApp, router]);
+  }, [
+    activeStampFilter,
+    claims?.name,
+    claims?.picture,
+    claims?.sub,
+    currentUserProfile?.name,
+    currentUserProfile?.picture,
+    data,
+    isFetching,
+    isPending,
+    isPlaceholderData,
+    isPullRefreshing,
+    logout,
+    refetch,
+    resetApp,
+    router,
+  ]);
 
-  if (isLoading) {
+  if (isPending && !data) {
     return <ProfileLoadingState label="Profil wird geladen..." />;
   }
 
-  if (error || !viewModel) {
+  if (blockingError || !viewModel) {
     return (
       <ProfileErrorState
-        body={error || 'Keine Daten verfuegbar.'}
+        body={blockingError?.message || 'Keine Daten verfuegbar.'}
         title="Profil konnte nicht geladen werden"
       />
     );

@@ -1,6 +1,6 @@
-import { useFocusEffect } from '@react-navigation/native';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
 
 import {
@@ -12,12 +12,11 @@ import {
 import {
   acceptPendingFriendshipRequest,
   createFriendRequest,
-  fetchUserProfileOverview,
   removeFriendship,
   updateFriendshipPermission,
-  type UserProfileOverviewData,
 } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { queryKeys, useUserProfileOverviewQuery } from '@/lib/queries';
 
 type ComparisonFilter = 'shared' | 'friendOnly' | 'meOnly' | 'neither';
 
@@ -27,52 +26,20 @@ export default function FriendProfileScreen() {
   const userIdParam = Array.isArray(params.userId) ? params.userId[0] : params.userId;
   const userId = userIdParam ? decodeURIComponent(userIdParam) : '';
   const { accessToken, logout } = useAuth();
-  const [data, setData] = useState<UserProfileOverviewData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const claims = useIdTokenClaims<{ sub?: string }>();
+  const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<ComparisonFilter>('shared');
   const [isMutating, setIsMutating] = useState(false);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const { data, error, isFetching, isPending, isPlaceholderData, refetch } =
+    useUserProfileOverviewQuery(userId);
+  const blockingError = !data ? error : null;
 
-  const loadProfile = useCallback(async (refresh = false) => {
-    if (!accessToken || !userId) {
-      return;
+  useEffect(() => {
+    if (data?.relationship === 'self') {
+      router.replace('/(tabs)/profile' as never);
     }
-
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
-
-    try {
-      const nextData = await fetchUserProfileOverview(accessToken, userId);
-
-      if (nextData.relationship === 'self') {
-        router.replace('/(tabs)/profile' as never);
-        return;
-      }
-
-      setData(nextData);
-      setError(null);
-    } catch (nextError) {
-      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
-        await logout();
-        return;
-      }
-
-      setError(nextError instanceof Error ? nextError.message : 'Unknown error');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [accessToken, logout, router, userId]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadProfile();
-    }, [loadProfile])
-  );
+  }, [data?.relationship, router]);
 
   const handleMutationError = useCallback(
     async (nextError: unknown, title: string) => {
@@ -85,6 +52,13 @@ export default function FriendProfileScreen() {
     },
     [logout]
   );
+
+  const invalidateRelationshipQueries = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+    ]);
+  }, [claims?.sub, queryClient]);
 
   const viewModel = useMemo<ProfileViewModel | null>(() => {
     if (!data) {
@@ -153,7 +127,8 @@ export default function FriendProfileScreen() {
 
                   try {
                     await updateFriendshipPermission(accessToken, data.friendshipId, value);
-                    await loadProfile();
+                    await refetch();
+                    await invalidateRelationshipQueries();
                   } catch (nextError) {
                     await handleMutationError(nextError, 'Freundschaft konnte nicht aktualisiert werden');
                   } finally {
@@ -184,7 +159,8 @@ export default function FriendProfileScreen() {
 
                           try {
                             await removeFriendship(accessToken, data.friendshipId!);
-                            await loadProfile();
+                            await refetch();
+                            await invalidateRelationshipQueries();
                           } catch (nextError) {
                             await handleMutationError(nextError, 'Freundschaft konnte nicht entfernt werden');
                           } finally {
@@ -212,7 +188,8 @@ export default function FriendProfileScreen() {
 
                     try {
                       await acceptPendingFriendshipRequest(accessToken, data.pendingRequestId);
-                      await loadProfile();
+                      await refetch();
+                      await invalidateRelationshipQueries();
                     } catch (nextError) {
                       await handleMutationError(nextError, 'Anfrage konnte nicht bestaetigt werden');
                     } finally {
@@ -243,7 +220,8 @@ export default function FriendProfileScreen() {
 
                       try {
                         await createFriendRequest(accessToken, data.userId);
-                        await loadProfile();
+                        await refetch();
+                        await invalidateRelationshipQueries();
                       } catch (nextError) {
                         await handleMutationError(nextError, 'Anfrage konnte nicht gesendet werden');
                       } finally {
@@ -281,23 +259,35 @@ export default function FriendProfileScreen() {
       })),
       onStampPress: (stampId) => router.push(`/stamps/${stampId}` as never),
       emptyStampText: 'Keine Stempelstellen fuer diesen Vergleich verfuegbar.',
-      onRefresh: () => void loadProfile(true),
-      refreshing: isRefreshing,
+      onRefresh: () => {
+        void (async () => {
+          setIsPullRefreshing(true);
+          try {
+            await refetch();
+          } finally {
+            setIsPullRefreshing(false);
+          }
+        })();
+      },
+      refreshing: isPullRefreshing,
+      refreshHint:
+        isFetching && !isPending ? 'Aktualisiere Profildaten im Hintergrund...' : undefined,
+      showDeferredSkeletons: isPlaceholderData,
     };
-  }, [accessToken, activeFilter, data, handleMutationError, isMutating, isRefreshing, loadProfile, router]);
+  }, [accessToken, activeFilter, data, handleMutationError, invalidateRelationshipQueries, isFetching, isMutating, isPending, isPlaceholderData, isPullRefreshing, refetch, router]);
 
   if (!userId) {
     return <ProfileErrorState body="Keine Benutzer-ID uebergeben." title="Profil konnte nicht geladen werden" />;
   }
 
-  if (isLoading) {
+  if (isPending && !data) {
     return <ProfileLoadingState label="Freundesprofil wird geladen..." />;
   }
 
-  if (error || !viewModel) {
+  if (blockingError || !viewModel) {
     return (
       <ProfileErrorState
-        body={error || 'Keine Daten verfuegbar.'}
+        body={blockingError?.message || 'Keine Daten verfuegbar.'}
         title="Freundesprofil konnte nicht geladen werden"
       />
     );

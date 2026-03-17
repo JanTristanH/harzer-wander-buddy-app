@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -16,17 +16,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FriendsList, FriendAvatar } from '@/components/friends-list';
+import { FriendsList } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
 import {
   acceptPendingFriendshipRequest,
   createFriendRequest,
-  fetchFriendsOverview,
   searchUsers,
-  type FriendsOverviewData,
   type SearchUserResult,
 } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { queryKeys, useFriendsOverviewQuery } from '@/lib/queries';
 
 type FriendFilter = 'friends' | 'requests' | 'sent';
 
@@ -73,64 +72,12 @@ function EmptyState({
   );
 }
 
-function SearchResultRow({
-  result,
-  index,
-  status,
-  disabled,
-  onRowPress,
-  onPress,
-}: {
-  result: SearchUserResult;
-  index: number;
-  status: 'request' | 'sent' | 'friend' | 'self';
-  disabled: boolean;
-  onRowPress: () => void;
-  onPress: () => void;
-}) {
-  const actionLabel =
-    status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : status === 'self' ? 'Du' : 'Anfrage';
-
-  return (
-    <View style={styles.searchResultRow}>
-      <Pressable
-        onPress={onRowPress}
-        style={({ pressed }) => [styles.searchResultPressable, pressed && styles.pressed]}>
-        <FriendAvatar image={result.picture} index={index} radius={12} size={40} />
-        <View style={styles.friendBody}>
-          <Text style={styles.friendName}>{result.name}</Text>
-          <Text style={styles.friendMeta}>@{result.id}</Text>
-        </View>
-      </Pressable>
-      <Pressable
-        disabled={disabled}
-        onPress={onPress}
-        style={({ pressed }) => [
-          styles.searchActionButton,
-          status !== 'request' && styles.searchActionButtonMuted,
-          disabled && styles.inlineActionButtonDisabled,
-          pressed && styles.pressed,
-        ]}>
-        <Text
-          style={[
-            styles.searchActionLabel,
-            status !== 'request' && styles.searchActionLabelMuted,
-          ]}>
-          {actionLabel}
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
 export default function FriendsScreen() {
   const router = useRouter();
   const { accessToken, logout } = useAuth();
+  const claims = useIdTokenClaims<{ sub?: string }>();
+  const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<FriendFilter>('friends');
-  const [data, setData] = useState<FriendsOverviewData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [acceptingPendingRequestId, setAcceptingPendingRequestId] = useState<string | null>(null);
   const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,40 +85,10 @@ export default function FriendsScreen() {
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
-
-  const loadFriends = useCallback(async (refresh = false) => {
-    if (!accessToken) {
-      return;
-    }
-
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
-
-    try {
-      const nextData = await fetchFriendsOverview(accessToken);
-      setData(nextData);
-      setError(null);
-    } catch (nextError) {
-      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
-        await logout();
-        return;
-      }
-
-      setError(nextError instanceof Error ? nextError.message : 'Unknown error');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [accessToken, logout]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadFriends();
-    }, [loadFriends])
-  );
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const { data, error, isFetching, isPending, refetch } = useFriendsOverviewQuery();
+  const isRefreshing = isFetching && !isPending;
+  const blockingError = !data ? error : null;
 
   useEffect(() => {
     if (!isSearchModalVisible) {
@@ -228,6 +145,10 @@ export default function FriendsScreen() {
   const sentLabel = `Gesendet${data && data.outgoingRequestCount > 0 ? ` (${data.outgoingRequestCount})` : ''}`;
 
   const sentRequestIds = useMemo(() => new Set((data?.outgoingRequests ?? []).map((item) => item.userId)), [data]);
+  const receivedRequestIds = useMemo(
+    () => new Set((data?.incomingRequests ?? []).map((item) => item.userId)),
+    [data]
+  );
   const friendIds = useMemo(() => new Set((data?.friends ?? []).map((item) => item.id)), [data]);
 
   const closeSearchModal = useCallback(() => {
@@ -259,7 +180,10 @@ export default function FriendsScreen() {
 
       try {
         await acceptPendingFriendshipRequest(accessToken, pendingRequestId);
-        await loadFriends();
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+        ]);
       } catch (nextError) {
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
           await logout();
@@ -274,7 +198,7 @@ export default function FriendsScreen() {
         setAcceptingPendingRequestId(null);
       }
     },
-    [accessToken, loadFriends, logout]
+    [accessToken, claims?.sub, logout, queryClient]
   );
 
   const handleCreateRequest = useCallback(
@@ -287,8 +211,10 @@ export default function FriendsScreen() {
 
       try {
         await createFriendRequest(accessToken, userId);
-        const refreshed = await fetchFriendsOverview(accessToken);
-        setData(refreshed);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+        ]);
         setSearchResults((current) => current.slice());
       } catch (nextError) {
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -304,7 +230,54 @@ export default function FriendsScreen() {
         setSubmittingUserId(null);
       }
     },
-    [accessToken, logout]
+    [accessToken, claims?.sub, logout, queryClient]
+  );
+
+  const searchListItems = useMemo(
+    () =>
+      searchResults.map((result) => {
+        const status: 'request' | 'sent' | 'received' | 'friend' | 'self' =
+          result.id === data?.currentUserId
+            ? 'self'
+            : friendIds.has(result.id) || result.isFriend
+              ? 'friend'
+              : receivedRequestIds.has(result.id)
+                ? 'received'
+                : sentRequestIds.has(result.id)
+                  ? 'sent'
+                  : 'request';
+
+        return {
+          id: result.id,
+          image: result.picture,
+          name: result.name,
+          onPress: () => handleSearchProfilePress(result.id),
+          subtitle: `${result.visitedCount} Stempel • ${result.completionPercent}%`,
+          actionLabel:
+            status === 'sent'
+              ? 'Gesendet'
+              : status === 'received'
+                ? 'Erhalten'
+                : status === 'friend'
+                  ? 'Verbunden'
+                  : status === 'self'
+                    ? 'Du'
+                    : 'Anfrage',
+          actionMuted: status !== 'request',
+          actionDisabled: status !== 'request' || submittingUserId === result.id,
+          onActionPress: () => void handleCreateRequest(result.id),
+        };
+      }),
+    [
+      data?.currentUserId,
+      friendIds,
+      handleCreateRequest,
+      handleSearchProfilePress,
+      receivedRequestIds,
+      searchResults,
+      sentRequestIds,
+      submittingUserId,
+    ]
   );
 
   return (
@@ -314,8 +287,17 @@ export default function FriendsScreen() {
           contentContainerStyle={styles.content}
           refreshControl={
             <RefreshControl
-              onRefresh={() => void loadFriends(true)}
-              refreshing={isRefreshing}
+              onRefresh={() => {
+                void (async () => {
+                  setIsPullRefreshing(true);
+                  try {
+                    await refetch();
+                  } finally {
+                    setIsPullRefreshing(false);
+                  }
+                })();
+              }}
+              refreshing={isPullRefreshing}
               tintColor="#2E6B4B"
             />
           }
@@ -340,18 +322,20 @@ export default function FriendsScreen() {
             />
           </View>
 
-          {isLoading ? (
+          {isRefreshing ? <Text style={styles.refreshHint}>Aktualisiere Daten im Hintergrund...</Text> : null}
+
+          {isPending && !data ? (
             <View style={styles.centered}>
               <ActivityIndicator color="#2E6B4B" size="large" />
               <Text style={styles.helperText}>Freunde werden geladen...</Text>
             </View>
           ) : null}
 
-          {!isLoading && error ? (
-            <EmptyState title="Freunde konnten nicht geladen werden" body={error} />
+          {!isPending && blockingError ? (
+            <EmptyState title="Freunde konnten nicht geladen werden" body={blockingError.message} />
           ) : null}
 
-          {!isLoading && !error && activeFilter === 'friends' ? (
+          {!isPending && !blockingError && activeFilter === 'friends' ? (
             data && data.friends.length > 0 ? (
               <FriendsList
                 items={data.friends.map((friend) => ({
@@ -370,7 +354,7 @@ export default function FriendsScreen() {
             )
           ) : null}
 
-          {!isLoading && !error && activeFilter === 'requests' ? (
+          {!isPending && !blockingError && activeFilter === 'requests' ? (
             data && data.incomingRequests.length > 0 ? (
               <FriendsList
                 items={data.incomingRequests.map((request) => ({
@@ -392,7 +376,7 @@ export default function FriendsScreen() {
             )
           ) : null}
 
-          {!isLoading && !error && activeFilter === 'sent' ? (
+          {!isPending && !blockingError && activeFilter === 'sent' ? (
             data && data.outgoingRequests.length > 0 ? (
               <FriendsList
                 items={data.outgoingRequests.map((request) => ({
@@ -481,30 +465,9 @@ export default function FriendsScreen() {
                   <Text style={styles.searchStatusText}>Keine passenden Nutzer gefunden.</Text>
                 ) : null}
 
-                {!isSearchLoading && !searchError && searchResults.length > 0
-                  ? searchResults.map((result, index) => {
-                      const status: 'request' | 'sent' | 'friend' | 'self' =
-                        result.id === data?.currentUserId
-                          ? 'self'
-                          : friendIds.has(result.id) || result.isFriend
-                            ? 'friend'
-                            : sentRequestIds.has(result.id)
-                              ? 'sent'
-                              : 'request';
-
-                      return (
-                        <SearchResultRow
-                          key={result.id}
-                          disabled={status !== 'request' || submittingUserId === result.id}
-                          index={index}
-                          onRowPress={() => handleSearchProfilePress(result.id)}
-                          onPress={() => void handleCreateRequest(result.id)}
-                          result={result}
-                          status={status === 'request' && submittingUserId === result.id ? 'sent' : status}
-                        />
-                      );
-                    })
-                  : null}
+                {!isSearchLoading && !searchError && searchResults.length > 0 ? (
+                  <FriendsList items={searchListItems} />
+                ) : null}
               </View>
 
             </View>
@@ -572,22 +535,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 12,
   },
-  friendBody: {
-    flex: 1,
-  },
-  friendName: {
-    color: '#1E2A1E',
-    fontFamily: Fonts.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    lineHeight: 20,
-    marginBottom: 2,
-  },
-  friendMeta: {
+  refreshHint: {
     color: '#6B7A6B',
     fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 8,
   },
   inlineActionButtonDisabled: {
     opacity: 0.7,
@@ -700,35 +653,6 @@ const styles = StyleSheet.create({
   searchResultsColumn: {
     gap: 10,
     minHeight: 120,
-  },
-  searchResultRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  searchResultPressable: {
-    alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 10,
-  },
-  searchActionButton: {
-    backgroundColor: '#2E6B4B',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  searchActionButtonMuted: {
-    backgroundColor: '#E9E2D6',
-  },
-  searchActionLabel: {
-    color: '#F5F3EE',
-    fontFamily: Fonts.sans,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  searchActionLabelMuted: {
-    color: '#2E3A2E',
   },
   searchStatusWrap: {
     alignItems: 'center',

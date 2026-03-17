@@ -1,9 +1,8 @@
 import { Feather } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -17,8 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { StampListItem } from '@/components/stamp-list-item';
-import { fetchLatestVisitedStamp, fetchStampboxes, type LatestVisitedStamp, type Stampbox } from '@/lib/api';
-import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useStampsOverviewQuery } from '@/lib/queries';
 
 type FilterKey = 'all' | 'visited' | 'open' | 'near';
 type LocationState = 'idle' | 'loading' | 'granted' | 'denied';
@@ -62,60 +60,32 @@ function formatDistance(distanceKm: number | null) {
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
 }
 
+function formatVisitDate(value?: string) {
+  if (!value) {
+    return 'Unbekanntes Datum';
+  }
+
+  return new Date(value).toLocaleString('de-DE', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export default function StampsScreen() {
   const router = useRouter();
-  const { accessToken, logout } = useAuth();
-  const claims = useIdTokenClaims<{ sub?: string }>();
-  const [stamps, setStamps] = useState<Stampbox[]>([]);
-  const [lastVisited, setLastVisited] = useState<LatestVisitedStamp | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [locationState, setLocationState] = useState<LocationState>('idle');
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-
-  const loadStamps = useCallback(
-    async (refresh = false) => {
-      if (!accessToken) {
-        return;
-      }
-
-      if (refresh) {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
-      }
-
-      try {
-        const [nextStamps, nextLastVisited] = await Promise.all([
-          fetchStampboxes(accessToken),
-          fetchLatestVisitedStamp(accessToken, claims?.sub),
-        ]);
-        setStamps(nextStamps);
-        setLastVisited(nextLastVisited);
-        setError(null);
-      } catch (nextError) {
-        if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
-          await logout();
-          return;
-        }
-
-        setError(nextError instanceof Error ? nextError.message : 'Unknown error');
-      } finally {
-        setIsLoading(false);
-        setIsRefreshing(false);
-      }
-    },
-    [accessToken, claims?.sub, logout]
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadStamps();
-    }, [loadStamps])
-  );
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const { data, error, isFetching, isPending, refetch } = useStampsOverviewQuery();
+  const stamps = data?.stamps ?? [];
+  const lastVisited = data?.lastVisited ?? null;
+  const isRefreshing = isFetching && !isPending;
+  const blockingError = !data ? error : null;
 
   useEffect(() => {
     let isMounted = true;
@@ -217,10 +187,12 @@ export default function StampsScreen() {
         </View>
         <Text style={styles.progressHint}>
           {lastVisited
-            ? `Letzter Besuch: Stempel ${lastVisited.stampNumber || '--'} • ${lastVisited.stampName}`
+            ? `Letzter Besuch: Stempel ${lastVisited.stampNumber || '--'} • ${lastVisited.stampName} • ${formatVisitDate(lastVisited.visitedAt)}`
             : 'Noch keine besuchten Stempelstellen'}
         </Text>
       </LinearGradient>
+
+      {isRefreshing ? <Text style={styles.refreshHint}>Aktualisiere Daten im Hintergrund...</Text> : null}
 
       <View style={styles.searchShell}>
         <View style={styles.searchIconWrap}>
@@ -263,7 +235,7 @@ export default function StampsScreen() {
     </View>
   );
 
-  if (isLoading) {
+  if (isPending && !data) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
@@ -274,12 +246,12 @@ export default function StampsScreen() {
     );
   }
 
-  if (error) {
+  if (blockingError) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
           <Text style={styles.errorTitle}>Stempelstellen konnten nicht geladen werden</Text>
-          <Text style={styles.errorBody}>{error}</Text>
+          <Text style={styles.errorBody}>{blockingError.message}</Text>
         </View>
       </SafeAreaView>
     );
@@ -311,8 +283,17 @@ export default function StampsScreen() {
         contentInset={{ bottom: 160 }}
         refreshControl={
           <RefreshControl
-            onRefresh={() => loadStamps(true)}
-            refreshing={isRefreshing}
+            onRefresh={() => {
+              void (async () => {
+                setIsPullRefreshing(true);
+                try {
+                  await refetch();
+                } finally {
+                  setIsPullRefreshing(false);
+                }
+              })();
+            }}
+            refreshing={isPullRefreshing}
             tintColor="#2e6b4b"
           />
         }
@@ -410,6 +391,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     opacity: 0.9,
+  },
+  refreshHint: {
+    color: '#4d6d56',
+    fontSize: 13,
+    marginTop: 12,
   },
   searchShell: {
     flexDirection: 'row',

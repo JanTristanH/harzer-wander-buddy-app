@@ -93,7 +93,9 @@ function FriendsListRow({
           </Text>
         </Pressable>
       ) : item.onPress ? (
-        <Feather color="#2E6B4B" name="chevron-right" size={18} />
+        <Pressable hitSlop={8} onPress={item.onPress} style={({ pressed }) => [styles.chevronButton, pressed && styles.pressed]}>
+          <Feather color="#2E6B4B" name="chevron-right" size={18} />
+        </Pressable>
       ) : null}
     </View>
   );
@@ -173,6 +175,12 @@ const styles = StyleSheet.create({
   },
   inlineActionLabelMuted: {
     color: '#2E3A2E',
+  },
+  chevronButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 32,
+    minWidth: 32,
   },
   pressed: {
     opacity: 0.88,

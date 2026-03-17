@@ -61,7 +61,7 @@ export default function LoginScreen() {
   const { authError, configError, hasCompletedOnboarding, isAuthenticated, isLoading, login, signup } =
     useAuth();
 
-  if (isAuthenticated) {
+  if (isAuthenticated && !isLoading) {
     return <Redirect href="/(tabs)" />;
   }
 

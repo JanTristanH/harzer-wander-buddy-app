@@ -25,7 +25,6 @@ import { FriendsList, type FriendsListItem } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
 import {
   createFriendRequest,
-  fetchCurrentUserProfile,
   searchUsers,
   updateCurrentUserProfile,
   uploadAttachment,
@@ -101,12 +100,14 @@ export default function OnboardingScreen() {
     accessToken,
     authError,
     configError,
+    currentUserProfile,
     hasCompletedOnboarding,
     isAuthenticated,
     login,
     signup,
     isLoading,
     logout,
+    setCurrentUserProfile,
   } = useAuth();
   const claims = useIdTokenClaims<LoginClaims>();
   const [locationPermission, setLocationPermission] = useState<LocationPermissionState>('unknown');
@@ -164,50 +165,18 @@ export default function OnboardingScreen() {
       return;
     }
 
-    setProfileName(claims?.name || claims?.nickname || claims?.given_name || '');
-    setProfilePicture(claims?.picture || null);
-  }, [claims?.given_name, claims?.name, claims?.nickname, claims?.picture, isAuthenticated]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadProfile() {
-      if (!accessToken || !isAuthenticated) {
-        return;
-      }
-
-      try {
-        const currentProfile = await fetchCurrentUserProfile(accessToken);
-        if (cancelled) {
-          return;
-        }
-
-        setProfileName(currentProfile.name || claims?.name || claims?.nickname || claims?.given_name || '');
-        setProfilePicture(currentProfile.picture || claims?.picture || null);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        if (error instanceof Error && error.name === 'UnauthorizedError') {
-          await logout();
-        }
-      }
-    }
-
-    void loadProfile();
-
-    return () => {
-      cancelled = true;
-    };
+    setProfileName(
+      currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+    );
+    setProfilePicture(currentUserProfile?.picture || claims?.picture || null);
   }, [
-    accessToken,
     claims?.given_name,
     claims?.name,
     claims?.nickname,
     claims?.picture,
+    currentUserProfile?.name,
+    currentUserProfile?.picture,
     isAuthenticated,
-    logout,
   ]);
 
   useEffect(() => {
@@ -350,6 +319,11 @@ export default function OnboardingScreen() {
         picture: nextPicture,
       });
 
+      setCurrentUserProfile({
+        id: currentUserProfile?.id || claims?.sub || nextName,
+        name: nextName,
+        picture: nextPicture,
+      });
       setProfileName(nextName);
       setProfilePicture(nextPicture || null);
       setSelectedProfileImage(null);
@@ -369,10 +343,13 @@ export default function OnboardingScreen() {
   }, [
     accessToken,
     claims?.picture,
+    claims?.sub,
+    currentUserProfile?.id,
     isAuthenticated,
     logout,
     profileName,
     profilePicture,
+    setCurrentUserProfile,
     selectedProfileImage,
   ]);
 
@@ -429,6 +406,7 @@ export default function OnboardingScreen() {
           id: result.id,
           name: result.name,
           image: result.picture,
+          subtitle: `${result.visitedCount} Stempel • ${result.completionPercent}%`,
           actionLabel:
             status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : 'Anfrage',
           actionMuted: status !== 'request',

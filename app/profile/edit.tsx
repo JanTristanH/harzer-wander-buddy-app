@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -18,13 +19,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AuthGuard } from '@/components/auth-guard';
 import { Fonts } from '@/constants/theme';
 import {
-  fetchCurrentUserProfile,
   updateCurrentUserProfile,
   uploadAttachment,
   type CurrentUserProfileData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import { queryKeys } from '@/lib/queries';
 
 type SelectedImage = {
   uri: string;
@@ -40,8 +41,9 @@ type ProfileClaims = {
 
 function ProfileEditContent() {
   const router = useRouter();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, currentUserProfile, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims>();
+  const queryClient = useQueryClient();
   const [profile, setProfile] = useState<CurrentUserProfileData | null>(null);
   const [name, setName] = useState('');
   const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
@@ -57,7 +59,12 @@ function ProfileEditContent() {
     setIsLoading(true);
 
     try {
-      const nextProfile = await fetchCurrentUserProfile(accessToken);
+      const nextProfile = currentUserProfile || (await preloadCurrentUserProfile());
+      if (!nextProfile) {
+        setError('Keine Profildaten verfuegbar.');
+        return;
+      }
+
       const resolvedProfile = {
         ...nextProfile,
         name: nextProfile.name || claims?.name || claims?.sub || nextProfile.id,
@@ -77,7 +84,15 @@ function ProfileEditContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, claims?.name, claims?.picture, claims?.sub, logout]);
+  }, [
+    accessToken,
+    claims?.name,
+    claims?.picture,
+    claims?.sub,
+    currentUserProfile,
+    logout,
+    preloadCurrentUserProfile,
+  ]);
 
   useEffect(() => {
     void loadProfile();
@@ -156,6 +171,12 @@ function ProfileEditContent() {
         name: nextName,
         picture: nextPicture,
       });
+      setCurrentUserProfile({
+        id: profile.id,
+        name: nextName,
+        picture: nextPicture,
+      });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
 
       router.back();
     } catch (nextError) {
@@ -171,7 +192,18 @@ function ProfileEditContent() {
     } finally {
       setIsSaving(false);
     }
-  }, [accessToken, hasChanges, logout, profile, router, selectedImage, trimmedName]);
+  }, [
+    accessToken,
+    claims?.sub,
+    hasChanges,
+    logout,
+    profile,
+    queryClient,
+    router,
+    selectedImage,
+    setCurrentUserProfile,
+    trimmedName,
+  ]);
 
   if (isLoading) {
     return (
