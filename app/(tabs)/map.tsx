@@ -86,8 +86,10 @@ const SEARCH_RESULT_LIMIT = 6;
 const SEARCH_TARGET_DELTA = 0.06;
 const SELECTION_TARGET_DELTA = 0.08;
 const LOCATE_ME_TARGET_DELTA = 0.05;
+const SELECTED_MARKER_SCALE = 1.3;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
+const MARKER_ANCHOR = { x: 0.5, y: 1 };
 
 let lastMapRegion: Region | null = null;
 
@@ -321,7 +323,7 @@ export default function MapScreen() {
     return data.stamps
       .filter(hasCoordinate)
       .map((stamp) => ({
-        id: stamp.ID,
+        id: `stamp:${stamp.ID}`,
         kind: stamp.kind,
         coordinate: { latitude: stamp.latitude, longitude: stamp.longitude },
         title: `${stamp.number || '--'} • ${stamp.name}`,
@@ -340,7 +342,7 @@ export default function MapScreen() {
     return data.parkingSpots
       .filter(hasCoordinate)
       .map((parkingSpot) => ({
-        id: parkingSpot.ID,
+        id: `parking:${parkingSpot.ID}`,
         kind: 'parking',
         coordinate: { latitude: parkingSpot.latitude, longitude: parkingSpot.longitude },
         title: parkingSpot.name?.trim() || 'Parkplatz',
@@ -546,9 +548,10 @@ export default function MapScreen() {
   const handleMarkerPress = useCallback(
     (item: MarkerItem) => {
       lastMarkerPressAtRef.current = Date.now();
+      const shouldAdjustRegion = selectedItemId === null;
       setSelectedItemId(item.id);
 
-      if (regionRef.current.longitudeDelta <= SELECTION_TARGET_DELTA) {
+      if (!shouldAdjustRegion || regionRef.current.longitudeDelta <= SELECTION_TARGET_DELTA) {
         return;
       }
 
@@ -556,7 +559,7 @@ export default function MapScreen() {
       updateMapRegion(nextRegion);
       mapRef.current?.animateToRegion(nextRegion, 260);
     },
-    [updateMapRegion]
+    [selectedItemId, updateMapRegion]
   );
 
   const handleLocateMePress = useCallback(() => {
@@ -721,6 +724,7 @@ export default function MapScreen() {
             const colors = markerColors(item.clusterKind);
             return (
               <Marker
+                anchor={MARKER_ANCHOR}
                 coordinate={item.coordinate}
                 key={item.id}
                 onPress={() => handleClusterPress(item)}>
@@ -743,8 +747,10 @@ export default function MapScreen() {
 
           const stampItem = item as StampMarkerItem;
           const colors = markerColors(stampItem.kind);
+          const isSelected = selectedItemId === stampItem.id;
           return (
             <Marker
+              anchor={MARKER_ANCHOR}
               coordinate={stampItem.coordinate}
               key={stampItem.id}
               onPress={() => handleMarkerPress(stampItem)}>
@@ -753,6 +759,8 @@ export default function MapScreen() {
                   style={[
                     styles.pinHead,
                     styles.stampMarkerHead,
+                    isSelected && styles.selectedPinHeadScale,
+                    isSelected && styles.selectedPinHead,
                     { backgroundColor: colors.fill, shadowColor: colors.shadow },
                   ]}>
                   <Text style={[styles.stampMarkerText, { color: colors.text }]}>
@@ -760,7 +768,7 @@ export default function MapScreen() {
                   </Text>
                 </View>
                 <View style={styles.pinTipWrap}>
-                  <View style={[styles.pinTip, { backgroundColor: colors.fill }]} />
+                  <View style={[styles.pinTip, isSelected && styles.selectedPinTip, { backgroundColor: colors.fill }]} />
                 </View>
               </View>
             </Marker>
@@ -768,19 +776,33 @@ export default function MapScreen() {
         })}
         {visibleParkingItems.map((item) => {
           const colors = markerColors(item.kind);
+          const isSelected = selectedItemId === item.id;
           return (
-            <Marker coordinate={item.coordinate} key={item.id} onPress={() => handleMarkerPress(item)}>
+            <Marker
+              anchor={MARKER_ANCHOR}
+              coordinate={item.coordinate}
+              key={item.id}
+              onPress={() => handleMarkerPress(item)}>
               <View collapsable={false} style={styles.pinMarker}>
                 <View
                   style={[
                     styles.pinHead,
                     styles.parkingMarkerHead,
+                    isSelected && styles.selectedPinHeadScale,
+                    isSelected && styles.selectedPinHead,
                     { backgroundColor: colors.fill, shadowColor: colors.shadow },
                   ]}>
                   <Text style={[styles.parkingMarkerText, { color: colors.text }]}>P</Text>
                 </View>
                 <View style={styles.pinTipWrap}>
-                  <View style={[styles.pinTip, styles.pinTipCompact, { backgroundColor: colors.fill }]} />
+                  <View
+                    style={[
+                      styles.pinTip,
+                      styles.pinTipCompact,
+                      isSelected && styles.selectedCompactPinTip,
+                      { backgroundColor: colors.fill },
+                    ]}
+                  />
                 </View>
               </View>
             </Marker>
@@ -1126,7 +1148,10 @@ const styles = StyleSheet.create({
     lineHeight: 28,
   },
   pinMarker: {
+    width: 56,
+    height: 60,
     alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   pinHead: {
     alignItems: 'center',
@@ -1135,6 +1160,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 1,
     shadowRadius: 18,
     elevation: 6,
+  },
+  selectedPinHeadScale: {
+    transform: [{ scale: SELECTED_MARKER_SCALE }],
+  },
+  selectedPinHead: {
+    borderWidth: 2,
+    borderColor: '#ffffff',
   },
   pinTipWrap: {
     marginTop: -5,
@@ -1147,6 +1179,14 @@ const styles = StyleSheet.create({
     height: 14,
     borderRadius: 3,
     transform: [{ rotate: '45deg' }],
+  },
+  selectedPinTip: {
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  selectedCompactPinTip: {
+    borderWidth: 2,
+    borderColor: '#ffffff',
   },
   pinTipCompact: {
     width: 12,
