@@ -19,7 +19,7 @@ import {
   type PressableProps,
   type PressableStateCallbackType,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FriendsList, type FriendsListItem } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
@@ -96,6 +96,7 @@ function ActionButton({
 
 export default function OnboardingScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const {
     accessToken,
     authError,
@@ -143,6 +144,8 @@ export default function OnboardingScreen() {
     locationPermission === 'granted'
       ? 'Standortfreigabe ist aktiv fuer Entfernungen, Karte und nahe Parkplaetze.'
       : 'Fuer Entfernungen, Karte und nahe Parkplaetze.';
+  const bottomDockPadding = Math.max(insets.bottom, 10);
+  const scrollBottomPadding = 176 + bottomDockPadding;
   const sentRequestIdSet = useMemo(
     () => new Set(sentRequests.map((request) => request.key)),
     [sentRequests]
@@ -449,10 +452,10 @@ export default function OnboardingScreen() {
   return (
     <LinearGradient colors={['#f7f5ef', '#f3efe6', '#f0ebe1']} style={styles.gradient}>
       <StatusBar style="dark" />
-      <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
         <ScrollView
           bounces={false}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
           showsVerticalScrollIndicator={false}>
           <Text style={styles.eyebrow}>Erste Schritte</Text>
 
@@ -589,7 +592,7 @@ export default function OnboardingScreen() {
           </View>
         </ScrollView>
 
-        <View pointerEvents="box-none" style={styles.bottomDock}>
+        <View pointerEvents="box-none" style={[styles.bottomDock, { paddingBottom: bottomDockPadding }]}>
           <View style={styles.bottomSection}>
             <ActionButton
               disabled={primaryDisabled}
@@ -996,9 +999,9 @@ const styles = StyleSheet.create({
   },
   bottomSection: {
     backgroundColor: 'rgba(247, 245, 239, 0.92)',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderRadius: 28,
     paddingTop: 16,
+    paddingBottom: 10,
     gap: 14,
   },
   bottomButton: {

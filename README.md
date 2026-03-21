@@ -72,3 +72,30 @@ Join our community of developers creating universal apps.
       "auth0Scope": "openid profile email offline_access",
       "auth0LogoutReturnPath": "auth/logout",
 ```
+
+## Android Maps Config
+
+Android requires a Google Maps SDK key for `react-native-maps`.
+
+Set this env var for EAS/local builds:
+
+```bash
+EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your_android_maps_sdk_key
+```
+
+For EAS, add it as a secret before building:
+
+```bash
+eas secret:create --scope project --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value your_android_maps_sdk_key
+```
+
+## Internal Distribution
+```
+eas build --platform android --profile preview
+````
+
+## build ios locally
+
+npx expo run:ios --configuration Release
+
+then in xcode -> run on the connected device

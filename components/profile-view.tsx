@@ -428,30 +428,37 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         scrollIndicatorInsets={{ bottom: 160 }}
         showsVerticalScrollIndicator={false}
         style={styles.scrollView}>
-        <View style={[styles.headerRow, data.mode === 'user' && styles.userHeaderRow]}>
+        <View style={styles.headerRow}>
           {data.headerAction?.type === 'back' ? (
-            <Pressable onPress={data.headerAction.onPress} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+            <Pressable
+              onPress={data.headerAction.onPress}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
               <Feather color="#1e2a1e" name="arrow-left" size={16} />
             </Pressable>
           ) : null}
-          <HeaderAvatar
-            color={data.avatarColor || avatarColor()}
-            compact={data.mode !== 'self'}
-            image={data.avatarImage}
-          />
-          <View style={styles.headerBody}>
-            <Text style={data.mode === 'self' ? styles.headerName : styles.userHeaderName}>
-              {data.name}
-            </Text>
-            <Text style={styles.headerMeta}>{data.subtitle}</Text>
+          <View style={styles.heroRow}>
+            <View style={styles.avatarBadgeWrap}>
+              <HeaderAvatar
+                color={data.avatarColor || avatarColor()}
+                compact={false}
+                image={data.avatarImage}
+              />
+              <View style={styles.profileBadge}>
+                <Text style={styles.profileBadgeLabel}>WANDERER</Text>
+              </View>
+            </View>
+            <View style={styles.headerBody}>
+              <Text style={styles.headerName}>{data.name}</Text>
+              <Text style={styles.headerMeta}>{data.subtitle}</Text>
+              {data.headerAction?.type === 'edit' ? (
+                <Pressable
+                  onPress={data.headerAction.onPress}
+                  style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
+                  <Text style={styles.editButtonLabel}>{data.headerAction.label}</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
-          {data.headerAction?.type === 'edit' ? (
-            <Pressable
-              onPress={data.headerAction.onPress}
-              style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
-              <Text style={styles.editButtonLabel}>{data.headerAction.label}</Text>
-            </Pressable>
-          ) : null}
         </View>
 
         {data.refreshHint ? <Text style={styles.refreshHint}>{data.refreshHint}</Text> : null}
@@ -746,12 +753,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 12,
   },
-  userHeaderRow: {
-    alignItems: 'center',
+  heroRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  avatarBadgeWrap: {
+    position: 'relative',
+    paddingBottom: 10,
   },
   backButton: {
     width: 28,
@@ -763,9 +774,9 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   avatarPlaceholder: {
-    width: 88,
-    height: 88,
-    borderRadius: 28,
+    width: 112,
+    height: 112,
+    borderRadius: 24,
   },
   avatarCompact: {
     width: 60,
@@ -778,29 +789,27 @@ const styles = StyleSheet.create({
   headerBody: {
     flex: 1,
     minWidth: 1,
+    gap: 8,
   },
   headerName: {
     color: '#1e2a1e',
-    fontSize: 30,
+    fontSize: 31,
     lineHeight: 38,
     fontFamily: 'serif',
-  },
-  userHeaderName: {
-    color: '#1e2a1e',
-    fontSize: 22,
-    lineHeight: 28,
-    fontFamily: 'serif',
+    fontWeight: '700',
   },
   headerMeta: {
     color: '#788777',
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 18,
   },
   editButton: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    backgroundColor: '#2e6b4b',
+    borderRadius: 999,
     paddingHorizontal: 18,
-    paddingVertical: 12,
+    paddingVertical: 10,
     shadowColor: '#141e14',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.08,
@@ -808,9 +817,28 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   editButtonLabel: {
-    color: '#1e2a1e',
+    color: '#f5f3ee',
     fontSize: 12,
     lineHeight: 16,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  profileBadge: {
+    position: 'absolute',
+    right: -10,
+    bottom: 0,
+    backgroundColor: '#e9e2d6',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  profileBadgeLabel: {
+    color: '#2e3a2e',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
   },
   statsCard: {
     backgroundColor: '#ffffff',
