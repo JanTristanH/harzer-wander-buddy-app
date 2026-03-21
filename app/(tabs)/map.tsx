@@ -87,6 +87,7 @@ const SEARCH_TARGET_DELTA = 0.06;
 const SELECTION_TARGET_DELTA = 0.08;
 const LOCATE_ME_TARGET_DELTA = 0.05;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
+const NORTH_HEADING_EPSILON = 2;
 
 let lastMapRegion: Region | null = null;
 
@@ -151,6 +152,11 @@ function markerColors(kind: MarkerKind) {
 
 function clampDelta(value: number) {
   return Math.min(MAX_ZOOM_DELTA, Math.max(MIN_ZOOM_DELTA, value));
+}
+
+function normalizeHeading(value: number) {
+  const normalized = ((value % 360) + 360) % 360;
+  return normalized > 180 ? normalized - 360 : normalized;
 }
 
 function createSinglePointRegion(coordinate: Coordinate, longitudeDelta: number): Region {
@@ -278,7 +284,9 @@ export default function MapScreen() {
   const [isMapReady, setIsMapReady] = useState(false);
   const [isStamping, setIsStamping] = useState(false);
   const [selectedSheetHeight, setSelectedSheetHeight] = useState(0);
+  const [mapHeading, setMapHeading] = useState(0);
   const showStartupLoading = (isPending && !data) || isPlaceholderData;
+  const isMapNorthUp = Math.abs(normalizeHeading(mapHeading)) <= NORTH_HEADING_EPSILON;
 
   const updateMapRegion = useCallback((nextRegion: Region) => {
     regionRef.current = nextRegion;
@@ -503,6 +511,20 @@ export default function MapScreen() {
     sheetBottomOffset +
     (selectedItem ? selectedSheetHeight + ZOOM_CONTROLS_GAP : ZOOM_CONTROLS_GAP);
   const filterPopoverWidth = useMemo(() => Math.min(300, Math.max(windowWidth - 32, 0)), [windowWidth]);
+  const compassButtonTopOffset = insets.top + 64;
+
+  const syncMapHeading = useCallback(async () => {
+    if (!mapRef.current) {
+      return;
+    }
+
+    try {
+      const camera = await mapRef.current.getCamera();
+      setMapHeading(camera.heading);
+    } catch {
+      // Ignore native map camera read errors.
+    }
+  }, []);
 
   const zoomBy = useCallback(
     (factor: number) => {
@@ -623,7 +645,19 @@ export default function MapScreen() {
 
   const handleRegionChangeComplete = useCallback((nextRegion: Region) => {
     updateMapRegion(nextRegion);
-  }, [updateMapRegion]);
+    void syncMapHeading();
+  }, [syncMapHeading, updateMapRegion]);
+
+  const handleResetNorthPress = useCallback(() => {
+    mapRef.current?.animateCamera(
+      {
+        heading: 0,
+        pitch: 0,
+      },
+      { duration: 220 }
+    );
+    setMapHeading(0);
+  }, []);
 
   const selectionPrimaryActionLabel = useMemo(() => {
     if (!selectedItem || selectedItem.kind === 'parking') {
@@ -657,7 +691,10 @@ export default function MapScreen() {
       <MapView
         ref={mapRef}
         initialRegion={initialRegion}
-        onMapReady={() => setIsMapReady(true)}
+        onMapReady={() => {
+          setIsMapReady(true);
+          void syncMapHeading();
+        }}
         onUserLocationChange={(event) => {
           setUserLocation({
             latitude: event.nativeEvent.coordinate.latitude,
@@ -791,6 +828,14 @@ export default function MapScreen() {
             <Text style={styles.filterButtonLabel}>Filter</Text>
           </Pressable>
         </View>
+
+        {!isMapNorthUp ? (
+          <View style={[styles.compassControl, { top: compassButtonTopOffset }]}>
+            <Pressable onPress={handleResetNorthPress} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
+              <Feather color="#2e3a2e" name="compass" size={18} />
+            </Pressable>
+          </View>
+        ) : null}
 
         <View style={[styles.zoomControls, { bottom: zoomControlsBottomOffset }]}>
           <Pressable
@@ -1054,6 +1099,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16,
     gap: 10,
+  },
+  compassControl: {
+    position: 'absolute',
+    right: 16,
   },
   zoomButton: {
     width: 48,
