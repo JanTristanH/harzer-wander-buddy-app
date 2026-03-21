@@ -7,21 +7,27 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Alert,
+  FlatList,
   Linking,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
   Share,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { FriendsList } from '@/components/friends-list';
@@ -36,6 +42,13 @@ import { queryKeys, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
   sub?: string;
+};
+
+type CarouselImageItem = {
+  id: string;
+  uri: string;
+  title: string;
+  subtitle?: string;
 };
 
 function formatDistance(distanceKm: number | null) {
@@ -140,10 +153,16 @@ function StampDetailContent() {
   const stampId = Array.isArray(params.id) ? params.id[0] : params.id;
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useStampDetailQuery(stampId);
+  const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [isStamping, setIsStamping] = useState(false);
   const [isEditingVisits, setIsEditingVisits] = useState(false);
   const [visitDrafts, setVisitDrafts] = useState<Record<string, string>>({});
   const [busyVisitId, setBusyVisitId] = useState<string | null>(null);
+  const [isImageCarouselVisible, setIsImageCarouselVisible] = useState(false);
+  const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
+  const carouselListRef = useRef<FlatList<CarouselImageItem> | null>(null);
+  const carouselTranslateY = useRef(new Animated.Value(0)).current;
   const [pickerState, setPickerState] = useState<{
     visitId: string;
     value: Date;
@@ -375,6 +394,131 @@ function StampDetailContent() {
     setPickerState(null);
   }
 
+  const selectedStamp = detail?.stamp;
+  const heroImageUri = selectedStamp?.heroImageUrl?.trim() || selectedStamp?.image?.trim() || '';
+  const carouselImages = useMemo(() => {
+    if (!detail || !selectedStamp) {
+      return [] as CarouselImageItem[];
+    }
+
+    const items: CarouselImageItem[] = [];
+
+    if (heroImageUri) {
+      items.push({
+        id: `stamp-${selectedStamp.ID}`,
+        uri: heroImageUri,
+        title: `${selectedStamp.number || '--'} • ${selectedStamp.name}`,
+        subtitle: 'Aktuelle Stempelstelle',
+      });
+    }
+
+    for (const neighbor of detail.nearbyStamps) {
+      const imageUri = neighbor.heroImageUrl?.trim();
+      if (!imageUri) {
+        continue;
+      }
+
+      items.push({
+        id: `nearby-${neighbor.ID}`,
+        uri: imageUri,
+        title: `${neighbor.number || '--'} • ${neighbor.name}`,
+        subtitle: 'Stempel in der Naehe',
+      });
+    }
+
+    const seenUris = new Set<string>();
+    return items.filter((item) => {
+      if (seenUris.has(item.uri)) {
+        return false;
+      }
+
+      seenUris.add(item.uri);
+      return true;
+    });
+  }, [detail, heroImageUri, selectedStamp]);
+
+  const openImageCarousel = useCallback((startIndex = 0) => {
+    if (carouselImages.length === 0) {
+      return;
+    }
+
+    const nextIndex = Math.min(Math.max(0, startIndex), carouselImages.length - 1);
+    carouselTranslateY.setValue(0);
+    setActiveCarouselIndex(nextIndex);
+    setIsImageCarouselVisible(true);
+  }, [carouselImages.length, carouselTranslateY]);
+
+  const closeImageCarousel = useCallback(() => {
+    setIsImageCarouselVisible(false);
+    setActiveCarouselIndex(0);
+    carouselTranslateY.setValue(0);
+  }, [carouselTranslateY]);
+
+  const carouselPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        onPanResponderMove: (_, gesture) => {
+          if (gesture.dy <= 0) {
+            return;
+          }
+
+          carouselTranslateY.setValue(gesture.dy);
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dy > 140 || gesture.vy > 1.1) {
+            closeImageCarousel();
+            return;
+          }
+
+          Animated.spring(carouselTranslateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 0,
+          }).start();
+        },
+        onPanResponderTerminate: () => {
+          Animated.spring(carouselTranslateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 0,
+          }).start();
+        },
+      }),
+    [carouselTranslateY, closeImageCarousel]
+  );
+
+  useEffect(() => {
+    if (!isImageCarouselVisible) {
+      return;
+    }
+
+    const nextIndex = Math.min(activeCarouselIndex, Math.max(0, carouselImages.length - 1));
+    if (nextIndex !== activeCarouselIndex) {
+      setActiveCarouselIndex(nextIndex);
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      carouselListRef.current?.scrollToIndex({ animated: false, index: nextIndex });
+    });
+  }, [activeCarouselIndex, carouselImages.length, isImageCarouselVisible]);
+
+  const handleCarouselScrollEnd = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (windowWidth <= 0) {
+        return;
+      }
+
+      const nextIndex = Math.round(event.nativeEvent.contentOffset.x / windowWidth);
+      setActiveCarouselIndex(
+        Math.min(Math.max(0, nextIndex), Math.max(0, carouselImages.length - 1))
+      );
+    },
+    [carouselImages.length, windowWidth]
+  );
+
   if (!stampId) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -419,7 +563,6 @@ function StampDetailContent() {
 
   const { stamp } = detail;
   const visited = !!stamp.hasVisited;
-  const heroImageUri = stamp.heroImageUrl?.trim() || stamp.image?.trim() || '';
   const showDeferredSkeletons = isFetching && isPlaceholderData;
 
   return (
@@ -437,6 +580,15 @@ function StampDetailContent() {
               />
               <View style={styles.heroImageOverlay} />
             </>
+          ) : null}
+          {carouselImages.length > 0 ? (
+            <Pressable
+              onPress={() => openImageCarousel(0)}
+              style={({ pressed }) => [
+                styles.heroImagePressable,
+                pressed && styles.heroImagePressablePressed,
+              ]}
+            />
           ) : null}
           <Pressable onPress={handleBack} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
             <Feather color="#1e2a1e" name="arrow-left" size={18} />
@@ -678,6 +830,65 @@ function StampDetailContent() {
         </View>
       </View>
 
+      <Modal
+        animationType="fade"
+        onRequestClose={closeImageCarousel}
+        presentationStyle="fullScreen"
+        statusBarTranslucent
+        visible={isImageCarouselVisible}>
+        <Animated.View
+          style={[
+            styles.carouselScreen,
+            {
+              transform: [{ translateY: carouselTranslateY }],
+            },
+          ]}
+          {...carouselPanResponder.panHandlers}>
+          <FlatList
+            data={carouselImages}
+            getItemLayout={(_, index) => ({
+              index,
+              length: windowWidth,
+              offset: windowWidth * index,
+            })}
+            horizontal
+            initialNumToRender={1}
+            keyExtractor={(item) => item.id}
+            onMomentumScrollEnd={handleCarouselScrollEnd}
+            pagingEnabled
+            ref={carouselListRef}
+            renderItem={({ item }) => (
+              <View style={[styles.carouselSlide, { width: windowWidth }]}>
+                <Image
+                  contentFit="contain"
+                  source={buildAuthenticatedImageSource(item.uri, accessToken)}
+                  style={styles.carouselImage}
+                />
+                <View style={styles.carouselCaptionWrap}>
+                  <Text style={styles.carouselCaptionTitle}>{item.title}</Text>
+                  {item.subtitle ? (
+                    <Text style={styles.carouselCaptionSubtitle}>{item.subtitle}</Text>
+                  ) : null}
+                </View>
+              </View>
+            )}
+            showsHorizontalScrollIndicator={false}
+          />
+
+          <View style={[styles.carouselTopBar, { top: insets.top + 12 }]}>
+            <Pressable
+              hitSlop={14}
+              onPress={closeImageCarousel}
+              style={({ pressed }) => [styles.carouselCloseButton, pressed && styles.topButtonPressed]}>
+              <Feather color="#f5f3ee" name="x" size={18} />
+            </Pressable>
+            <Text style={styles.carouselCounterLabel}>
+              {carouselImages.length > 0 ? `${activeCarouselIndex + 1} / ${carouselImages.length}` : '0 / 0'}
+            </Text>
+          </View>
+        </Animated.View>
+      </Modal>
+
       {pickerState && Platform.OS === 'ios' ? (
         <Modal animationType="slide" transparent visible>
           <View style={styles.modalScrim}>
@@ -756,6 +967,12 @@ const styles = StyleSheet.create({
   heroImageOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(22, 28, 22, 0.22)',
+  },
+  heroImagePressable: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  heroImagePressablePressed: {
+    backgroundColor: 'rgba(245, 243, 238, 0.08)',
   },
   topButton: {
     width: 40,
@@ -1051,6 +1268,66 @@ const styles = StyleSheet.create({
   primaryButtonLabel: {
     color: '#f5f3ee',
     fontSize: 13,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  carouselScreen: {
+    flex: 1,
+    backgroundColor: '#0f1310',
+  },
+  carouselTopBar: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 20,
+    elevation: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  carouselCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(29, 38, 31, 0.88)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carouselCounterLabel: {
+    color: '#f5f3ee',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+    backgroundColor: 'rgba(29, 38, 31, 0.88)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  carouselSlide: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingTop: 68,
+    paddingBottom: 18,
+  },
+  carouselImage: {
+    flex: 1,
+    width: '100%',
+  },
+  carouselCaptionWrap: {
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    gap: 4,
+  },
+  carouselCaptionTitle: {
+    color: '#f5f3ee',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  carouselCaptionSubtitle: {
+    color: '#ccd5cb',
+    fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
   },
