@@ -40,6 +40,7 @@ type BaseMarkerItem = {
   coordinate: Coordinate;
   title: string;
   description: string;
+  imageUrl?: string;
 };
 
 type StampMarkerItem = BaseMarkerItem & {
@@ -86,7 +87,7 @@ const SEARCH_RESULT_LIMIT = 6;
 const SEARCH_TARGET_DELTA = 0.06;
 const SELECTION_TARGET_DELTA = 0.08;
 const LOCATE_ME_TARGET_DELTA = 0.05;
-const SELECTED_MARKER_SCALE = 1.3;
+const SELECTION_TARGET_VERTICAL_RATIO = 0.3;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
 const MARKER_ANCHOR = { x: 0.5, y: 1 };
@@ -167,6 +168,23 @@ function createSinglePointRegion(coordinate: Coordinate, longitudeDelta: number)
 
   return {
     latitude: coordinate.latitude - latitudeDelta * SINGLE_POINT_FOCUS_OFFSET_RATIO,
+    longitude: coordinate.longitude,
+    latitudeDelta,
+    longitudeDelta: clampedLongitudeDelta,
+  };
+}
+
+function createPointRegionAtVerticalRatio(
+  coordinate: Coordinate,
+  longitudeDelta: number,
+  verticalRatio: number
+): Region {
+  const clampedLongitudeDelta = clampDelta(longitudeDelta);
+  const latitudeDelta = clampDelta(clampedLongitudeDelta);
+  const centerOffsetRatio = verticalRatio - 0.5;
+
+  return {
+    latitude: coordinate.latitude + latitudeDelta * centerOffsetRatio,
     longitude: coordinate.longitude,
     latitudeDelta,
     longitudeDelta: clampedLongitudeDelta,
@@ -328,6 +346,7 @@ export default function MapScreen() {
         coordinate: { latitude: stamp.latitude, longitude: stamp.longitude },
         title: `${stamp.number || '--'} • ${stamp.name}`,
         description: stamp.description?.trim() || 'Keine Beschreibung verfuegbar.',
+        imageUrl: stamp.heroImageUrl?.trim() || stamp.image?.trim() || undefined,
         number: stamp.number,
         stampId: stamp.ID,
         visitedAt: stamp.visitedAt,
@@ -548,18 +567,17 @@ export default function MapScreen() {
   const handleMarkerPress = useCallback(
     (item: MarkerItem) => {
       lastMarkerPressAtRef.current = Date.now();
-      const shouldAdjustRegion = selectedItemId === null;
       setSelectedItemId(item.id);
-
-      if (!shouldAdjustRegion || regionRef.current.longitudeDelta <= SELECTION_TARGET_DELTA) {
-        return;
-      }
-
-      const nextRegion = createSinglePointRegion(item.coordinate, SELECTION_TARGET_DELTA);
+      const targetDelta = Math.min(regionRef.current.longitudeDelta, SELECTION_TARGET_DELTA);
+      const nextRegion = createPointRegionAtVerticalRatio(
+        item.coordinate,
+        targetDelta,
+        SELECTION_TARGET_VERTICAL_RATIO
+      );
       updateMapRegion(nextRegion);
       mapRef.current?.animateToRegion(nextRegion, 260);
     },
-    [selectedItemId, updateMapRegion]
+    [updateMapRegion]
   );
 
   const handleLocateMePress = useCallback(() => {
@@ -618,7 +636,11 @@ export default function MapScreen() {
     searchInputRef.current?.blur();
 
     const nextRegion = {
-      ...createSinglePointRegion(item.coordinate, SEARCH_TARGET_DELTA),
+      ...createPointRegionAtVerticalRatio(
+        item.coordinate,
+        SEARCH_TARGET_DELTA,
+        SELECTION_TARGET_VERTICAL_RATIO
+      ),
     };
 
     updateMapRegion(nextRegion);
@@ -747,7 +769,6 @@ export default function MapScreen() {
 
           const stampItem = item as StampMarkerItem;
           const colors = markerColors(stampItem.kind);
-          const isSelected = selectedItemId === stampItem.id;
           return (
             <Marker
               anchor={MARKER_ANCHOR}
@@ -759,8 +780,6 @@ export default function MapScreen() {
                   style={[
                     styles.pinHead,
                     styles.stampMarkerHead,
-                    isSelected && styles.selectedPinHeadScale,
-                    isSelected && styles.selectedPinHead,
                     { backgroundColor: colors.fill, shadowColor: colors.shadow },
                   ]}>
                   <Text style={[styles.stampMarkerText, { color: colors.text }]}>
@@ -768,7 +787,7 @@ export default function MapScreen() {
                   </Text>
                 </View>
                 <View style={styles.pinTipWrap}>
-                  <View style={[styles.pinTip, isSelected && styles.selectedPinTip, { backgroundColor: colors.fill }]} />
+                  <View style={[styles.pinTip, { backgroundColor: colors.fill }]} />
                 </View>
               </View>
             </Marker>
@@ -776,7 +795,6 @@ export default function MapScreen() {
         })}
         {visibleParkingItems.map((item) => {
           const colors = markerColors(item.kind);
-          const isSelected = selectedItemId === item.id;
           return (
             <Marker
               anchor={MARKER_ANCHOR}
@@ -788,21 +806,12 @@ export default function MapScreen() {
                   style={[
                     styles.pinHead,
                     styles.parkingMarkerHead,
-                    isSelected && styles.selectedPinHeadScale,
-                    isSelected && styles.selectedPinHead,
                     { backgroundColor: colors.fill, shadowColor: colors.shadow },
                   ]}>
                   <Text style={[styles.parkingMarkerText, { color: colors.text }]}>P</Text>
                 </View>
                 <View style={styles.pinTipWrap}>
-                  <View
-                    style={[
-                      styles.pinTip,
-                      styles.pinTipCompact,
-                      isSelected && styles.selectedCompactPinTip,
-                      { backgroundColor: colors.fill },
-                    ]}
-                  />
+                  <View style={[styles.pinTip, styles.pinTipCompact, { backgroundColor: colors.fill }]} />
                 </View>
               </View>
             </Marker>
@@ -885,6 +894,7 @@ export default function MapScreen() {
               kind: selectedItem.kind,
               title: selectedItem.title,
               description: selectedItem.description,
+              imageUrl: selectedItem.imageUrl,
             }}
             metadata={
               selectedItem.kind === 'parking'
@@ -1161,13 +1171,6 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 6,
   },
-  selectedPinHeadScale: {
-    transform: [{ scale: SELECTED_MARKER_SCALE }],
-  },
-  selectedPinHead: {
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
   pinTipWrap: {
     marginTop: -5,
     height: 14,
@@ -1179,14 +1182,6 @@ const styles = StyleSheet.create({
     height: 14,
     borderRadius: 3,
     transform: [{ rotate: '45deg' }],
-  },
-  selectedPinTip: {
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
-  selectedCompactPinTip: {
-    borderWidth: 2,
-    borderColor: '#ffffff',
   },
   pinTipCompact: {
     width: 12,

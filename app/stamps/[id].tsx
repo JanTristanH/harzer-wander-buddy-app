@@ -3,6 +3,7 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { useQueryClient } from '@tanstack/react-query';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -30,6 +31,7 @@ import {
   updateStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 import { queryKeys, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
@@ -417,6 +419,7 @@ function StampDetailContent() {
 
   const { stamp } = detail;
   const visited = !!stamp.hasVisited;
+  const heroImageUri = stamp.heroImageUrl?.trim() || stamp.image?.trim() || '';
   const showDeferredSkeletons = isFetching && isPlaceholderData;
 
   return (
@@ -425,6 +428,16 @@ function StampDetailContent() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}>
         <LinearGradient colors={heroGradient(visited)} style={styles.hero}>
+          {heroImageUri ? (
+            <>
+              <Image
+                contentFit="cover"
+                source={buildAuthenticatedImageSource(heroImageUri, accessToken)}
+                style={styles.heroImage}
+              />
+              <View style={styles.heroImageOverlay} />
+            </>
+          ) : null}
           <Pressable onPress={handleBack} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
             <Feather color="#1e2a1e" name="arrow-left" size={18} />
           </Pressable>
@@ -481,12 +494,20 @@ function StampDetailContent() {
                   key={neighbor.ID}
                   onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
                   style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
-                  <View style={[styles.rowBadge, styles.rowBadgeStamp]}>
-                    <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelStamp]}>{neighbor.number || '--'}</Text>
-                  </View>
+                  {neighbor.heroImageUrl ? (
+                    <Image
+                      contentFit="cover"
+                      source={buildAuthenticatedImageSource(neighbor.heroImageUrl, accessToken)}
+                      style={styles.rowArtwork}
+                    />
+                  ) : (
+                    <View style={[styles.rowBadge, styles.rowBadgeStamp]}>
+                      <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelStamp]}>{neighbor.number || '--'}</Text>
+                    </View>
+                  )}
                   <View style={styles.rowBody}>
                     <Text style={styles.rowTitle}>
-                      {neighbor.name}
+                      {neighbor.number || '--'} {'\u2022'} {neighbor.name}
                     </Text>
                     <Text style={styles.rowMeta}>
                       {formatDistance(neighbor.distanceKm)}
@@ -729,6 +750,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 16,
   },
+  heroImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  heroImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(22, 28, 22, 0.22)',
+  },
   topButton: {
     width: 40,
     height: 40,
@@ -859,6 +887,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  rowArtwork: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
   },
   rowBadgeStamp: {
     backgroundColor: '#e2eee6',

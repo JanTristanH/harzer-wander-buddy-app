@@ -6,6 +6,7 @@ export type Stampbox = {
   orderBy?: string;
   name: string;
   description?: string;
+  heroImageUrl?: string;
   image?: string;
   latitude?: number;
   longitude?: number;
@@ -118,6 +119,7 @@ export type ProfileOverviewData = {
     stampNumber?: string;
     stampName: string;
     visitedAt?: string;
+    heroImageUrl?: string;
   }>;
   featuredFriend: {
     id: string;
@@ -216,6 +218,7 @@ export type UserProfileOverviewData = {
     stampNumber?: string;
     stampName: string;
     visitedAt?: string;
+    heroImageUrl?: string;
   }>;
   friends: Array<{
     id: string;
@@ -248,6 +251,7 @@ export type StampDetailData = {
     ID: string;
     number?: string;
     name: string;
+    heroImageUrl?: string;
     distanceKm: number | null;
     durationMinutes: number | null;
   }[];
@@ -535,7 +539,7 @@ async function fetchComparisonStampboxes(accessToken: string, groupUserIds: stri
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
     [
       '$select',
-      'ID,number,orderBy,name,description,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
+      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
     ],
     ['$skip', 0],
     ['$top', 250],
@@ -688,7 +692,7 @@ export async function fetchStampboxes(accessToken: string) {
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
     [
       '$select',
-      'ID,number,orderBy,name,description,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
     ],
     ['$orderby', 'orderBy asc'],
     ['$top', 500],
@@ -797,7 +801,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
   const stamp = await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
     [
       '$select',
-      'ID,number,orderBy,name,description,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
     ],
   ]);
 
@@ -827,13 +831,14 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             accessToken,
             'Stampboxes',
             neighbor.NeighborsID,
-            [['$select', 'ID,number,name']]
+            [['$select', 'ID,number,name,heroImageUrl,image']]
           );
 
           return {
             ID: relatedStamp.ID,
             number: relatedStamp.number,
             name: relatedStamp.name,
+            heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
             distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
             durationMinutes: estimateMinutes(
               typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
@@ -844,6 +849,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             ID: neighbor.NeighborsID,
             number: neighbor.NeighborsNumber,
             name: `${neighbor.NeighborsNumber || ''}`.trim(),
+            heroImageUrl: undefined,
             distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
             durationMinutes: estimateMinutes(
               typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
@@ -1015,6 +1021,7 @@ export async function fetchProfileOverview(accessToken: string, currentUserId?: 
       stampNumber: stamp?.number,
       stampName: stamp?.name || 'Stempelstelle',
       visitedAt: getVisitTimestamp(visit),
+      heroImageUrl: stamp?.heroImageUrl || stamp?.image,
     };
   });
 
@@ -1145,6 +1152,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       stampNumber: stamp?.number,
       stampName: stamp?.name || 'Stempelstelle',
       visitedAt: getVisitTimestamp(visit),
+      heroImageUrl: stamp?.heroImageUrl || stamp?.image,
     };
   });
 

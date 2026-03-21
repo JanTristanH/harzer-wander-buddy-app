@@ -4,10 +4,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  type ImageStyle,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  type StyleProp,
   Switch,
   Text,
   View,
@@ -91,6 +93,7 @@ export type ProfileViewModel = {
     stampNumber?: string;
     stampName: string;
     visitedAt?: string;
+    heroImageUrl?: string;
   }[];
   latestVisitsEmptyText: string;
   onVisitPress?: (stampId: string) => void;
@@ -204,6 +207,36 @@ function HeaderAvatar({
   );
 }
 
+function stampArtworkUri(stamp?: Stampbox) {
+  return stamp?.heroImageUrl?.trim() || stamp?.image?.trim() || '';
+}
+
+function StampArtwork({
+  index,
+  visited,
+  imageUri,
+  style,
+}: {
+  index: number;
+  visited: boolean;
+  imageUri?: string;
+  style: StyleProp<ImageStyle>;
+}) {
+  const { accessToken } = useAuth();
+
+  if (imageUri) {
+    return (
+      <Image
+        contentFit="cover"
+        source={buildAuthenticatedImageSource(imageUri, accessToken)}
+        style={style}
+      />
+    );
+  }
+
+  return <LinearGradient colors={artworkGradient(index, visited)} style={style} />;
+}
+
 function chipToneStyle(tone?: StampChip['tone']) {
   switch (tone) {
     case 'success':
@@ -251,10 +284,7 @@ function VisitRow({
       disabled={disabled}
       onPress={() => visit.stampId && onPress?.(visit.stampId)}
       style={({ pressed }) => [styles.rowCard, pressed && !disabled && styles.pressed]}>
-      <LinearGradient
-        colors={artworkGradient(index, true)}
-        style={styles.rowArtwork}
-      />
+      <StampArtwork imageUri={visit.heroImageUrl} index={index} style={styles.rowArtwork} visited />
       <View style={styles.rowBody}>
         <Text style={styles.rowTitle}>
           {visit.stampNumber || '--'} {'\u2022'} {visit.stampName}
@@ -277,9 +307,11 @@ function StampComparisonRow({
 }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.stampCompareRow, pressed && styles.pressed]}>
-      <LinearGradient
-        colors={artworkGradient(index, item.meVisited || item.otherVisited)}
+      <StampArtwork
+        imageUri={stampArtworkUri(item.stamp)}
+        index={index}
         style={styles.stampCompareArtwork}
+        visited={item.meVisited || item.otherVisited}
       />
       <View style={styles.rowBody}>
         <Text style={styles.rowTitle}>
@@ -316,9 +348,11 @@ function SimpleStampRow({
 }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.stampCompareRow, pressed && styles.pressed]}>
-      <LinearGradient
-        colors={artworkGradient(index, !!item.stamp.hasVisited)}
+      <StampArtwork
+        imageUri={stampArtworkUri(item.stamp)}
+        index={index}
         style={styles.stampCompareArtwork}
+        visited={!!item.stamp.hasVisited}
       />
       <View style={styles.rowBody}>
         <Text style={styles.rowTitle}>

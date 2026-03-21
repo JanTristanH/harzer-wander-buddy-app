@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -28,9 +29,15 @@ export function StampListItem({
   onPress: () => void;
   metaLabel?: string | null;
 }) {
+  const artworkUri = item.heroImageUrl?.trim() || item.image?.trim() || '';
+
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
-      <LinearGradient colors={cardGradient(index, !!item.hasVisited)} style={styles.cardArtwork} />
+      {artworkUri ? (
+        <Image contentFit="cover" source={artworkUri} style={styles.cardArtwork} />
+      ) : (
+        <LinearGradient colors={cardGradient(index, !!item.hasVisited)} style={styles.cardArtwork} />
+      )}
 
       <View style={styles.cardBody}>
         <Text style={styles.cardTitle}>

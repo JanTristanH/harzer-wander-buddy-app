@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { type LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -19,6 +20,7 @@ export function MapSelectionSheet({
     kind: MarkerKind;
     title: string;
     description: string;
+    imageUrl?: string;
   };
   metadata: string;
   primaryActionLabel?: string;
@@ -39,16 +41,20 @@ export function MapSelectionSheet({
         pressed && isInteractive && styles.pressed,
       ]}>
       <View pointerEvents="none" style={styles.detailRow}>
-        <LinearGradient
-          colors={
-            item.kind === 'visited-stamp'
-              ? ['#4b875f', '#8fd2a4']
-              : item.kind === 'open-stamp'
-                ? ['#ab8d7d', '#dbc6b7']
-                : ['#2f7dd7', '#6cb1ff']
-          }
-          style={styles.detailArtwork}
-        />
+        {item.imageUrl ? (
+          <Image contentFit="cover" source={item.imageUrl} style={styles.detailArtwork} />
+        ) : (
+          <LinearGradient
+            colors={
+              item.kind === 'visited-stamp'
+                ? ['#4b875f', '#8fd2a4']
+                : item.kind === 'open-stamp'
+                  ? ['#ab8d7d', '#dbc6b7']
+                  : ['#2f7dd7', '#6cb1ff']
+            }
+            style={styles.detailArtwork}
+          />
+        )}
 
         <View style={styles.detailCopy}>
           <Text numberOfLines={1} style={styles.detailTitle}>
