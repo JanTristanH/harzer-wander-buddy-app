@@ -10,14 +10,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Alert,
   FlatList,
   Linking,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -162,7 +160,6 @@ function StampDetailContent() {
   const [isImageCarouselVisible, setIsImageCarouselVisible] = useState(false);
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
   const carouselListRef = useRef<FlatList<CarouselImageItem> | null>(null);
-  const carouselTranslateY = useRef(new Animated.Value(0)).current;
   const [pickerState, setPickerState] = useState<{
     visitId: string;
     value: Date;
@@ -443,51 +440,14 @@ function StampDetailContent() {
     }
 
     const nextIndex = Math.min(Math.max(0, startIndex), carouselImages.length - 1);
-    carouselTranslateY.setValue(0);
     setActiveCarouselIndex(nextIndex);
     setIsImageCarouselVisible(true);
-  }, [carouselImages.length, carouselTranslateY]);
+  }, [carouselImages.length]);
 
   const closeImageCarousel = useCallback(() => {
     setIsImageCarouselVisible(false);
     setActiveCarouselIndex(0);
-    carouselTranslateY.setValue(0);
-  }, [carouselTranslateY]);
-
-  const carouselPanResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gesture) =>
-          gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
-        onPanResponderMove: (_, gesture) => {
-          if (gesture.dy <= 0) {
-            return;
-          }
-
-          carouselTranslateY.setValue(gesture.dy);
-        },
-        onPanResponderRelease: (_, gesture) => {
-          if (gesture.dy > 140 || gesture.vy > 1.1) {
-            closeImageCarousel();
-            return;
-          }
-
-          Animated.spring(carouselTranslateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            bounciness: 0,
-          }).start();
-        },
-        onPanResponderTerminate: () => {
-          Animated.spring(carouselTranslateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            bounciness: 0,
-          }).start();
-        },
-      }),
-    [carouselTranslateY, closeImageCarousel]
-  );
+  }, []);
 
   useEffect(() => {
     if (!isImageCarouselVisible) {
@@ -836,14 +796,7 @@ function StampDetailContent() {
         presentationStyle="fullScreen"
         statusBarTranslucent
         visible={isImageCarouselVisible}>
-        <Animated.View
-          style={[
-            styles.carouselScreen,
-            {
-              transform: [{ translateY: carouselTranslateY }],
-            },
-          ]}
-          {...carouselPanResponder.panHandlers}>
+        <View style={styles.carouselScreen}>
           <FlatList
             data={carouselImages}
             getItemLayout={(_, index) => ({
@@ -886,7 +839,7 @@ function StampDetailContent() {
               {carouselImages.length > 0 ? `${activeCarouselIndex + 1} / ${carouselImages.length}` : '0 / 0'}
             </Text>
           </View>
-        </Animated.View>
+        </View>
       </Modal>
 
       {pickerState && Platform.OS === 'ios' ? (
