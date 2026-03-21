@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  fetchParkingDetail,
   fetchFriendsOverview,
   fetchLatestVisitedStamp,
   fetchMapData,
@@ -11,6 +12,7 @@ import {
   type FriendsOverviewData,
   type LatestVisitedStamp,
   type MapData,
+  type ParkingDetailData,
   type ProfileOverviewData,
   type StampDetailData,
   type Stampbox,
@@ -38,6 +40,8 @@ export const queryKeys = {
     ['user-profile-overview', userId ?? 'anonymous', targetUserId ?? 'unknown'] as const,
   stampDetail: (userId: string | undefined, stampId: string | undefined) =>
     ['stamp-detail', userId ?? 'anonymous', stampId ?? 'unknown'] as const,
+  parkingDetail: (userId: string | undefined, parkingId: string | undefined) =>
+    ['parking-detail', userId ?? 'anonymous', parkingId ?? 'unknown'] as const,
 };
 
 function getCachedUserProfileSummary(
@@ -117,6 +121,20 @@ function getCachedStamp(
 
   const mapData = queryClient.getQueryData<MapData>(queryKeys.mapData(userId));
   const fromMap = mapData?.stamps.find((stamp) => stamp.ID === stampId);
+  if (fromMap) {
+    return fromMap;
+  }
+
+  return undefined;
+}
+
+function getCachedParking(
+  queryClient: ReturnType<typeof useQueryClient>,
+  userId: string | undefined,
+  parkingId: string
+) {
+  const mapData = queryClient.getQueryData<MapData>(queryKeys.mapData(userId));
+  const fromMap = mapData?.parkingSpots.find((parking) => parking.ID === parkingId);
   if (fromMap) {
     return fromMap;
   }
@@ -309,6 +327,35 @@ export function useStampDetailQuery(stampId?: string) {
       } satisfies StampDetailData;
     },
     queryFn: () => authorizedRequest((token) => fetchStampDetail(token, stampId!, claims?.sub)),
+  });
+}
+
+export function useParkingDetailQuery(parkingId?: string) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+  const queryClient = useQueryClient();
+
+  return useQuery<ParkingDetailData>({
+    queryKey: queryKeys.parkingDetail(claims?.sub, parkingId),
+    enabled: Boolean(accessToken && isAuthenticated && parkingId),
+    placeholderData: () => {
+      if (!parkingId) {
+        return undefined;
+      }
+
+      const cachedParking = getCachedParking(queryClient, claims?.sub, parkingId);
+      if (!cachedParking) {
+        return undefined;
+      }
+
+      return {
+        parking: cachedParking,
+        nearbyStamps: [],
+        nearbyParking: [],
+      } satisfies ParkingDetailData;
+    },
+    queryFn: () => authorizedRequest((token) => fetchParkingDetail(token, parkingId!)),
   });
 }
 

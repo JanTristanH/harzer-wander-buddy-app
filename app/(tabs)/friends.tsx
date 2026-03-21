@@ -1,5 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -8,6 +9,7 @@ import {
   Modal,
   Pressable,
   RefreshControl,
+  Share,
   ScrollView,
   StyleSheet,
   Text,
@@ -34,6 +36,10 @@ const FILTER_LABELS: Record<FriendFilter, string> = {
   requests: 'Anfragen',
   sent: 'Gesendet',
 };
+const emptyFriendsIllustration = require('@/assets/images/buddy/waitingOnBench.png');
+const emptyRequestsIllustration = require('@/assets/images/buddy/checkingEmptyMail.png');
+const emptySentIllustration = require('@/assets/images/buddy/onBenchWithLetter.png');
+const waitlistUrl = 'https://www.harzer-wander-buddy.de/app-waitlist';
 
 function FriendFilterChip({
   active,
@@ -60,14 +66,29 @@ function FriendFilterChip({
 function EmptyState({
   title,
   body,
+  image,
+  ctaLabel,
+  ctaIconName,
+  onCtaPress,
 }: {
   title: string;
   body: string;
+  image?: number;
+  ctaLabel?: string;
+  ctaIconName?: React.ComponentProps<typeof Feather>['name'];
+  onCtaPress?: () => void;
 }) {
   return (
     <View style={styles.emptyCard}>
       <Text style={styles.emptyTitle}>{title}</Text>
+      {image ? <Image contentFit="contain" source={image} style={styles.emptyIllustration} /> : null}
       <Text style={styles.emptyBody}>{body}</Text>
+      {ctaLabel && onCtaPress ? (
+        <Pressable onPress={onCtaPress} style={({ pressed }) => [styles.emptyCtaButton, pressed && styles.pressed]}>
+          <Feather color="#F5F3EE" name={ctaIconName ?? 'search'} size={16} />
+          <Text style={styles.emptyCtaLabel}>{ctaLabel}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -233,6 +254,21 @@ export default function FriendsScreen() {
     [accessToken, claims?.sub, logout, queryClient]
   );
 
+  const handleInviteFriends = useCallback(async () => {
+    try {
+      await Share.share({
+        message: `Komm mit in die Harzer Wander Buddy App und sammle Stempel zusammen.\n${waitlistUrl}`,
+        title: 'Harzer Wander Buddy',
+        url: waitlistUrl,
+      });
+    } catch (nextError) {
+      Alert.alert(
+        'Teilen nicht moeglich',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
+  }, []);
+
   const searchListItems = useMemo(
     () =>
       searchResults.map((result) => {
@@ -350,6 +386,9 @@ export default function FriendsScreen() {
               <EmptyState
                 title="Noch keine Freunde"
                 body="Sobald du Freunde verbunden hast, erscheinen sie hier mit ihrem Fortschritt."
+                ctaLabel="Freunde hinzufügen"
+                image={emptyFriendsIllustration}
+                onCtaPress={() => setIsSearchModalVisible(true)}
               />
             )
           ) : null}
@@ -371,7 +410,11 @@ export default function FriendsScreen() {
             ) : (
               <EmptyState
                 title="Keine offenen Anfragen"
-                body="Zurzeit liegen keine eingehenden Freundschaftsanfragen vor."
+                body="Zurzeit liegen keine eingehenden Freundschaftsanfragen vor. Lade Freunde ein und startet gemeinsam."
+                ctaLabel="Freunde einladen"
+                ctaIconName="share-2"
+                image={emptyRequestsIllustration}
+                onCtaPress={() => void handleInviteFriends()}
               />
             )
           ) : null}
@@ -395,6 +438,7 @@ export default function FriendsScreen() {
               <EmptyState
                 title="Nichts ausstehend"
                 body="Du hast aktuell keine gesendeten Freundschaftsanfragen."
+                image={emptySentIllustration}
               />
             )
           ) : null}
@@ -568,6 +612,30 @@ const styles = StyleSheet.create({
     color: '#6B7A6B',
     fontFamily: Fonts.sans,
     fontSize: 13,
+    lineHeight: 18,
+  },
+  emptyIllustration: {
+    alignSelf: 'center',
+    height: 120,
+    marginBottom: 12,
+    width: 120,
+  },
+  emptyCtaButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#2E6B4B',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  emptyCtaLabel: {
+    color: '#F5F3EE',
+    fontFamily: Fonts.sans,
+    fontSize: 13,
+    fontWeight: '700',
     lineHeight: 18,
   },
   searchButton: {

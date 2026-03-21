@@ -8,14 +8,19 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Markdown from 'react-native-markdown-display';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
   Linking,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -47,7 +52,12 @@ type CarouselImageItem = {
   uri: string;
   title: string;
   subtitle?: string;
+  imageCaption?: string;
 };
+
+const CAROUSEL_DOUBLE_TAP_DELAY_MS = 280;
+const CAROUSEL_ZOOM_SCALE = 2;
+const CAROUSEL_PAN_THRESHOLD = 2;
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
@@ -151,7 +161,7 @@ function StampDetailContent() {
   const stampId = Array.isArray(params.id) ? params.id[0] : params.id;
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useStampDetailQuery(stampId);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [isStamping, setIsStamping] = useState(false);
   const [isEditingVisits, setIsEditingVisits] = useState(false);
@@ -159,7 +169,15 @@ function StampDetailContent() {
   const [busyVisitId, setBusyVisitId] = useState<string | null>(null);
   const [isImageCarouselVisible, setIsImageCarouselVisible] = useState(false);
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
+  const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
+  const [carouselImageViewport, setCarouselImageViewport] = useState({ width: windowWidth, height: windowHeight });
   const carouselListRef = useRef<FlatList<CarouselImageItem> | null>(null);
+  const lastCarouselTapRef = useRef<{ timestamp: number; imageId: string | null }>({
+    timestamp: 0,
+    imageId: null,
+  });
+  const carouselImagePan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const carouselImagePanOffsetRef = useRef({ x: 0, y: 0 });
   const [pickerState, setPickerState] = useState<{
     visitId: string;
     value: Date;
@@ -406,6 +424,7 @@ function StampDetailContent() {
         uri: heroImageUri,
         title: `${selectedStamp.number || '--'} • ${selectedStamp.name}`,
         subtitle: 'Aktuelle Stempelstelle',
+        imageCaption: selectedStamp.imageCaption?.trim() || undefined,
       });
     }
 
@@ -420,6 +439,7 @@ function StampDetailContent() {
         uri: imageUri,
         title: `${neighbor.number || '--'} • ${neighbor.name}`,
         subtitle: 'Stempel in der Naehe',
+        imageCaption: neighbor.imageCaption?.trim() || undefined,
       });
     }
 
@@ -441,13 +461,143 @@ function StampDetailContent() {
 
     const nextIndex = Math.min(Math.max(0, startIndex), carouselImages.length - 1);
     setActiveCarouselIndex(nextIndex);
+    setZoomedImageId(null);
+    carouselImagePanOffsetRef.current = { x: 0, y: 0 };
+    carouselImagePan.setValue({ x: 0, y: 0 });
+    lastCarouselTapRef.current = { timestamp: 0, imageId: null };
     setIsImageCarouselVisible(true);
-  }, [carouselImages.length]);
+  }, [carouselImagePan, carouselImages.length]);
 
   const closeImageCarousel = useCallback(() => {
     setIsImageCarouselVisible(false);
     setActiveCarouselIndex(0);
+    setZoomedImageId(null);
+    carouselImagePanOffsetRef.current = { x: 0, y: 0 };
+    carouselImagePan.setValue({ x: 0, y: 0 });
+    lastCarouselTapRef.current = { timestamp: 0, imageId: null };
+  }, [carouselImagePan]);
+
+  const clampCarouselPan = useCallback((x: number, y: number) => {
+    const viewportWidth = carouselImageViewport.width || windowWidth;
+    const viewportHeight = carouselImageViewport.height || windowHeight;
+    const maxX = (viewportWidth * (CAROUSEL_ZOOM_SCALE - 1)) / 2;
+    const maxY = (viewportHeight * (CAROUSEL_ZOOM_SCALE - 1)) / 2;
+    return {
+      x: Math.min(Math.max(x, -maxX), maxX),
+      y: Math.min(Math.max(y, -maxY), maxY),
+    };
+  }, [carouselImageViewport.height, carouselImageViewport.width, windowHeight, windowWidth]);
+
+  const resetCarouselPan = useCallback(() => {
+    carouselImagePanOffsetRef.current = { x: 0, y: 0 };
+    carouselImagePan.setValue({ x: 0, y: 0 });
+  }, [carouselImagePan]);
+
+  const handleCarouselImageLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+
+    setCarouselImageViewport((current) => {
+      if (Math.abs(current.width - width) < 0.5 && Math.abs(current.height - height) < 0.5) {
+        return current;
+      }
+
+      return { width, height };
+    });
   }, []);
+
+  const handleCarouselImagePress = useCallback((imageId: string, event: GestureResponderEvent) => {
+    const tapX = event.nativeEvent.locationX;
+    const tapY = event.nativeEvent.locationY;
+    const now = Date.now();
+    const previousTap = lastCarouselTapRef.current;
+    const isDoubleTap =
+      previousTap.imageId === imageId &&
+      now - previousTap.timestamp <= CAROUSEL_DOUBLE_TAP_DELAY_MS;
+
+    lastCarouselTapRef.current = { timestamp: now, imageId };
+
+    if (!isDoubleTap) {
+      return;
+    }
+
+    lastCarouselTapRef.current = { timestamp: 0, imageId: null };
+    setZoomedImageId((current) => {
+      if (current === imageId) {
+        resetCarouselPan();
+        return null;
+      }
+
+      const viewportWidth = carouselImageViewport.width || windowWidth;
+      const viewportHeight = carouselImageViewport.height || windowHeight;
+      const offsetFromCenterX = tapX - viewportWidth / 2;
+      const offsetFromCenterY = tapY - viewportHeight / 2;
+      const targetPan = clampCarouselPan(
+        -(CAROUSEL_ZOOM_SCALE - 1) * offsetFromCenterX,
+        -(CAROUSEL_ZOOM_SCALE - 1) * offsetFromCenterY
+      );
+
+      carouselImagePanOffsetRef.current = targetPan;
+      carouselImagePan.setValue(targetPan);
+      return imageId;
+    });
+  }, [
+    carouselImagePan,
+    carouselImageViewport.height,
+    carouselImageViewport.width,
+    clampCarouselPan,
+    resetCarouselPan,
+    windowHeight,
+    windowWidth,
+  ]);
+
+  const carouselPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          zoomedImageId !== null &&
+          (Math.abs(gestureState.dx) > CAROUSEL_PAN_THRESHOLD ||
+            Math.abs(gestureState.dy) > CAROUSEL_PAN_THRESHOLD),
+        onPanResponderMove: (_, gestureState) => {
+          if (zoomedImageId === null) {
+            return;
+          }
+
+          const next = clampCarouselPan(
+            carouselImagePanOffsetRef.current.x + gestureState.dx,
+            carouselImagePanOffsetRef.current.y + gestureState.dy
+          );
+          carouselImagePan.setValue(next);
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          if (zoomedImageId === null) {
+            return;
+          }
+
+          const next = clampCarouselPan(
+            carouselImagePanOffsetRef.current.x + gestureState.dx,
+            carouselImagePanOffsetRef.current.y + gestureState.dy
+          );
+          carouselImagePanOffsetRef.current = next;
+          carouselImagePan.setValue(next);
+        },
+        onPanResponderTerminate: (_, gestureState) => {
+          if (zoomedImageId === null) {
+            return;
+          }
+
+          const next = clampCarouselPan(
+            carouselImagePanOffsetRef.current.x + gestureState.dx,
+            carouselImagePanOffsetRef.current.y + gestureState.dy
+          );
+          carouselImagePanOffsetRef.current = next;
+          carouselImagePan.setValue(next);
+        },
+      }),
+    [carouselImagePan, clampCarouselPan, zoomedImageId]
+  );
 
   useEffect(() => {
     if (!isImageCarouselVisible) {
@@ -472,11 +622,17 @@ function StampDetailContent() {
       }
 
       const nextIndex = Math.round(event.nativeEvent.contentOffset.x / windowWidth);
-      setActiveCarouselIndex(
-        Math.min(Math.max(0, nextIndex), Math.max(0, carouselImages.length - 1))
-      );
+      const boundedIndex = Math.min(Math.max(0, nextIndex), Math.max(0, carouselImages.length - 1));
+
+      if (boundedIndex !== activeCarouselIndex) {
+        setZoomedImageId(null);
+        resetCarouselPan();
+        lastCarouselTapRef.current = { timestamp: 0, imageId: null };
+      }
+
+      setActiveCarouselIndex(boundedIndex);
     },
-    [carouselImages.length, windowWidth]
+    [activeCarouselIndex, carouselImages.length, resetCarouselPan, windowWidth]
   );
 
   if (!stampId) {
@@ -578,6 +734,20 @@ function StampDetailContent() {
             <Text style={styles.heroBadgeText}>Stempel {stamp.number || '--'}</Text>
           </View>
         </LinearGradient>
+        {stamp.imageCaption?.trim() ? (
+          <View style={styles.heroCaptionWrap}>
+            <Markdown
+              style={{
+                body: styles.heroCaptionBody,
+                paragraph: styles.heroCaptionParagraph,
+                text: styles.heroCaptionBody,
+                strong: styles.heroCaptionStrong,
+                link: styles.heroCaptionLink,
+              }}>
+              {stamp.imageCaption.trim()}
+            </Markdown>
+          </View>
+        ) : null}
 
         <View style={styles.body}>
           <Text style={styles.title}>{stamp.name}</Text>
@@ -643,12 +813,22 @@ function StampDetailContent() {
               </>
             ) : detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((parking) => (
-                <View key={parking.ID} style={styles.simpleItem}>
-                  <Text style={styles.simpleItemTitle}>
-                    {parking.name} ({formatDistance(parking.distanceKm)}
-                    {parking.durationMinutes ? ` • ${formatDuration(parking.durationMinutes)}` : ''})
-                  </Text>
-                </View>
+                <Pressable
+                  key={parking.ID}
+                  onPress={() => router.push(`/parking/${parking.ID}` as never)}
+                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
+                  <View style={[styles.rowBadge, styles.rowBadgeParking]}>
+                    <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelParking]}>P</Text>
+                  </View>
+                  <View style={styles.rowBody}>
+                    <Text style={styles.rowTitle}>{parking.name}</Text>
+                    <Text style={styles.rowMeta}>
+                      {formatDistance(parking.distanceKm)}
+                      {parking.durationMinutes ? ` • ${formatDuration(parking.durationMinutes)}` : ''}
+                    </Text>
+                  </View>
+                  <Feather color="#8b957f" name="chevron-right" size={18} />
+                </Pressable>
               ))
             ) : (
               <Text style={styles.emptySectionText}>Keine Parkplätze in der Nähe gefunden.</Text>
@@ -810,17 +990,57 @@ function StampDetailContent() {
             onMomentumScrollEnd={handleCarouselScrollEnd}
             pagingEnabled
             ref={carouselListRef}
+            scrollEnabled={zoomedImageId === null}
             renderItem={({ item }) => (
               <View style={[styles.carouselSlide, { width: windowWidth }]}>
-                <Image
-                  contentFit="contain"
-                  source={buildAuthenticatedImageSource(item.uri, accessToken)}
-                  style={styles.carouselImage}
-                />
+                <Pressable
+                  onLayout={handleCarouselImageLayout}
+                  onPress={(event) => handleCarouselImagePress(item.id, event)}
+                  style={styles.carouselImagePressable}>
+                  <Animated.View
+                    style={[
+                      styles.carouselImageTransform,
+                      zoomedImageId === item.id
+                        ? {
+                            transform: [
+                              { translateX: carouselImagePan.x },
+                              { translateY: carouselImagePan.y },
+                            ],
+                          }
+                        : undefined,
+                    ]}
+                    {...(zoomedImageId === item.id ? carouselPanResponder.panHandlers : {})}>
+                    <Animated.View
+                      style={[
+                        styles.carouselImageScaleLayer,
+                        zoomedImageId === item.id
+                          ? { transform: [{ scale: CAROUSEL_ZOOM_SCALE }] }
+                          : undefined,
+                      ]}>
+                      <Image
+                        contentFit="contain"
+                        source={buildAuthenticatedImageSource(item.uri, accessToken)}
+                        style={styles.carouselImage}
+                      />
+                    </Animated.View>
+                  </Animated.View>
+                </Pressable>
                 <View style={styles.carouselCaptionWrap}>
                   <Text style={styles.carouselCaptionTitle}>{item.title}</Text>
                   {item.subtitle ? (
                     <Text style={styles.carouselCaptionSubtitle}>{item.subtitle}</Text>
+                  ) : null}
+                  {item.imageCaption ? (
+                    <Markdown
+                      style={{
+                        body: styles.carouselCaptionBody,
+                        paragraph: styles.carouselCaptionParagraph,
+                        text: styles.carouselCaptionBody,
+                        strong: styles.carouselCaptionStrong,
+                        link: styles.carouselCaptionLink,
+                      }}>
+                      {item.imageCaption}
+                    </Markdown>
                   ) : null}
                 </View>
               </View>
@@ -985,6 +1205,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  heroCaptionWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  heroCaptionBody: {
+    color: '#5a675a',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  heroCaptionParagraph: {
+    marginTop: 0,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  heroCaptionStrong: {
+    color: '#2e3a2e',
+    fontWeight: '700',
+  },
+  heroCaptionLink: {
+    color: '#2f7dd7',
+    textDecorationLine: 'underline',
+  },
   body: {
     paddingHorizontal: 20,
     paddingTop: 16,
@@ -1003,6 +1247,7 @@ const styles = StyleSheet.create({
     color: '#445244',
     fontSize: 14,
     lineHeight: 22,
+    marginTop: 8,
   },
   section: {
     backgroundColor: '#ffffff',
@@ -1066,12 +1311,19 @@ const styles = StyleSheet.create({
   rowBadgeStamp: {
     backgroundColor: '#e2eee6',
   },
+  rowBadgeParking: {
+    backgroundColor: '#e3effc',
+  },
   rowBadgeLabel: {
     fontSize: 12,
     lineHeight: 16,
   },
   rowBadgeLabelStamp: {
     color: '#2e6b4b',
+  },
+  rowBadgeLabelParking: {
+    color: '#2f7dd7',
+    fontWeight: '700',
   },
   rowBody: {
     flex: 1,
@@ -1260,16 +1512,29 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingTop: 68,
-    paddingBottom: 18,
+    paddingBottom: 30,
   },
   carouselImage: {
     flex: 1,
     width: '100%',
   },
+  carouselImagePressable: {
+    flex: 1,
+    width: '100%',
+  },
+  carouselImageTransform: {
+    flex: 1,
+    width: '100%',
+  },
+  carouselImageScaleLayer: {
+    flex: 1,
+    width: '100%',
+  },
   carouselCaptionWrap: {
     paddingHorizontal: 18,
-    paddingTop: 10,
-    gap: 4,
+    paddingTop: 12,
+    paddingBottom: 12,
+    gap: 6,
   },
   carouselCaptionTitle: {
     color: '#f5f3ee',
@@ -1283,6 +1548,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
+    marginBottom: 4,
+  },
+  carouselCaptionBody: {
+    color: '#e6ede4',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  carouselCaptionParagraph: {
+    marginTop: 2,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  carouselCaptionStrong: {
+    color: '#f5f3ee',
+    fontWeight: '700',
+  },
+  carouselCaptionLink: {
+    color: '#b4d6ff',
+    textDecorationLine: 'underline',
   },
   modalScrim: {
     flex: 1,

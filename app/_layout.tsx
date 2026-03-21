@@ -60,6 +60,7 @@ export default function RootLayout() {
             <Stack.Screen name="profile/edit" />
             <Stack.Screen name="profile/[userId]" />
             <Stack.Screen name="stamps/[id]" />
+            <Stack.Screen name="parking/[id]" />
           </Stack>
           <StatusBar style="light" />
         </ThemeProvider>

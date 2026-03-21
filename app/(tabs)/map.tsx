@@ -39,7 +39,7 @@ type BaseMarkerItem = {
   kind: MarkerKind;
   coordinate: Coordinate;
   title: string;
-  description: string;
+  description?: string;
   imageUrl?: string;
 };
 
@@ -276,7 +276,10 @@ function normalizeSearchValue(value: string) {
 export default function MapScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const params = useLocalSearchParams<{ stampId?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    stampId?: string | string[];
+    parkingId?: string | string[];
+  }>();
   const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<AuthClaims>();
   const insets = useSafeAreaInsets();
@@ -284,11 +287,13 @@ export default function MapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const searchInputRef = useRef<TextInput | null>(null);
   const requestedStampId = Array.isArray(params.stampId) ? params.stampId[0] : params.stampId;
+  const requestedParkingId = Array.isArray(params.parkingId) ? params.parkingId[0] : params.parkingId;
   const initialRegion = lastMapRegion ?? HARZ_REGION;
   const regionRef = useRef<Region>(initialRegion);
   const hasFittedInitialRegion = useRef(lastMapRegion !== null);
   const lastMarkerPressAtRef = useRef(0);
   const handledRequestedStampIdRef = useRef<string | null>(null);
+  const handledRequestedParkingIdRef = useRef<string | null>(null);
   const { data, error, isFetching, isPending, isPlaceholderData } = useMapDataQuery();
   const [region, setRegion] = useState<Region>(initialRegion);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -345,7 +350,7 @@ export default function MapScreen() {
         kind: stamp.kind,
         coordinate: { latitude: stamp.latitude, longitude: stamp.longitude },
         title: `${stamp.number || '--'} • ${stamp.name}`,
-        description: stamp.description?.trim() || 'Keine Beschreibung verfuegbar.',
+        description: stamp.description?.trim() || undefined,
         imageUrl: stamp.heroImageUrl?.trim() || stamp.image?.trim() || undefined,
         number: stamp.number,
         stampId: stamp.ID,
@@ -365,7 +370,7 @@ export default function MapScreen() {
         kind: 'parking',
         coordinate: { latitude: parkingSpot.latitude, longitude: parkingSpot.longitude },
         title: parkingSpot.name?.trim() || 'Parkplatz',
-        description: parkingSpot.description?.trim() || 'Parkplatz in der Naehe.',
+        description: parkingSpot.description?.trim() || undefined,
         parkingId: parkingSpot.ID,
       }));
   }, [data]);
@@ -496,7 +501,7 @@ export default function MapScreen() {
     return visibleItems
       .filter((item) => {
         const normalizedTitle = item.title.toLowerCase();
-        const normalizedDescription = item.description.toLowerCase();
+        const normalizedDescription = item.description?.toLowerCase() || '';
         return (
           normalizedTitle.includes(normalizedQuery) || normalizedDescription.includes(normalizedQuery)
         );
@@ -667,6 +672,26 @@ export default function MapScreen() {
     focusItemOnMap(requestedItem);
     handledRequestedStampIdRef.current = requestedStampId;
   }, [focusItemOnMap, isMapReady, requestedStampId, stampItems]);
+
+  useEffect(() => {
+    if (!requestedParkingId) {
+      handledRequestedParkingIdRef.current = null;
+      return;
+    }
+
+    if (!isMapReady || handledRequestedParkingIdRef.current === requestedParkingId) {
+      return;
+    }
+
+    const requestedItem = parkingItems.find((item) => item.parkingId === requestedParkingId);
+    if (!requestedItem) {
+      return;
+    }
+
+    setShowParking(true);
+    focusItemOnMap(requestedItem);
+    handledRequestedParkingIdRef.current = requestedParkingId;
+  }, [focusItemOnMap, isMapReady, parkingItems, requestedParkingId]);
 
   const handleRegionChangeComplete = useCallback((nextRegion: Region) => {
     updateMapRegion(nextRegion);
@@ -893,12 +918,12 @@ export default function MapScreen() {
             item={{
               kind: selectedItem.kind,
               title: selectedItem.title,
-              description: selectedItem.description,
+              description: selectedItem.kind === 'parking' ? undefined : selectedItem.description,
               imageUrl: selectedItem.imageUrl,
             }}
             metadata={
               selectedItem.kind === 'parking'
-                ? selectedItem.description || 'Parkplatz aus dem OData-Feed.'
+                ? selectedItem.description?.trim()
                 : nearestParkingMeta ||
                   (formatVisitDate(selectedItem.visitedAt)
                     ? `Besucht am ${formatVisitDate(selectedItem.visitedAt)}`
@@ -907,10 +932,10 @@ export default function MapScreen() {
             onPrimaryActionPress={handleStampVisit}
             primaryActionDisabled={selectionPrimaryActionDisabled}
             primaryActionLabel={selectionPrimaryActionLabel}
-            onDetailsPress={
-              selectedItem.kind !== 'parking'
-                ? () => router.push(`/stamps/${selectedItem.stampId}` as never)
-                : undefined
+            onDetailsPress={() =>
+              selectedItem.kind === 'parking'
+                ? router.push(`/parking/${selectedItem.parkingId}` as never)
+                : router.push(`/stamps/${selectedItem.stampId}` as never)
             }
             onHeightChange={setSelectedSheetHeight}
           />

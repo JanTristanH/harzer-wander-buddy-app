@@ -167,8 +167,34 @@ export default function StampsScreen() {
     return true;
   });
 
-  const header = (
-    <View style={styles.headerContent}>
+  type ListEntry =
+    | { type: 'intro'; key: 'intro' }
+    | { type: 'controls'; key: 'controls' }
+    | { type: 'empty'; key: 'empty' }
+    | {
+        type: 'stamp';
+        key: string;
+        stampIndex: number;
+        stampItem: (typeof filteredStamps)[number];
+      };
+
+  const listItems: ListEntry[] = [{ type: 'intro', key: 'intro' }, { type: 'controls', key: 'controls' }];
+
+  if (filteredStamps.length === 0) {
+    listItems.push({ type: 'empty', key: 'empty' });
+  } else {
+    filteredStamps.forEach((stampItem, stampIndex) => {
+      listItems.push({
+        type: 'stamp',
+        key: `stamp-${stampItem.stamp.ID}`,
+        stampIndex,
+        stampItem,
+      });
+    });
+  }
+
+  const renderIntro = () => (
+    <View style={styles.introContent}>
       <View style={styles.titleRow}>
         <Text style={styles.title}>Stempelstellen</Text>
         <Text style={styles.totalLabel}>{totalCount} gesamt</Text>
@@ -193,7 +219,11 @@ export default function StampsScreen() {
       </LinearGradient>
 
       {isRefreshing ? <Text style={styles.refreshHint}>Aktualisiere Daten im Hintergrund...</Text> : null}
+    </View>
+  );
 
+  const renderControls = () => (
+    <View style={styles.controlsContent}>
       <View style={styles.searchShell}>
         <View style={styles.searchIconWrap}>
           <Feather color="#6d7d6e" name="search" size={14} />
@@ -260,25 +290,45 @@ export default function StampsScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <FlatList
-        data={filteredStamps}
-        keyExtractor={({ stamp }) => stamp.ID}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>Keine passenden Stempelstellen</Text>
-            <Text style={styles.emptyCopy}>
-              Passe Suche oder Filter an, um wieder Ergebnisse aus dem OData-v4-Feed zu sehen.
-            </Text>
-          </View>
-        }
-        ListHeaderComponent={header}
-        renderItem={({ item, index }) => (
-          <StampListItem
-            index={index}
-            item={item.stamp}
-            metaLabel={formatDistance(item.distanceKm)}
-            onPress={() => router.push(`/stamps/${item.stamp.ID}` as never)}
-          />
-        )}
+        data={listItems}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => {
+          if (item.type === 'intro') {
+            return <View style={styles.introWrap}>{renderIntro()}</View>;
+          }
+
+          if (item.type === 'controls') {
+            return (
+              <View style={styles.controlsWrap}>
+                {renderControls()}
+              </View>
+            );
+          }
+
+          if (item.type === 'empty') {
+            return (
+              <View style={styles.emptyStateWrap}>
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyTitle}>Keine passenden Stempelstellen</Text>
+                  <Text style={styles.emptyCopy}>
+                    Passe Suche oder Filter an, um wieder Ergebnisse aus dem OData-v4-Feed zu sehen.
+                  </Text>
+                </View>
+              </View>
+            );
+          }
+
+          return (
+            <View style={styles.stampRow}>
+              <StampListItem
+                index={item.stampIndex}
+                item={item.stampItem.stamp}
+                metaLabel={formatDistance(item.stampItem.distanceKm)}
+                onPress={() => router.push(`/stamps/${item.stampItem.stamp.ID}` as never)}
+              />
+            </View>
+          );
+        }}
         contentContainerStyle={styles.listContent}
         contentInset={{ bottom: 160 }}
         refreshControl={
@@ -297,6 +347,7 @@ export default function StampsScreen() {
             tintColor="#2e6b4b"
           />
         }
+        stickyHeaderIndices={[1]}
         scrollIndicatorInsets={{ bottom: 160 }}
         showsVerticalScrollIndicator={false}
         style={styles.list}
@@ -314,14 +365,28 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 220,
+  },
+  introWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+  },
+  introContent: {
     gap: 12,
   },
-  headerContent: {
+  controlsWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
+    backgroundColor: '#f5f3ee',
+  },
+  controlsContent: {
     gap: 12,
-    marginBottom: 4,
+  },
+  stampRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
   },
   titleRow: {
     flexDirection: 'row',
@@ -488,6 +553,9 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 20,
     gap: 8,
+  },
+  emptyStateWrap: {
+    paddingHorizontal: 20,
   },
   emptyTitle: {
     color: '#2e3a2e',

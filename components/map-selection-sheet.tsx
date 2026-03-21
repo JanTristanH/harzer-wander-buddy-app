@@ -19,10 +19,10 @@ export function MapSelectionSheet({
   item: {
     kind: MarkerKind;
     title: string;
-    description: string;
+    description?: string;
     imageUrl?: string;
   };
-  metadata: string;
+  metadata?: string;
   primaryActionLabel?: string;
   onPrimaryActionPress?: () => void;
   primaryActionDisabled?: boolean;
@@ -60,9 +60,11 @@ export function MapSelectionSheet({
           <Text numberOfLines={1} style={styles.detailTitle}>
             {item.title}
           </Text>
-          <Text numberOfLines={2} style={styles.detailDescription}>
-            {item.description}
-          </Text>
+          {item.description?.trim() ? (
+            <Text numberOfLines={2} style={styles.detailDescription}>
+              {item.description}
+            </Text>
+          ) : null}
         </View>
 
         <View
@@ -92,11 +94,13 @@ export function MapSelectionSheet({
         </View>
       </View>
 
-      <View pointerEvents="none" style={styles.detailMetaRow}>
-        <Text numberOfLines={1} style={styles.detailMeta}>
-          {metadata}
-        </Text>
-      </View>
+      {metadata?.trim() ? (
+        <View pointerEvents="none" style={styles.detailMetaRow}>
+          <Text numberOfLines={1} style={styles.detailMeta}>
+            {metadata}
+          </Text>
+        </View>
+      ) : null}
 
       {primaryActionLabel || onDetailsPress ? (
         <View style={styles.actionRow}>

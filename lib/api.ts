@@ -8,6 +8,7 @@ export type Stampbox = {
   description?: string;
   heroImageUrl?: string;
   image?: string;
+  imageCaption?: string;
   latitude?: number;
   longitude?: number;
   hasVisited?: boolean;
@@ -252,6 +253,7 @@ export type StampDetailData = {
     number?: string;
     name: string;
     heroImageUrl?: string;
+    imageCaption?: string;
     distanceKm: number | null;
     durationMinutes: number | null;
   }[];
@@ -268,6 +270,25 @@ export type StampDetailData = {
     createdAt?: string;
   }[];
   myVisits: VisitStamping[];
+};
+
+export type ParkingDetailData = {
+  parking: ParkingSpot;
+  nearbyStamps: {
+    ID: string;
+    number?: string;
+    name: string;
+    heroImageUrl?: string;
+    imageCaption?: string;
+    distanceKm: number | null;
+    durationMinutes: number | null;
+  }[];
+  nearbyParking: {
+    ID: string;
+    name: string;
+    distanceKm: number | null;
+    durationMinutes: number | null;
+  }[];
 };
 
 export type MapStamp = Stampbox & {
@@ -539,7 +560,7 @@ async function fetchComparisonStampboxes(accessToken: string, groupUserIds: stri
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
     [
       '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
+      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
     ],
     ['$skip', 0],
     ['$top', 250],
@@ -692,7 +713,7 @@ export async function fetchStampboxes(accessToken: string) {
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
     [
       '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
     ],
     ['$orderby', 'orderBy asc'],
     ['$top', 500],
@@ -801,7 +822,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
   const stamp = await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
     [
       '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
     ],
   ]);
 
@@ -831,7 +852,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             accessToken,
             'Stampboxes',
             neighbor.NeighborsID,
-            [['$select', 'ID,number,name,heroImageUrl,image']]
+            [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
           );
 
           return {
@@ -839,6 +860,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             number: relatedStamp.number,
             name: relatedStamp.name,
             heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
+            imageCaption: relatedStamp.imageCaption,
             distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
             durationMinutes: estimateMinutes(
               typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
@@ -850,6 +872,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             number: neighbor.NeighborsNumber,
             name: `${neighbor.NeighborsNumber || ''}`.trim(),
             heroImageUrl: undefined,
+            imageCaption: undefined,
             distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
             durationMinutes: estimateMinutes(
               typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
@@ -987,6 +1010,105 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     friendVisits,
     myVisits,
   } satisfies StampDetailData;
+}
+
+export async function fetchParkingDetail(accessToken: string, parkingId: string) {
+  const parking = await fetchEntityById<ParkingSpot>(accessToken, 'ParkingSpots', parkingId, [
+    ['$select', 'ID,name,description,image,latitude,longitude'],
+  ]);
+
+  const [neighborStampRows, neighborParkingRows] = await Promise.all([
+    fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsParkingStamp', 'ID', parkingId, [
+      ['$orderby', 'distanceKm asc'],
+      ['$top', 3],
+    ]),
+    fetchGuidFilteredCollection<NeighborParkingRow>(
+      accessToken,
+      'NeighborsParkingParking',
+      'ID',
+      parkingId,
+      [
+        ['$orderby', 'distanceKm asc'],
+        ['$top', 3],
+      ]
+    ),
+  ]);
+
+  const nearbyStamps = await Promise.all(
+    neighborStampRows.map(async (neighbor) => {
+      try {
+        const relatedStamp = await fetchEntityById<Stampbox>(
+          accessToken,
+          'Stampboxes',
+          neighbor.NeighborsID,
+          [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
+        );
+
+        return {
+          ID: relatedStamp.ID,
+          number: relatedStamp.number,
+          name: relatedStamp.name || `Stempel ${relatedStamp.number || '--'}`,
+          heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
+          imageCaption: relatedStamp.imageCaption,
+          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+          durationMinutes: estimateMinutes(
+            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
+          ),
+        };
+      } catch {
+        return {
+          ID: neighbor.NeighborsID,
+          number: neighbor.NeighborsNumber,
+          name: neighbor.NeighborsNumber ? `Stempel ${neighbor.NeighborsNumber}` : 'Stempelstelle',
+          heroImageUrl: undefined,
+          imageCaption: undefined,
+          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+          durationMinutes: estimateMinutes(
+            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
+          ),
+        };
+      }
+    })
+  );
+
+  const nearbyParking = (
+    await Promise.all(
+      neighborParkingRows.map(async (neighbor) => {
+        try {
+          const relatedParking = await fetchEntityById<ParkingSpot>(
+            accessToken,
+            'ParkingSpots',
+            neighbor.NeighborsID,
+            [['$select', 'ID,name']]
+          );
+
+          return {
+            ID: relatedParking.ID,
+            name: relatedParking.name || 'Parkplatz',
+            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+            durationMinutes: estimateMinutes(
+              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
+            ),
+          };
+        } catch {
+          return {
+            ID: neighbor.NeighborsID,
+            name: 'Parkplatz',
+            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+            durationMinutes: estimateMinutes(
+              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
+            ),
+          };
+        }
+      })
+    )
+  ).filter((item) => item.ID !== parking.ID);
+
+  return {
+    parking,
+    nearbyStamps,
+    nearbyParking,
+  } satisfies ParkingDetailData;
 }
 
 export async function fetchProfileOverview(accessToken: string, currentUserId?: string) {
