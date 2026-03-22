@@ -20,6 +20,8 @@ import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { useParkingDetailQuery } from '@/lib/queries';
 
+const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
+
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
     return 'Keine Distanz';
@@ -231,7 +233,16 @@ function ParkingDetailContent() {
                 </Pressable>
               ))
             ) : (
-              <Text style={styles.emptySectionText}>Keine benachbarten Stempelstellen gefunden.</Text>
+              <View style={styles.emptyNearbyStampsState}>
+                <Image
+                  contentFit="contain"
+                  source={emptyNearbyStampsIllustration}
+                  style={styles.emptyNearbyStampsIllustration}
+                />
+                <Text style={[styles.emptySectionText, styles.emptyNearbyStampsText]}>
+                  Keine Stempel in der Nähe gefunden.
+                </Text>
+              </View>
             )}
           </Section>
 
@@ -489,6 +500,17 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 13,
     lineHeight: 18,
+  },
+  emptyNearbyStampsState: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyNearbyStampsIllustration: {
+    width: 120,
+    height: 120,
+  },
+  emptyNearbyStampsText: {
+    textAlign: 'center',
   },
   skeletonRow: {
     flexDirection: 'row',

@@ -120,6 +120,7 @@ export type ProfileViewModel = {
   stampItems: (SimpleStampItem | CompareStampItem)[];
   onStampPress: (stampId: string) => void;
   emptyStampText: string;
+  emptyStampIllustration?: React.ComponentProps<typeof Image>['source'];
   footerButtons?: {
     key: string;
     label: string;
@@ -724,7 +725,18 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
               )
             )
           ) : !data.showDeferredSkeletons ? (
-            <Text style={styles.emptyText}>{data.emptyStampText}</Text>
+            data.emptyStampIllustration ? (
+              <View style={styles.emptyStampState}>
+                <Image
+                  contentFit="contain"
+                  source={data.emptyStampIllustration}
+                  style={styles.emptyStampIllustration}
+                />
+                <Text style={[styles.emptyText, styles.emptyStampText]}>{data.emptyStampText}</Text>
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>{data.emptyStampText}</Text>
+            )
           ) : null}
         </ProfileSection>
 
@@ -1224,6 +1236,17 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
+  },
+  emptyStampState: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyStampIllustration: {
+    width: 120,
+    height: 120,
+  },
+  emptyStampText: {
+    textAlign: 'center',
   },
   expandFriendsButton: {
     alignSelf: 'center',

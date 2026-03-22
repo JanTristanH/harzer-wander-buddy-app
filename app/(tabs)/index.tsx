@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -29,6 +30,8 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 ];
 
 const NEARBY_DISTANCE_KM = 5;
+const emptySearchIllustration = require('@/assets/images/buddy/telescope.png');
+const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
 
 function haversineDistanceKm(
   from: { latitude: number; longitude: number },
@@ -166,6 +169,12 @@ export default function StampsScreen() {
 
     return true;
   });
+  const isVisitedEmptyState = activeFilter === 'visited' && visitedCount === 0;
+  const emptyStateTitle = isVisitedEmptyState ? 'Noch keine Stempelstellen besucht' : 'Keine passenden Stempelstellen';
+  const emptyStateCopy = isVisitedEmptyState
+    ? 'Sobald du deine erste Stempelstelle besuchst, erscheint sie hier.'
+    : 'Probier eine andere Suche oder waehle einen anderen Filter.';
+  const emptyStateIllustration = isVisitedEmptyState ? emptyVisitedIllustration : emptySearchIllustration;
 
   type ListEntry =
     | { type: 'intro'; key: 'intro' }
@@ -309,10 +318,13 @@ export default function StampsScreen() {
             return (
               <View style={styles.emptyStateWrap}>
                 <View style={styles.emptyState}>
-                  <Text style={styles.emptyTitle}>Keine passenden Stempelstellen</Text>
-                  <Text style={styles.emptyCopy}>
-                    Passe Suche oder Filter an, um wieder Ergebnisse aus dem OData-v4-Feed zu sehen.
-                  </Text>
+                  <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
+                  <Image
+                    contentFit="contain"
+                    source={emptyStateIllustration}
+                    style={styles.emptyIllustration}
+                  />
+                  <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
                 </View>
               </View>
             );
@@ -569,5 +581,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  emptyIllustration: {
+    width: 120,
+    height: 120,
+    alignSelf: 'center',
   },
 });

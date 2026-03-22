@@ -201,10 +201,47 @@ export default function FriendProfileScreen() {
             : data.relationship === 'outgoing_request'
               ? {
                   type: 'button',
-                  label: 'Gesendet',
-                  disabled: true,
+                  label: 'Zurueckrufen',
                   muted: true,
-                  onPress: () => undefined,
+                  busy: isMutating,
+                  onPress: () => {
+                    if (!accessToken || !data.friendshipId) {
+                      return;
+                    }
+
+                    Alert.alert(
+                      'Anfrage zurueckrufen?',
+                      'Diese gesendete Freundschaftsanfrage wird zurueckgezogen.',
+                      [
+                        {
+                          text: 'Abbrechen',
+                          style: 'cancel',
+                        },
+                        {
+                          text: 'Zurueckrufen',
+                          style: 'destructive',
+                          onPress: () => {
+                            void (async () => {
+                              setIsMutating(true);
+
+                              try {
+                                await removeFriendship(accessToken, data.friendshipId!);
+                                await refetch();
+                                await invalidateRelationshipQueries();
+                              } catch (nextError) {
+                                await handleMutationError(
+                                  nextError,
+                                  'Anfrage konnte nicht zurueckgerufen werden'
+                                );
+                              } finally {
+                                setIsMutating(false);
+                              }
+                            })();
+                          },
+                        },
+                      ]
+                    );
+                  },
                 }
               : {
                   type: 'button',
@@ -231,7 +268,7 @@ export default function FriendProfileScreen() {
                 },
               },
       latestVisits: data.latestVisits,
-      latestVisitsEmptyText: 'Noch keine Besuche von diesem Profil vorhanden.',
+      latestVisitsEmptyText: 'Dieses Profil hat noch keine Besuche.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),
       friendsList: {
         items: data.friends.map((friend) => ({
@@ -241,7 +278,7 @@ export default function FriendProfileScreen() {
           subtitle: `${friend.visitedCount} Stempel • ${friend.completionPercent}%`,
           onPress: () => router.push(`/profile/${encodeURIComponent(friend.id)}` as never),
         })),
-        emptyText: 'Dieses Profil hat aktuell keine Freunde sichtbar.',
+        emptyText: 'Dieses Profil zeigt noch keine Freunde.',
       },
       stampChips: [
         { key: 'shared', label: `Gemeinsam ${data.stampBuckets.shared}`, tone: 'success' },
@@ -258,7 +295,7 @@ export default function FriendProfileScreen() {
         otherVisited: item.userVisited,
       })),
       onStampPress: (stampId) => router.push(`/stamps/${stampId}` as never),
-      emptyStampText: 'Keine Stempelstellen fuer diesen Vergleich verfuegbar.',
+      emptyStampText: 'Fuer diesen Vergleich gibt es gerade keine Stempelstellen.',
       onRefresh: () => {
         void (async () => {
           setIsPullRefreshing(true);

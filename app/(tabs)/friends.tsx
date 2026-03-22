@@ -23,6 +23,7 @@ import { Fonts } from '@/constants/theme';
 import {
   acceptPendingFriendshipRequest,
   createFriendRequest,
+  removeFriendship,
   searchUsers,
   type SearchUserResult,
 } from '@/lib/api';
@@ -100,6 +101,7 @@ export default function FriendsScreen() {
   const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<FriendFilter>('friends');
   const [acceptingPendingRequestId, setAcceptingPendingRequestId] = useState<string | null>(null);
+  const [recallingFriendshipId, setRecallingFriendshipId] = useState<string | null>(null);
   const [isSearchModalVisible, setIsSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchUserResult[]>([]);
@@ -250,6 +252,55 @@ export default function FriendsScreen() {
       } finally {
         setSubmittingUserId(null);
       }
+    },
+    [accessToken, claims?.sub, logout, queryClient]
+  );
+
+  const handleRecallRequest = useCallback(
+    (friendshipId: string) => {
+      if (!accessToken) {
+        return;
+      }
+
+      Alert.alert(
+        'Anfrage zurueckrufen?',
+        'Diese gesendete Freundschaftsanfrage wird zurueckgezogen.',
+        [
+          {
+            text: 'Abbrechen',
+            style: 'cancel',
+          },
+          {
+            text: 'Zurueckrufen',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                setRecallingFriendshipId(friendshipId);
+
+                try {
+                  await removeFriendship(accessToken, friendshipId);
+                  await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
+                    queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+                  ]);
+                } catch (nextError) {
+                  if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+                    await logout();
+                    return;
+                  }
+
+                  Alert.alert(
+                    'Anfrage konnte nicht zurueckgerufen werden',
+                    nextError instanceof Error ? nextError.message : 'Unknown error'
+                  );
+                } finally {
+                  setRecallingFriendshipId(null);
+                }
+              })();
+            },
+          },
+        ]
+      );
     },
     [accessToken, claims?.sub, logout, queryClient]
   );
@@ -422,17 +473,33 @@ export default function FriendsScreen() {
           {!isPending && !blockingError && activeFilter === 'sent' ? (
             data && data.outgoingRequests.length > 0 ? (
               <FriendsList
-                items={data.outgoingRequests.map((request) => ({
-                  id: request.id,
-                  image: request.picture,
-                  name: request.name,
-                  onPress: () => router.push(`/profile/${encodeURIComponent(request.userId)}` as never),
-                  subtitle: 'Anfrage gesendet',
-                  actionLabel: 'Gesendet',
-                  actionMuted: true,
-                  actionDisabled: true,
-                  onActionPress: () => undefined,
-                }))}
+                items={data.outgoingRequests.map((request) => {
+                  const legacyPendingRequestId = (
+                    request as unknown as {
+                      pendingRequestId?: string;
+                    }
+                  ).pendingRequestId;
+                  const recallFriendshipId = request.friendshipId || legacyPendingRequestId;
+                  const isRecalling = !!recallFriendshipId && recallingFriendshipId === recallFriendshipId;
+
+                  return {
+                    id: request.id,
+                    image: request.picture,
+                    name: request.name,
+                    onPress: () => router.push(`/profile/${encodeURIComponent(request.userId)}` as never),
+                    subtitle: 'Anfrage gesendet',
+                    actionLabel: isRecalling ? '...' : 'Zurueckrufen',
+                    actionMuted: true,
+                    actionDisabled: !recallFriendshipId || isRecalling,
+                    onActionPress: () => {
+                      if (!recallFriendshipId) {
+                        return;
+                      }
+
+                      void handleRecallRequest(recallFriendshipId);
+                    },
+                  };
+                })}
               />
             ) : (
               <EmptyState

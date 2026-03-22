@@ -172,7 +172,7 @@ export type FriendsOverviewData = {
   }>;
   outgoingRequests: Array<{
     id: string;
-    pendingRequestId: string;
+    friendshipId: string;
     userId: string;
     name: string;
     picture?: string;
@@ -1254,7 +1254,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
         ? 'outgoing_request'
         : 'not_connected';
 
-  const friendshipId = friendMatch?.FriendshipID || null;
+  const friendshipId = friendMatch?.FriendshipID || outgoingPendingMatch?.FriendshipID || null;
   const pendingRequestId = incomingPendingMatch?.ID || null;
 
   const targetVisitedCount = stamps.reduce(
@@ -1363,7 +1363,7 @@ export async function fetchFriendsOverview(accessToken: string) {
   const outgoingRequests = pendingSentFriendships
     .map((friendship) => ({
       id: friendship.FriendshipID || friendship.ID,
-      pendingRequestId: friendship.FriendshipID || friendship.ID,
+      friendshipId: friendship.FriendshipID || friendship.ID,
       userId: friendship.ID,
       name: friendship.name || friendship.ID,
       picture: friendship.picture,
@@ -1532,6 +1532,10 @@ export async function updateFriendshipPermission(
 }
 
 export async function removeFriendship(accessToken: string, friendshipId: string) {
+  if (!friendshipId) {
+    throw new Error('Friendship ID is required');
+  }
+
   return mutateOData<null>(accessToken, buildUrl(`Friendships(${friendshipId})`), {
     method: 'DELETE',
   });

@@ -17,6 +17,8 @@ type ProfileClaims = {
   picture?: string;
 };
 
+const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { currentUserProfile, logout, resetApp } = useAuth();
@@ -48,6 +50,7 @@ export default function ProfileScreen() {
 
       return true;
     });
+    const isVisitedEmptyState = activeStampFilter === 'visited' && data.visitedCount === 0;
 
     return {
       mode: 'self',
@@ -66,7 +69,7 @@ export default function ProfileScreen() {
         { label: 'Freunde', value: String(data.friendCount) },
       ],
       latestVisits: data.latestVisits,
-      latestVisitsEmptyText: 'Noch keine Besuche vorhanden.',
+      latestVisitsEmptyText: 'Noch keine Besuche.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),
       friendsList: {
         items: data.friends.map((friend) => ({
@@ -76,7 +79,7 @@ export default function ProfileScreen() {
           subtitle: `${friend.visitedCount} Stempel • ${friend.completionPercent}%`,
           onPress: () => router.push(`/profile/${encodeURIComponent(friend.id)}` as never),
         })),
-        emptyText: 'Noch keine Freunde verbunden.',
+        emptyText: 'Noch keine Freunde.',
       },
       stampChips: [
         { key: 'visited', label: `Besucht: ${data.visitedCount}`, tone: 'success' },
@@ -87,7 +90,10 @@ export default function ProfileScreen() {
       onSelectStampChip: (key) => setActiveStampFilter(key as StampFilter),
       stampItems: filteredStamps.map((stamp) => ({ kind: 'simple' as const, stamp })),
       onStampPress: (stampId) => router.push(`/stamps/${stampId}` as never),
-      emptyStampText: 'Keine Stempelstellen fuer diesen Filter verfuegbar.',
+      emptyStampText: isVisitedEmptyState
+        ? 'Sobald du deine erste Stempelstelle besuchst, erscheint sie hier.'
+        : 'Hier gibt es gerade keine passenden Stempelstellen.',
+      emptyStampIllustration: isVisitedEmptyState ? emptyVisitedIllustration : undefined,
       onRefresh: () => {
         void (async () => {
           setIsPullRefreshing(true);

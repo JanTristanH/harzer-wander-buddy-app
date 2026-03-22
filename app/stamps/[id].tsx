@@ -58,6 +58,7 @@ type CarouselImageItem = {
 const CAROUSEL_DOUBLE_TAP_DELAY_MS = 280;
 const CAROUSEL_ZOOM_SCALE = 2;
 const CAROUSEL_PAN_THRESHOLD = 2;
+const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
@@ -800,7 +801,16 @@ function StampDetailContent() {
                 </Pressable>
               ))
             ) : (
-              <Text style={styles.emptySectionText}>Keine benachbarten Stempelstellen gefunden.</Text>
+              <View style={styles.emptyNearbyStampsState}>
+                <Image
+                  contentFit="contain"
+                  source={emptyNearbyStampsIllustration}
+                  style={styles.emptyNearbyStampsIllustration}
+                />
+                <Text style={[styles.emptySectionText, styles.emptyNearbyStampsText]}>
+                  Keine Stempel in der Nähe gefunden.
+                </Text>
+              </View>
             )}
           </Section>
 
@@ -1414,6 +1424,17 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
+  },
+  emptyNearbyStampsState: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyNearbyStampsIllustration: {
+    width: 120,
+    height: 120,
+  },
+  emptyNearbyStampsText: {
+    textAlign: 'center',
   },
   bottomDock: {
     position: 'absolute',

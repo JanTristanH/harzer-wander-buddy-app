@@ -1,53 +1,16 @@
-import type { BottomTabNavigationOptions } from '@react-navigation/bottom-tabs';
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Easing, useWindowDimensions } from 'react-native';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { FloatingBarIcon } from '@/components/floating-bar-icon';
 import { HapticTab } from '@/components/haptic-tab';
 
-const getHorizontalSwipeInterpolator = (
-  width: number
-): BottomTabNavigationOptions['sceneStyleInterpolator'] => {
-  return ({ current }) => ({
-    sceneStyle: {
-      opacity: current.progress.interpolate({
-        inputRange: [-1, -0.4, 0, 0.4, 1],
-        outputRange: [0.9, 0.96, 1, 0.96, 0.9],
-      }),
-      transform: [
-        {
-          translateX: current.progress.interpolate({
-            inputRange: [-1, 0, 1],
-            outputRange: [-width, 0, width],
-          }),
-        },
-      ],
-    },
-  });
-};
-
 export default function TabLayout() {
-  const { width } = useWindowDimensions();
-  const sceneStyleInterpolator = React.useMemo(
-    () => getHorizontalSwipeInterpolator(Math.max(width, 1)),
-    [width]
-  );
-
   return (
     <AuthGuard>
       <Tabs
         screenOptions={{
           headerShown: false,
-          sceneStyleInterpolator,
-          transitionSpec: {
-            animation: 'timing',
-            config: {
-              duration: 260,
-              easing: Easing.out(Easing.cubic),
-            },
-          },
           tabBarButton: HapticTab,
           tabBarActiveTintColor: '#2e6b4b',
           tabBarInactiveTintColor: '#718071',
