@@ -76,6 +76,20 @@ function formatDuration(durationMinutes: number | null) {
   return `${durationMinutes} Min`;
 }
 
+function formatElevationSummary(elevationGainMeters: number | null, elevationLossMeters: number | null) {
+  const parts: string[] = [];
+
+  if (typeof elevationGainMeters === 'number' && Number.isFinite(elevationGainMeters)) {
+    parts.push(`↑${Math.round(Math.abs(elevationGainMeters))} m`);
+  }
+
+  if (typeof elevationLossMeters === 'number' && Number.isFinite(elevationLossMeters)) {
+    parts.push(`↓${Math.round(Math.abs(elevationLossMeters))} m`);
+  }
+
+  return parts.length > 0 ? ` • ${parts.join(' ')}` : '';
+}
+
 function formatVisitDate(value?: string) {
   if (!value) {
     return 'Unbekanntes Datum';
@@ -795,6 +809,7 @@ function StampDetailContent() {
                     <Text style={styles.rowMeta}>
                       {formatDistance(neighbor.distanceKm)}
                       {neighbor.durationMinutes ? ` • ${formatDuration(neighbor.durationMinutes)}` : ''}
+                      {formatElevationSummary(neighbor.elevationGainMeters, neighbor.elevationLossMeters)}
                     </Text>
                   </View>
                   <Feather color="#8b957f" name="chevron-right" size={18} />
@@ -835,6 +850,7 @@ function StampDetailContent() {
                     <Text style={styles.rowMeta}>
                       {formatDistance(parking.distanceKm)}
                       {parking.durationMinutes ? ` • ${formatDuration(parking.durationMinutes)}` : ''}
+                      {formatElevationSummary(parking.elevationGainMeters, parking.elevationLossMeters)}
                     </Text>
                   </View>
                   <Feather color="#8b957f" name="chevron-right" size={18} />

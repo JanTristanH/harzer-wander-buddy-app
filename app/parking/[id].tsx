@@ -38,6 +38,20 @@ function formatDuration(durationMinutes: number | null) {
   return `${durationMinutes} Min`;
 }
 
+function formatElevationSummary(elevationGainMeters: number | null, elevationLossMeters: number | null) {
+  const parts: string[] = [];
+
+  if (typeof elevationGainMeters === 'number' && Number.isFinite(elevationGainMeters)) {
+    parts.push(`↑${Math.round(Math.abs(elevationGainMeters))} m`);
+  }
+
+  if (typeof elevationLossMeters === 'number' && Number.isFinite(elevationLossMeters)) {
+    parts.push(`↓${Math.round(Math.abs(elevationLossMeters))} m`);
+  }
+
+  return parts.length > 0 ? ` • ${parts.join(' ')}` : '';
+}
+
 function SkeletonLine({
   width,
   height = 14,
@@ -227,6 +241,7 @@ function ParkingDetailContent() {
                     <Text style={styles.rowMeta}>
                       {formatDistance(neighbor.distanceKm)}
                       {neighbor.durationMinutes ? ` • ${formatDuration(neighbor.durationMinutes)}` : ''}
+                      {formatElevationSummary(neighbor.elevationGainMeters, neighbor.elevationLossMeters)}
                     </Text>
                   </View>
                   <Feather color="#8b957f" name="chevron-right" size={18} />
@@ -267,6 +282,10 @@ function ParkingDetailContent() {
                     <Text style={styles.rowMeta}>
                       {formatDistance(nearbyParking.distanceKm)}
                       {nearbyParking.durationMinutes ? ` • ${formatDuration(nearbyParking.durationMinutes)}` : ''}
+                      {formatElevationSummary(
+                        nearbyParking.elevationGainMeters,
+                        nearbyParking.elevationLossMeters
+                      )}
                     </Text>
                   </View>
                   <Feather color="#8b957f" name="chevron-right" size={18} />

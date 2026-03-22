@@ -19,9 +19,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapSelectionSheet } from '@/components/map-selection-sheet';
 import {
   createStamping,
+  fetchRouteMetrics,
   fetchStampDetail,
   type MapParkingSpot,
   type MapStamp,
+  type RouteMetrics,
   type StampDetailData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
@@ -62,6 +64,14 @@ type ParkingMarkerItem = BaseMarkerItem & {
 };
 
 type MarkerItem = StampMarkerItem | ParkingMarkerItem;
+
+type NearestCounterpart = {
+  kind: 'parking' | 'stamp';
+  title: string;
+  fromPoiId: string;
+  toPoiId: string;
+  distanceKm: number;
+};
 
 type ClusterMarkerItem = {
   id: string;
@@ -268,6 +278,28 @@ function formatDistance(distanceKm: number) {
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
 }
 
+function formatDuration(durationMinutes: number | null) {
+  if (durationMinutes === null) {
+    return '';
+  }
+
+  return `${durationMinutes} Min`;
+}
+
+function formatElevationSummary(elevationGainMeters: number | null, elevationLossMeters: number | null) {
+  const parts: string[] = [];
+
+  if (typeof elevationGainMeters === 'number' && Number.isFinite(elevationGainMeters)) {
+    parts.push(`↑${Math.round(Math.abs(elevationGainMeters))} m`);
+  }
+
+  if (typeof elevationLossMeters === 'number' && Number.isFinite(elevationLossMeters)) {
+    parts.push(`↓${Math.round(Math.abs(elevationLossMeters))} m`);
+  }
+
+  return parts.length > 0 ? ` • ${parts.join(' ')}` : '';
+}
+
 function zoomRegion(region: Region, factor: number) {
   return {
     ...region,
@@ -380,6 +412,7 @@ export default function MapScreen() {
   const [isParkingRevealPending, setIsParkingRevealPending] = useState(false);
   const [selectedSheetHeight, setSelectedSheetHeight] = useState(0);
   const [mapHeading, setMapHeading] = useState(0);
+  const [nearestRouteMetrics, setNearestRouteMetrics] = useState<RouteMetrics | null>(null);
   const showStartupLoading = (isPending && !data) || isPlaceholderData;
   const isMapNorthUp = Math.abs(normalizeHeading(mapHeading)) <= NORTH_HEADING_EPSILON;
 
@@ -605,8 +638,41 @@ export default function MapScreen() {
       .map((entry) => entry.item);
   }, [searchQuery, visibleItems]);
 
-  const nearestParkingMeta = useMemo(() => {
-    if (!selectedItem || selectedItem.kind === 'parking' || parkingItems.length === 0) {
+  const nearestCounterpart = useMemo<NearestCounterpart | null>(() => {
+    if (!selectedItem) {
+      return null;
+    }
+
+    if (selectedItem.kind === 'parking') {
+      if (stampItems.length === 0) {
+        return null;
+      }
+
+      let nearestStamp: StampMarkerItem | null = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+
+      for (const stampItem of stampItems) {
+        const distanceKm = haversineDistanceKm(selectedItem.coordinate, stampItem.coordinate);
+        if (distanceKm < nearestDistance) {
+          nearestDistance = distanceKm;
+          nearestStamp = stampItem;
+        }
+      }
+
+      if (!nearestStamp || !Number.isFinite(nearestDistance)) {
+        return null;
+      }
+
+      return {
+        kind: 'stamp',
+        title: nearestStamp.title,
+        fromPoiId: selectedItem.parkingId,
+        toPoiId: nearestStamp.stampId,
+        distanceKm: nearestDistance,
+      };
+    }
+
+    if (parkingItems.length === 0) {
       return null;
     }
 
@@ -625,8 +691,82 @@ export default function MapScreen() {
       return null;
     }
 
-    return `Parken: ${nearestParking.title} • ${formatDistance(nearestDistance)}`;
-  }, [parkingItems, selectedItem]);
+    return {
+      kind: 'parking',
+      title: nearestParking.title,
+      fromPoiId: selectedItem.stampId,
+      toPoiId: nearestParking.parkingId,
+      distanceKm: nearestDistance,
+    };
+  }, [parkingItems, selectedItem, stampItems]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setNearestRouteMetrics(null);
+
+    if (!accessToken || !selectedItem || !nearestCounterpart) {
+      return () => {
+        isMounted = false;
+      };
+    }
+    const authToken: string = accessToken;
+    const counterpart: NearestCounterpart = nearestCounterpart;
+
+    async function loadNearestRouteMetrics() {
+      const metrics = await fetchRouteMetrics(
+        authToken,
+        counterpart.fromPoiId,
+        counterpart.toPoiId,
+        counterpart.distanceKm
+      );
+
+      if (!isMounted) {
+        return;
+      }
+
+      setNearestRouteMetrics(metrics);
+    }
+
+    void loadNearestRouteMetrics();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [accessToken, nearestCounterpart, selectedItem]);
+
+  const nearestCounterpartMeta = useMemo(() => {
+    if (!nearestCounterpart) {
+      return null;
+    }
+
+    const distanceKm = nearestRouteMetrics?.distanceKm ?? nearestCounterpart.distanceKm;
+    const elevationGainMeters = nearestRouteMetrics?.elevationGainMeters ?? null;
+    const elevationLossMeters = nearestRouteMetrics?.elevationLossMeters ?? null;
+    const durationText =
+      nearestRouteMetrics?.durationMinutes !== null && nearestRouteMetrics?.durationMinutes !== undefined
+        ? ` • ${formatDuration(nearestRouteMetrics.durationMinutes)}`
+        : '';
+
+    if (nearestCounterpart.kind === 'parking') {
+      const hmParts: string[] = [];
+      if (typeof elevationGainMeters === 'number' && Number.isFinite(elevationGainMeters)) {
+        hmParts.push(`↑${Math.round(Math.abs(elevationGainMeters))} m`);
+      }
+      if (typeof elevationLossMeters === 'number' && Number.isFinite(elevationLossMeters)) {
+        hmParts.push(`↓${Math.round(Math.abs(elevationLossMeters))} m`);
+      }
+
+      const distanceAndHm =
+        hmParts.length > 0 ? `${formatDistance(distanceKm)} • ${hmParts.join(' ')}` : formatDistance(distanceKm);
+      return `Parken: ${distanceAndHm} • ${nearestCounterpart.title}`;
+    }
+
+    const infoText = `${formatDistance(distanceKm)}${durationText}${formatElevationSummary(
+      elevationGainMeters,
+      elevationLossMeters
+    )}`;
+    return `Stempel: ${nearestCounterpart.title} • ${infoText}`;
+  }, [nearestCounterpart, nearestRouteMetrics]);
 
   const sheetBottomOffset = TAB_BAR_HEIGHT + TAB_BAR_MARGIN_BOTTOM + SHEET_TO_TAB_BAR_GAP;
   const zoomControlsBottomOffset =
@@ -903,6 +1043,10 @@ export default function MapScreen() {
           void syncMapHeading();
         }}
         onUserLocationChange={(event) => {
+          if (!event.nativeEvent.coordinate) {
+            return;
+          }
+
           setUserLocation({
             latitude: event.nativeEvent.coordinate.latitude,
             longitude: event.nativeEvent.coordinate.longitude,
@@ -1079,12 +1223,12 @@ export default function MapScreen() {
               imageUrl: selectedItem.imageUrl,
             }}
             metadata={
-              selectedItem.kind === 'parking'
+              nearestCounterpartMeta ||
+              (selectedItem.kind === 'parking'
                 ? selectedItem.description?.trim()
-                : nearestParkingMeta ||
-                  (formatVisitDate(selectedItem.visitedAt)
-                    ? `Besucht am ${formatVisitDate(selectedItem.visitedAt)}`
-                    : 'Noch kein Besuchsdatum vorhanden.')
+                : formatVisitDate(selectedItem.visitedAt)
+                  ? `Besucht am ${formatVisitDate(selectedItem.visitedAt)}`
+                  : 'Noch kein Besuchsdatum vorhanden.')
             }
             onPrimaryActionPress={handleStampVisit}
             primaryActionDisabled={selectionPrimaryActionDisabled}

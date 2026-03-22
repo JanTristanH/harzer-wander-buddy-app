@@ -96,7 +96,7 @@ export function MapSelectionSheet({
 
       {metadata?.trim() ? (
         <View pointerEvents="none" style={styles.detailMetaRow}>
-          <Text numberOfLines={1} style={styles.detailMeta}>
+          <Text numberOfLines={2} style={styles.detailMeta}>
             {metadata}
           </Text>
         </View>

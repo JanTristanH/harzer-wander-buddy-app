@@ -34,6 +34,17 @@ type NeighborParkingRow = {
   distanceKm?: number;
 };
 
+type TravelTimeRow = {
+  ID: string;
+  fromPoi?: string;
+  toPoi?: string;
+  durationSeconds?: number;
+  distanceMeters?: number;
+  travelMode?: string;
+  elevationGain?: number;
+  elevationLoss?: number;
+};
+
 export type ParkingSpot = {
   ID: string;
   name?: string;
@@ -256,12 +267,16 @@ export type StampDetailData = {
     imageCaption?: string;
     distanceKm: number | null;
     durationMinutes: number | null;
+    elevationGainMeters: number | null;
+    elevationLossMeters: number | null;
   }[];
   nearbyParking: {
     ID: string;
     name: string;
     distanceKm: number | null;
     durationMinutes: number | null;
+    elevationGainMeters: number | null;
+    elevationLossMeters: number | null;
   }[];
   friendVisits: {
     id: string;
@@ -282,12 +297,16 @@ export type ParkingDetailData = {
     imageCaption?: string;
     distanceKm: number | null;
     durationMinutes: number | null;
+    elevationGainMeters: number | null;
+    elevationLossMeters: number | null;
   }[];
   nearbyParking: {
     ID: string;
     name: string;
     distanceKm: number | null;
     durationMinutes: number | null;
+    elevationGainMeters: number | null;
+    elevationLossMeters: number | null;
   }[];
 };
 
@@ -303,6 +322,13 @@ export type MapParkingSpot = ParkingSpot & {
 export type MapData = {
   stamps: MapStamp[];
   parkingSpots: MapParkingSpot[];
+};
+
+export type RouteMetrics = {
+  distanceKm: number | null;
+  durationMinutes: number | null;
+  elevationGainMeters: number | null;
+  elevationLossMeters: number | null;
 };
 
 function normalizeBaseUrl(url: string) {
@@ -665,6 +691,78 @@ function estimateMinutes(distanceKm: number | null) {
   return Math.max(1, Math.round((distanceKm / 4) * 60));
 }
 
+export async function fetchRouteMetrics(
+  accessToken: string,
+  fromPoiId: string,
+  toPoiId: string,
+  fallbackDistanceKm: number | null = null
+) {
+  const normalizedFallbackDistanceKm =
+    typeof fallbackDistanceKm === 'number' && Number.isFinite(fallbackDistanceKm)
+      ? fallbackDistanceKm
+      : null;
+  const routeFilters = [
+    `fromPoi eq ${fromPoiId} and toPoi eq ${toPoiId}`,
+    `fromPoi eq guid'${fromPoiId}' and toPoi eq guid'${toPoiId}'`,
+  ];
+
+  for (const filter of routeFilters) {
+    try {
+      const routeRows = await fetchCollection<TravelTimeRow>(accessToken, 'TravelTimes', [
+        ['$select', 'ID,durationSeconds,distanceMeters,travelMode,elevationGain,elevationLoss'],
+        ['$filter', filter],
+        ['$top', 20],
+      ]);
+
+      if (routeRows.length === 0) {
+        continue;
+      }
+
+      const walkingRoute =
+        routeRows.find((row) => {
+          const travelMode = safeNormalizedText(row.travelMode);
+          return (
+            travelMode.includes('walk') ||
+            travelMode.includes('foot') ||
+            travelMode.includes('hike') ||
+            travelMode.includes('pedestrian')
+          );
+        }) ?? routeRows[0];
+
+      const distanceKm =
+        typeof walkingRoute.distanceMeters === 'number' && Number.isFinite(walkingRoute.distanceMeters)
+          ? walkingRoute.distanceMeters / 1000
+          : normalizedFallbackDistanceKm;
+      const durationMinutes =
+        typeof walkingRoute.durationSeconds === 'number' && Number.isFinite(walkingRoute.durationSeconds)
+          ? Math.max(1, Math.round(walkingRoute.durationSeconds / 60))
+          : estimateMinutes(distanceKm);
+
+      return {
+        distanceKm,
+        durationMinutes,
+        elevationGainMeters:
+          typeof walkingRoute.elevationGain === 'number' && Number.isFinite(walkingRoute.elevationGain)
+            ? walkingRoute.elevationGain
+            : null,
+        elevationLossMeters:
+          typeof walkingRoute.elevationLoss === 'number' && Number.isFinite(walkingRoute.elevationLoss)
+            ? walkingRoute.elevationLoss
+            : null,
+      } satisfies RouteMetrics;
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    distanceKm: normalizedFallbackDistanceKm,
+    durationMinutes: estimateMinutes(normalizedFallbackDistanceKm),
+    elevationGainMeters: null,
+    elevationLossMeters: null,
+  } satisfies RouteMetrics;
+}
+
 function getVisitTimestamp(stamping: Stamping) {
   return stamping.visitedAt || stamping.createdAt;
 }
@@ -847,6 +945,13 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
   const nearbyStamps = (
     await Promise.all(
       neighborStampRows.map(async (neighbor) => {
+        const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
+        const routeMetricsPromise = fetchRouteMetrics(
+          accessToken,
+          stampId,
+          neighbor.NeighborsID,
+          fallbackDistanceKm
+        );
         try {
           const relatedStamp = await fetchEntityById<Stampbox>(
             accessToken,
@@ -854,6 +959,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             neighbor.NeighborsID,
             [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
           );
+          const routeMetrics = await routeMetricsPromise;
 
           return {
             ID: relatedStamp.ID,
@@ -861,22 +967,23 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
             name: relatedStamp.name,
             heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
             imageCaption: relatedStamp.imageCaption,
-            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-            durationMinutes: estimateMinutes(
-              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-            ),
+            distanceKm: routeMetrics.distanceKm,
+            durationMinutes: routeMetrics.durationMinutes,
+            elevationGainMeters: routeMetrics.elevationGainMeters,
+            elevationLossMeters: routeMetrics.elevationLossMeters,
           };
         } catch {
+          const routeMetrics = await routeMetricsPromise;
           return {
             ID: neighbor.NeighborsID,
             number: neighbor.NeighborsNumber,
             name: `${neighbor.NeighborsNumber || ''}`.trim(),
             heroImageUrl: undefined,
             imageCaption: undefined,
-            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-            durationMinutes: estimateMinutes(
-              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-            ),
+            distanceKm: routeMetrics.distanceKm,
+            durationMinutes: routeMetrics.durationMinutes,
+            elevationGainMeters: routeMetrics.elevationGainMeters,
+            elevationLossMeters: routeMetrics.elevationLossMeters,
           };
         }
       })
@@ -885,6 +992,13 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
 
   const nearbyParking = await Promise.all(
     neighborParkingRows.map(async (neighbor) => {
+      const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
+      const routeMetricsPromise = fetchRouteMetrics(
+        accessToken,
+        stampId,
+        neighbor.NeighborsID,
+        fallbackDistanceKm
+      );
       try {
         const parking = await fetchEntityById<ParkingSpot>(
           accessToken,
@@ -892,23 +1006,25 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
           neighbor.NeighborsID,
           [['$select', 'ID,name']]
         );
+        const routeMetrics = await routeMetricsPromise;
 
         return {
           ID: parking.ID,
           name: parking.name || 'Parkplatz',
-          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-          durationMinutes: estimateMinutes(
-            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-          ),
+          distanceKm: routeMetrics.distanceKm,
+          durationMinutes: routeMetrics.durationMinutes,
+          elevationGainMeters: routeMetrics.elevationGainMeters,
+          elevationLossMeters: routeMetrics.elevationLossMeters,
         };
       } catch {
+        const routeMetrics = await routeMetricsPromise;
         return {
           ID: neighbor.NeighborsID,
           name: 'Parkplatz',
-          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-          durationMinutes: estimateMinutes(
-            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-          ),
+          distanceKm: routeMetrics.distanceKm,
+          durationMinutes: routeMetrics.durationMinutes,
+          elevationGainMeters: routeMetrics.elevationGainMeters,
+          elevationLossMeters: routeMetrics.elevationLossMeters,
         };
       }
     })
@@ -974,7 +1090,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     const batchStampings = await Promise.all(
       friendIdBatch.map(async (friendId) => {
         const stamping = await fetchStampingForStampAndUser(accessToken, stampId, friendId);
-        return stamping ? [friendId, stamping] : null;
+        return stamping ? ([friendId, stamping] as const) : null;
       })
     );
 
@@ -1036,6 +1152,13 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
 
   const nearbyStamps = await Promise.all(
     neighborStampRows.map(async (neighbor) => {
+      const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
+      const routeMetricsPromise = fetchRouteMetrics(
+        accessToken,
+        parkingId,
+        neighbor.NeighborsID,
+        fallbackDistanceKm
+      );
       try {
         const relatedStamp = await fetchEntityById<Stampbox>(
           accessToken,
@@ -1043,6 +1166,7 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
           neighbor.NeighborsID,
           [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
         );
+        const routeMetrics = await routeMetricsPromise;
 
         return {
           ID: relatedStamp.ID,
@@ -1050,22 +1174,23 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
           name: relatedStamp.name || `Stempel ${relatedStamp.number || '--'}`,
           heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
           imageCaption: relatedStamp.imageCaption,
-          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-          durationMinutes: estimateMinutes(
-            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-          ),
+          distanceKm: routeMetrics.distanceKm,
+          durationMinutes: routeMetrics.durationMinutes,
+          elevationGainMeters: routeMetrics.elevationGainMeters,
+          elevationLossMeters: routeMetrics.elevationLossMeters,
         };
       } catch {
+        const routeMetrics = await routeMetricsPromise;
         return {
           ID: neighbor.NeighborsID,
           number: neighbor.NeighborsNumber,
           name: neighbor.NeighborsNumber ? `Stempel ${neighbor.NeighborsNumber}` : 'Stempelstelle',
           heroImageUrl: undefined,
           imageCaption: undefined,
-          distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-          durationMinutes: estimateMinutes(
-            typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-          ),
+          distanceKm: routeMetrics.distanceKm,
+          durationMinutes: routeMetrics.durationMinutes,
+          elevationGainMeters: routeMetrics.elevationGainMeters,
+          elevationLossMeters: routeMetrics.elevationLossMeters,
         };
       }
     })
@@ -1074,6 +1199,13 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
   const nearbyParking = (
     await Promise.all(
       neighborParkingRows.map(async (neighbor) => {
+        const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
+        const routeMetricsPromise = fetchRouteMetrics(
+          accessToken,
+          parkingId,
+          neighbor.NeighborsID,
+          fallbackDistanceKm
+        );
         try {
           const relatedParking = await fetchEntityById<ParkingSpot>(
             accessToken,
@@ -1081,23 +1213,25 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
             neighbor.NeighborsID,
             [['$select', 'ID,name']]
           );
+          const routeMetrics = await routeMetricsPromise;
 
           return {
             ID: relatedParking.ID,
             name: relatedParking.name || 'Parkplatz',
-            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-            durationMinutes: estimateMinutes(
-              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-            ),
+            distanceKm: routeMetrics.distanceKm,
+            durationMinutes: routeMetrics.durationMinutes,
+            elevationGainMeters: routeMetrics.elevationGainMeters,
+            elevationLossMeters: routeMetrics.elevationLossMeters,
           };
         } catch {
+          const routeMetrics = await routeMetricsPromise;
           return {
             ID: neighbor.NeighborsID,
             name: 'Parkplatz',
-            distanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
-            durationMinutes: estimateMinutes(
-              typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null
-            ),
+            distanceKm: routeMetrics.distanceKm,
+            durationMinutes: routeMetrics.durationMinutes,
+            elevationGainMeters: routeMetrics.elevationGainMeters,
+            elevationLossMeters: routeMetrics.elevationLossMeters,
           };
         }
       })
