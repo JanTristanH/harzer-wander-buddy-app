@@ -6,6 +6,7 @@ import * as Location from 'expo-location';
 import { Redirect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ActivityIndicator,
   Alert,
@@ -32,11 +33,13 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import { fetchStampsOverviewData, queryKeys } from '@/lib/queries';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
 const PROFILE_AUTO_SAVE_DELAY_MS = 3000;
 
 type LoginClaims = {
+  sub?: string;
   given_name?: string;
   name?: string;
   nickname?: string;
@@ -103,6 +106,7 @@ function ActionButton({
 export default function OnboardingScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const {
     accessToken,
     authError,
@@ -131,6 +135,7 @@ export default function OnboardingScreen() {
   const [selectedProfileImage, setSelectedProfileImage] = useState<SelectedImage | null>(null);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
+  const hasPrefetchedListRef = useRef(false);
   const lastAutoSaveAttemptRef = useRef<string | null>(null);
   const profileSavePromiseRef = useRef<Promise<boolean> | null>(null);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
@@ -280,6 +285,37 @@ export default function OnboardingScreen() {
       clearTimeout(timer);
     };
   }, [accessToken, isSearchModalVisible, logout, searchQuery]);
+
+  useEffect(() => {
+    if (!accessToken || !isAuthenticated || hasPrefetchedListRef.current) {
+      return;
+    }
+
+    hasPrefetchedListRef.current = true;
+    let cancelled = false;
+
+    void queryClient
+      .prefetchQuery({
+        queryKey: queryKeys.stampsOverview(claims?.sub),
+        queryFn: () => fetchStampsOverviewData(accessToken, claims?.sub),
+      })
+      .catch(async (error) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (error instanceof Error && error.name === 'UnauthorizedError') {
+          await logout();
+          return;
+        }
+
+        console.error('Failed to prefetch stamps list after onboarding login', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, claims?.sub, isAuthenticated, logout, queryClient]);
 
   const handlePickProfileImage = useCallback(async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();

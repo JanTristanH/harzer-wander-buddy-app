@@ -51,6 +51,7 @@ type CarouselImageItem = {
   id: string;
   uri: string;
   title: string;
+  kind: 'current' | 'nearby';
   subtitle?: string;
   imageCaption?: string;
 };
@@ -438,6 +439,7 @@ function StampDetailContent() {
         id: `stamp-${selectedStamp.ID}`,
         uri: heroImageUri,
         title: `${selectedStamp.number || '--'} • ${selectedStamp.name}`,
+        kind: 'current',
         subtitle: 'Aktuelle Stempelstelle',
         imageCaption: selectedStamp.imageCaption?.trim() || undefined,
       });
@@ -453,6 +455,7 @@ function StampDetailContent() {
         id: `nearby-${neighbor.ID}`,
         uri: imageUri,
         title: `${neighbor.number || '--'} • ${neighbor.name}`,
+        kind: 'nearby',
         subtitle: 'Stempel in der Naehe',
         imageCaption: neighbor.imageCaption?.trim() || undefined,
       });
@@ -695,6 +698,9 @@ function StampDetailContent() {
   const { stamp } = detail;
   const visited = !!stamp.hasVisited;
   const showDeferredSkeletons = isFetching && isPlaceholderData;
+  const activeCarouselItem = carouselImages[activeCarouselIndex];
+  const showNearbyCarouselPill =
+    isImageCarouselVisible && activeCarouselItem?.kind === 'nearby';
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
@@ -744,7 +750,6 @@ function StampDetailContent() {
               <Feather color="#1e2a1e" name="share-2" size={18} />
             </Pressable>
           </View>
-
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Stempel {stamp.number || '--'}</Text>
           </View>
@@ -1081,6 +1086,12 @@ function StampDetailContent() {
               style={({ pressed }) => [styles.carouselCloseButton, pressed && styles.topButtonPressed]}>
               <Feather color="#f5f3ee" name="x" size={18} />
             </Pressable>
+            {showNearbyCarouselPill ? (
+              <View style={styles.carouselNearbyPill}>
+                <Feather color="#2f7dd7" name="map-pin" size={12} />
+                <Text style={styles.carouselNearbyPillLabel}>Stempel in der Nähe</Text>
+              </View>
+            ) : null}
             <Text style={styles.carouselCounterLabel}>
               {carouselImages.length > 0 ? `${activeCarouselIndex + 1} / ${carouselImages.length}` : '0 / 0'}
             </Text>
@@ -1546,6 +1557,21 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  carouselNearbyPill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(227, 239, 252, 0.98)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  carouselNearbyPillLabel: {
+    color: '#2f7dd7',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   carouselSlide: {
     flex: 1,

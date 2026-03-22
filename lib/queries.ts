@@ -31,6 +31,18 @@ type StampsOverviewData = {
   lastVisited: LatestVisitedStamp | null;
 };
 
+export async function fetchStampsOverviewData(accessToken: string, userId?: string): Promise<StampsOverviewData> {
+  const [stamps, lastVisited] = await Promise.all([
+    fetchStampboxes(accessToken),
+    fetchLatestVisitedStamp(accessToken, userId),
+  ]);
+
+  return {
+    stamps,
+    lastVisited,
+  };
+}
+
 export const queryKeys = {
   stampsOverview: (userId?: string) => ['stamps-overview', userId ?? 'anonymous'] as const,
   mapData: (userId?: string) => ['map-data', userId ?? 'anonymous'] as const,
@@ -244,18 +256,7 @@ export function useStampsOverviewQuery() {
   return useQuery<StampsOverviewData>({
     queryKey: queryKeys.stampsOverview(claims?.sub),
     enabled: Boolean(accessToken && isAuthenticated),
-    queryFn: () =>
-      authorizedRequest(async (token) => {
-        const [stamps, lastVisited] = await Promise.all([
-          fetchStampboxes(token),
-          fetchLatestVisitedStamp(token, claims?.sub),
-        ]);
-
-        return {
-          stamps,
-          lastVisited,
-        };
-      }),
+    queryFn: () => authorizedRequest((token) => fetchStampsOverviewData(token, claims?.sub)),
   });
 }
 
