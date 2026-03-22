@@ -1081,6 +1081,8 @@ function StampDetailContent() {
                 display="spinner"
                 mode="datetime"
                 onChange={handlePickerChange}
+                textColor="#1e2a1e"
+                themeVariant="light"
                 value={pickerState.value}
               />
               <View style={styles.modalActions}>

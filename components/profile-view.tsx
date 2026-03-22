@@ -132,7 +132,8 @@ export type ProfileViewModel = {
   showDeferredSkeletons?: boolean;
 };
 
-const DEFAULT_VISIBLE_FRIENDS = 3;
+const DEFAULT_VISIBLE_ITEMS = 5;
+const MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE = 15;
 
 function formatVisitDate(value?: string) {
   if (!value) {
@@ -426,25 +427,48 @@ export function ProfileErrorState({
 
 export function ProfileView({ data }: { data: ProfileViewModel }) {
   const actionCard = data.actionCard;
+  const [showAllVisits, setShowAllVisits] = useState(false);
   const [showAllFriends, setShowAllFriends] = useState(false);
+  const [showAllStamps, setShowAllStamps] = useState(false);
 
   useEffect(() => {
+    setShowAllVisits(false);
     setShowAllFriends(false);
-  }, [data.mode, data.name, data.friendsList?.items.length]);
+    setShowAllStamps(false);
+  }, [
+    data.mode,
+    data.name,
+    data.latestVisits.length,
+    data.friendsList?.items.length,
+    data.activeStampChip,
+    data.stampItems.length,
+  ]);
+
+  const visibleVisits = useMemo(
+    () => (showAllVisits ? data.latestVisits : data.latestVisits.slice(0, DEFAULT_VISIBLE_ITEMS)),
+    [data.latestVisits, showAllVisits]
+  );
 
   const visibleFriends = useMemo(() => {
     if (!data.friendsList) {
       return [];
     }
 
-    return showAllFriends
-      ? data.friendsList.items
-      : data.friendsList.items.slice(0, DEFAULT_VISIBLE_FRIENDS);
+    return showAllFriends ? data.friendsList.items : data.friendsList.items.slice(0, DEFAULT_VISIBLE_ITEMS);
   }, [data.friendsList, showAllFriends]);
 
+  const visibleStamps = useMemo(
+    () => (showAllStamps ? data.stampItems : data.stampItems.slice(0, DEFAULT_VISIBLE_ITEMS)),
+    [data.stampItems, showAllStamps]
+  );
+
+  const hiddenVisitCount = Math.max(0, data.latestVisits.length - DEFAULT_VISIBLE_ITEMS);
+
   const hiddenFriendCount = data.friendsList
-    ? Math.max(0, data.friendsList.items.length - DEFAULT_VISIBLE_FRIENDS)
+    ? Math.max(0, data.friendsList.items.length - DEFAULT_VISIBLE_ITEMS)
     : 0;
+
+  const hiddenStampCount = Math.max(0, data.stampItems.length - DEFAULT_VISIBLE_ITEMS);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -602,9 +626,33 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
               <SkeletonVisitRow />
             </>
           ) : data.latestVisits.length > 0 ? (
-            data.latestVisits.map((visit, index) => (
-              <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
-            ))
+            <>
+              {showAllVisits &&
+              hiddenVisitCount > 0 &&
+              data.latestVisits.length >= MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE ? (
+                <Pressable
+                  onPress={() => setShowAllVisits(false)}
+                  style={({ pressed }) => [
+                    styles.expandListButton,
+                    styles.expandListButtonTop,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text style={styles.expandListLabel}>Weniger anzeigen</Text>
+                </Pressable>
+              ) : null}
+              {visibleVisits.map((visit, index) => (
+                <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
+              ))}
+              {hiddenVisitCount > 0 ? (
+                <Pressable
+                  onPress={() => setShowAllVisits((current) => !current)}
+                  style={({ pressed }) => [styles.expandListButton, pressed && styles.pressed]}>
+                  <Text style={styles.expandListLabel}>
+                    {showAllVisits ? 'Weniger anzeigen' : `${hiddenVisitCount} weitere anzeigen`}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </>
           ) : (
             <Text style={styles.emptyText}>{data.latestVisitsEmptyText}</Text>
           )}
@@ -636,6 +684,19 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
               </>
             ) : data.friendsList.items.length > 0 ? (
               <>
+                {showAllFriends &&
+                hiddenFriendCount > 0 &&
+                data.friendsList.items.length >= MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE ? (
+                  <Pressable
+                    onPress={() => setShowAllFriends(false)}
+                    style={({ pressed }) => [
+                      styles.expandListButton,
+                      styles.expandListButtonTop,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Text style={styles.expandListLabel}>Weniger anzeigen</Text>
+                  </Pressable>
+                ) : null}
                 <FriendsList
                   items={visibleFriends.map((friend) => ({
                     id: friend.id,
@@ -648,8 +709,8 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
                 {hiddenFriendCount > 0 ? (
                   <Pressable
                     onPress={() => setShowAllFriends((current) => !current)}
-                    style={({ pressed }) => [styles.expandFriendsButton, pressed && styles.pressed]}>
-                    <Text style={styles.expandFriendsLabel}>
+                    style={({ pressed }) => [styles.expandListButton, pressed && styles.pressed]}>
+                    <Text style={styles.expandListLabel}>
                       {showAllFriends ? 'Weniger anzeigen' : `${hiddenFriendCount} weitere anzeigen`}
                     </Text>
                   </Pressable>
@@ -707,23 +768,47 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
           )}
 
           {!data.showDeferredSkeletons && data.stampItems.length > 0 ? (
-            data.stampItems.map((item, index) =>
-              item.kind === 'compare' ? (
-                <StampComparisonRow
-                  key={item.stamp.ID}
-                  index={index}
-                  item={item}
-                  onPress={() => data.onStampPress(item.stamp.ID)}
-                />
-              ) : (
-                <SimpleStampRow
-                  key={item.stamp.ID}
-                  index={index}
-                  item={item}
-                  onPress={() => data.onStampPress(item.stamp.ID)}
-                />
-              )
-            )
+            <>
+              {showAllStamps &&
+              hiddenStampCount > 0 &&
+              data.stampItems.length >= MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE ? (
+                <Pressable
+                  onPress={() => setShowAllStamps(false)}
+                  style={({ pressed }) => [
+                    styles.expandListButton,
+                    styles.expandListButtonTop,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text style={styles.expandListLabel}>Weniger anzeigen</Text>
+                </Pressable>
+              ) : null}
+              {visibleStamps.map((item, index) =>
+                item.kind === 'compare' ? (
+                  <StampComparisonRow
+                    key={item.stamp.ID}
+                    index={index}
+                    item={item}
+                    onPress={() => data.onStampPress(item.stamp.ID)}
+                  />
+                ) : (
+                  <SimpleStampRow
+                    key={item.stamp.ID}
+                    index={index}
+                    item={item}
+                    onPress={() => data.onStampPress(item.stamp.ID)}
+                  />
+                )
+              )}
+              {hiddenStampCount > 0 ? (
+                <Pressable
+                  onPress={() => setShowAllStamps((current) => !current)}
+                  style={({ pressed }) => [styles.expandListButton, pressed && styles.pressed]}>
+                  <Text style={styles.expandListLabel}>
+                    {showAllStamps ? 'Weniger anzeigen' : `${hiddenStampCount} weitere anzeigen`}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </>
           ) : !data.showDeferredSkeletons ? (
             data.emptyStampIllustration ? (
               <View style={styles.emptyStampState}>
@@ -1248,7 +1333,7 @@ const styles = StyleSheet.create({
   emptyStampText: {
     textAlign: 'center',
   },
-  expandFriendsButton: {
+  expandListButton: {
     alignSelf: 'center',
     marginTop: 12,
     paddingHorizontal: 16,
@@ -1256,7 +1341,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#f0e9dd',
   },
-  expandFriendsLabel: {
+  expandListButtonTop: {
+    marginTop: 0,
+    marginBottom: 6,
+  },
+  expandListLabel: {
     color: '#2e6b4b',
     fontSize: 12,
     lineHeight: 16,

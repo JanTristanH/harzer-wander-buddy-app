@@ -17,7 +17,13 @@ import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MapSelectionSheet } from '@/components/map-selection-sheet';
-import { createStamping, type MapParkingSpot, type MapStamp } from '@/lib/api';
+import {
+  createStamping,
+  fetchStampDetail,
+  type MapParkingSpot,
+  type MapStamp,
+  type StampDetailData,
+} from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { queryKeys, useMapDataQuery } from '@/lib/queries';
 
@@ -91,6 +97,7 @@ const SELECTION_TARGET_VERTICAL_RATIO = 0.3;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
 const MARKER_ANCHOR = { x: 0.5, y: 1 };
+const DIGITS_ONLY_PATTERN = /^\d+$/;
 
 let lastMapRegion: Region | null = null;
 
@@ -273,6 +280,68 @@ function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
 }
 
+type SearchResultRank = {
+  matchTier: number;
+  matchIndex: number;
+  numberDelta: number;
+  titleLength: number;
+};
+
+function rankSearchResult(item: MarkerItem, normalizedQuery: string): SearchResultRank | null {
+  const normalizedTitle = normalizeSearchValue(item.title);
+  const normalizedDescription = normalizeSearchValue(item.description || '');
+  const titleIndex = normalizedTitle.indexOf(normalizedQuery);
+  const descriptionIndex = normalizedDescription.indexOf(normalizedQuery);
+
+  if (titleIndex < 0 && descriptionIndex < 0) {
+    return null;
+  }
+
+  const normalizedNumber =
+    item.kind === 'parking' ? '' : normalizeSearchValue(item.number || '');
+  const hasNumericQuery = DIGITS_ONLY_PATTERN.test(normalizedQuery);
+  const hasNumericNumber =
+    normalizedNumber.length > 0 && DIGITS_ONLY_PATTERN.test(normalizedNumber);
+  const queryValue = hasNumericQuery ? Number.parseInt(normalizedQuery, 10) : Number.NaN;
+  const numberValue = hasNumericNumber ? Number.parseInt(normalizedNumber, 10) : Number.NaN;
+  const numberDelta =
+    Number.isFinite(queryValue) && Number.isFinite(numberValue)
+      ? Math.abs(numberValue - queryValue)
+      : Number.MAX_SAFE_INTEGER;
+
+  if (normalizedNumber && normalizedNumber === normalizedQuery) {
+    return { matchTier: 0, matchIndex: 0, numberDelta, titleLength: normalizedTitle.length };
+  }
+
+  if (normalizedTitle === normalizedQuery) {
+    return { matchTier: 1, matchIndex: 0, numberDelta, titleLength: normalizedTitle.length };
+  }
+
+  if (normalizedNumber && normalizedNumber.startsWith(normalizedQuery)) {
+    return { matchTier: 2, matchIndex: 0, numberDelta, titleLength: normalizedTitle.length };
+  }
+
+  if (titleIndex === 0) {
+    return { matchTier: 3, matchIndex: 0, numberDelta, titleLength: normalizedTitle.length };
+  }
+
+  if (titleIndex > 0) {
+    return {
+      matchTier: 4,
+      matchIndex: titleIndex,
+      numberDelta,
+      titleLength: normalizedTitle.length,
+    };
+  }
+
+  return {
+    matchTier: 5,
+    matchIndex: descriptionIndex,
+    numberDelta,
+    titleLength: normalizedTitle.length,
+  };
+}
+
 export default function MapScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -303,11 +372,12 @@ export default function MapScreen() {
   const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
   const [visitFilter, setVisitFilter] = useState<VisitFilter>('all');
   const [showStamps, setShowStamps] = useState(true);
-  const [showParking, setShowParking] = useState(false);
+  const [showParking, setShowParking] = useState(true);
   const [clusteringEnabled] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isStamping, setIsStamping] = useState(false);
+  const [isParkingRevealPending, setIsParkingRevealPending] = useState(false);
   const [selectedSheetHeight, setSelectedSheetHeight] = useState(0);
   const [mapHeading, setMapHeading] = useState(0);
   const showStartupLoading = (isPending && !data) || isPlaceholderData;
@@ -398,12 +468,16 @@ export default function MapScreen() {
       return [];
     }
 
-    if (clusteringEnabled && region.longitudeDelta >= PARKING_HIDE_LONGITUDE_DELTA) {
+    if (isParkingRevealPending) {
+      return [];
+    }
+
+    if (region.longitudeDelta >= PARKING_HIDE_LONGITUDE_DELTA) {
       return [];
     }
 
     return parkingItems;
-  }, [clusteringEnabled, parkingItems, region.longitudeDelta, showParking]);
+  }, [isParkingRevealPending, parkingItems, region.longitudeDelta, showParking]);
 
   const visibleItems = useMemo<MarkerItem[]>(
     () => [...visibleStampItems, ...visibleParkingItems],
@@ -499,14 +573,36 @@ export default function MapScreen() {
     }
 
     return visibleItems
-      .filter((item) => {
-        const normalizedTitle = item.title.toLowerCase();
-        const normalizedDescription = item.description?.toLowerCase() || '';
-        return (
-          normalizedTitle.includes(normalizedQuery) || normalizedDescription.includes(normalizedQuery)
-        );
+      .map((item, originalIndex) => {
+        const rank = rankSearchResult(item, normalizedQuery);
+        if (!rank) {
+          return null;
+        }
+
+        return { item, originalIndex, rank };
       })
-      .slice(0, SEARCH_RESULT_LIMIT);
+      .filter((entry): entry is { item: MarkerItem; originalIndex: number; rank: SearchResultRank } => entry !== null)
+      .sort((left, right) => {
+        if (left.rank.matchTier !== right.rank.matchTier) {
+          return left.rank.matchTier - right.rank.matchTier;
+        }
+
+        if (left.rank.matchIndex !== right.rank.matchIndex) {
+          return left.rank.matchIndex - right.rank.matchIndex;
+        }
+
+        if (left.rank.numberDelta !== right.rank.numberDelta) {
+          return left.rank.numberDelta - right.rank.numberDelta;
+        }
+
+        if (left.rank.titleLength !== right.rank.titleLength) {
+          return left.rank.titleLength - right.rank.titleLength;
+        }
+
+        return left.originalIndex - right.originalIndex;
+      })
+      .slice(0, SEARCH_RESULT_LIMIT)
+      .map((entry) => entry.item);
   }, [searchQuery, visibleItems]);
 
   const nearestParkingMeta = useMemo(() => {
@@ -574,6 +670,11 @@ export default function MapScreen() {
       lastMarkerPressAtRef.current = Date.now();
       setSelectedItemId(item.id);
       const targetDelta = Math.min(regionRef.current.longitudeDelta, SELECTION_TARGET_DELTA);
+      const shouldDelayParkingReveal =
+        item.kind !== 'parking' &&
+        regionRef.current.longitudeDelta >= PARKING_HIDE_LONGITUDE_DELTA &&
+        targetDelta < PARKING_HIDE_LONGITUDE_DELTA;
+      setIsParkingRevealPending(shouldDelayParkingReveal);
       const nextRegion = createPointRegionAtVerticalRatio(
         item.coordinate,
         targetDelta,
@@ -608,7 +709,51 @@ export default function MapScreen() {
     setIsStamping(true);
 
     try {
-      await createStamping(accessToken, selectedItem.stampId);
+      const createdStamping = await createStamping(accessToken, selectedItem.stampId);
+      const visitTimestamp = createdStamping.visitedAt || createdStamping.createdAt || new Date().toISOString();
+
+      queryClient.setQueryData<StampDetailData>(
+        queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
+        (currentDetail) => {
+          const nextVisit = {
+            ...createdStamping,
+            stamp_ID: createdStamping.stamp_ID || selectedItem.stampId,
+            visitedAt: createdStamping.visitedAt || visitTimestamp,
+            createdAt: createdStamping.createdAt || visitTimestamp,
+          };
+
+          if (currentDetail) {
+            const hasVisitAlready = currentDetail.myVisits.some((visit) => visit.ID === nextVisit.ID);
+            return {
+              ...currentDetail,
+              stamp: {
+                ...currentDetail.stamp,
+                hasVisited: true,
+                visitedAt: nextVisit.visitedAt,
+              },
+              myVisits: hasVisitAlready ? currentDetail.myVisits : [nextVisit, ...currentDetail.myVisits],
+            };
+          }
+
+          const cachedStamp = data?.stamps.find((stamp) => stamp.ID === selectedItem.stampId);
+          if (!cachedStamp) {
+            return currentDetail;
+          }
+
+          return {
+            stamp: {
+              ...cachedStamp,
+              hasVisited: true,
+              visitedAt: nextVisit.visitedAt,
+            },
+            nearbyStamps: [],
+            nearbyParking: [],
+            friendVisits: [],
+            myVisits: [nextVisit],
+          };
+        }
+      );
+
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
@@ -617,6 +762,12 @@ export default function MapScreen() {
           queryKey: queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
         }),
       ]);
+      void queryClient
+        .prefetchQuery({
+          queryKey: queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
+          queryFn: () => fetchStampDetail(accessToken, selectedItem.stampId, claims?.sub),
+        })
+        .catch(() => undefined);
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -631,7 +782,7 @@ export default function MapScreen() {
     } finally {
       setIsStamping(false);
     }
-  }, [accessToken, claims?.sub, isStamping, logout, queryClient, selectedItem]);
+  }, [accessToken, claims?.sub, data?.stamps, isStamping, logout, queryClient, selectedItem]);
 
   const focusItemOnMap = useCallback((item: MarkerItem) => {
     lastMarkerPressAtRef.current = Date.now();
@@ -639,6 +790,11 @@ export default function MapScreen() {
     setSearchQuery('');
     setIsSearchFocused(false);
     searchInputRef.current?.blur();
+    const shouldDelayParkingReveal =
+      item.kind !== 'parking' &&
+      regionRef.current.longitudeDelta >= PARKING_HIDE_LONGITUDE_DELTA &&
+      SEARCH_TARGET_DELTA < PARKING_HIDE_LONGITUDE_DELTA;
+    setIsParkingRevealPending(shouldDelayParkingReveal);
 
     const nextRegion = {
       ...createPointRegionAtVerticalRatio(
@@ -695,6 +851,7 @@ export default function MapScreen() {
 
   const handleRegionChangeComplete = useCallback((nextRegion: Region) => {
     updateMapRegion(nextRegion);
+    setIsParkingRevealPending(false);
     void syncMapHeading();
   }, [syncMapHeading, updateMapRegion]);
 

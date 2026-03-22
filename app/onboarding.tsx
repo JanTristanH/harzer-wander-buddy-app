@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Redirect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -34,6 +34,7 @@ import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
+const PROFILE_AUTO_SAVE_DELAY_MS = 3000;
 
 type LoginClaims = {
   given_name?: string;
@@ -52,6 +53,11 @@ type SelectedImage = {
   uri: string;
   fileName: string;
   mimeType: string;
+};
+
+type SaveProfileOptions = {
+  showValidationAlert?: boolean;
+  showErrorAlert?: boolean;
 };
 
 type ActionButtonProps = PressableProps & {
@@ -124,9 +130,15 @@ export default function OnboardingScreen() {
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [selectedProfileImage, setSelectedProfileImage] = useState<SelectedImage | null>(null);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
+  const lastAutoSaveAttemptRef = useRef<string | null>(null);
+  const profileSavePromiseRef = useRef<Promise<boolean> | null>(null);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
+  const fallbackProfileName = (
+    currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+  ).trim();
   const effectiveProfileName = profileName.trim() || displayName;
   const effectiveProfilePicture = selectedProfileImage?.uri || profilePicture || claims?.picture || null;
   const footerNote = isAuthenticated
@@ -165,6 +177,7 @@ export default function OnboardingScreen() {
       setProfileName('');
       setProfilePicture(null);
       setSelectedProfileImage(null);
+      setProfileSaveError(null);
       return;
     }
 
@@ -172,6 +185,7 @@ export default function OnboardingScreen() {
       currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
     );
     setProfilePicture(currentUserProfile?.picture || claims?.picture || null);
+    setProfileSaveError(null);
   }, [
     claims?.given_name,
     claims?.name,
@@ -289,6 +303,7 @@ export default function OnboardingScreen() {
     }
 
     const asset = result.assets[0];
+    setProfileSaveError(null);
     setSelectedProfileImage({
       uri: asset.uri,
       fileName: asset.fileName || `profile-${Date.now()}.jpg`,
@@ -296,55 +311,86 @@ export default function OnboardingScreen() {
     });
   }, []);
 
-  const handleSaveProfile = useCallback(async () => {
-    if (!accessToken || !isAuthenticated) {
-      return;
+  const handleSaveProfile = useCallback((options: SaveProfileOptions = {}): Promise<boolean> => {
+    if (profileSavePromiseRef.current) {
+      return profileSavePromiseRef.current;
     }
 
-    const nextName = profileName.trim();
-    if (!nextName) {
-      Alert.alert('Name fehlt', 'Bitte gib einen Namen ein.');
-      return;
-    }
-
-    setIsProfileSaving(true);
-
-    try {
-      let nextPicture = profilePicture || claims?.picture || undefined;
-
-      if (selectedProfileImage) {
-        const uploadedImage = await uploadAttachment(accessToken, selectedProfileImage);
-        nextPicture = uploadedImage.url;
+    const { showValidationAlert = true, showErrorAlert = true } = options;
+    const savePromise = (async () => {
+      if (!accessToken || !isAuthenticated) {
+        return false;
       }
 
-      await updateCurrentUserProfile(accessToken, {
-        name: nextName,
-        picture: nextPicture,
-      });
-
-      setCurrentUserProfile({
-        id: currentUserProfile?.id || claims?.sub || nextName,
-        name: nextName,
-        picture: nextPicture,
-      });
-      setProfileName(nextName);
-      setProfilePicture(nextPicture || null);
-      setSelectedProfileImage(null);
-    } catch (error) {
-      if (error instanceof Error && error.name === 'UnauthorizedError') {
-        await logout();
-        return;
+      const nextName = profileName.trim() || fallbackProfileName;
+      if (!nextName) {
+        if (showValidationAlert) {
+          Alert.alert('Name fehlt', 'Bitte gib einen Namen ein.');
+        }
+        return false;
       }
 
-      Alert.alert(
-        'Profil konnte nicht gespeichert werden',
-        error instanceof Error ? error.message : 'Unknown error'
-      );
-    } finally {
-      setIsProfileSaving(false);
-    }
+      const nextPictureFromState = profilePicture || claims?.picture || undefined;
+      const hasNameChange = nextName !== fallbackProfileName;
+      const hasNewSelectedImage = !!selectedProfileImage;
+      if (!hasNameChange && !hasNewSelectedImage) {
+        return true;
+      }
+
+      setProfileSaveError(null);
+      setIsProfileSaving(true);
+
+      try {
+        let nextPicture = nextPictureFromState;
+
+        if (selectedProfileImage) {
+          const uploadedImage = await uploadAttachment(accessToken, selectedProfileImage);
+          nextPicture = uploadedImage.url;
+        }
+
+        await updateCurrentUserProfile(accessToken, {
+          name: nextName,
+          picture: nextPicture,
+        });
+
+        setCurrentUserProfile({
+          id: currentUserProfile?.id || claims?.sub || nextName,
+          name: nextName,
+          picture: nextPicture,
+        });
+        setProfileName(nextName);
+        setProfilePicture(nextPicture || null);
+        setSelectedProfileImage(null);
+        setProfileSaveError(null);
+        return true;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'UnauthorizedError') {
+          await logout();
+          return false;
+        }
+
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        setProfileSaveError(message);
+        if (showErrorAlert) {
+          Alert.alert('Profil konnte nicht gespeichert werden', message);
+        }
+        return false;
+      } finally {
+        setIsProfileSaving(false);
+      }
+    })();
+
+    profileSavePromiseRef.current = savePromise;
+    void savePromise.finally(() => {
+      if (profileSavePromiseRef.current === savePromise) {
+        profileSavePromiseRef.current = null;
+      }
+    });
+
+    return savePromise;
   }, [
     accessToken,
+    fallbackProfileName,
     claims?.picture,
     claims?.sub,
     currentUserProfile?.id,
@@ -352,9 +398,58 @@ export default function OnboardingScreen() {
     logout,
     profileName,
     profilePicture,
-    setCurrentUserProfile,
     selectedProfileImage,
+    setCurrentUserProfile,
   ]);
+
+  const hasPendingProfileNameChange = profileName.trim().length > 0 && profileName.trim() !== fallbackProfileName;
+  const hasPendingProfileImageChange = !!selectedProfileImage;
+  const pendingProfileDraftKey = useMemo(() => {
+    if (!hasPendingProfileNameChange && !hasPendingProfileImageChange) {
+      return null;
+    }
+
+    return `${profileName.trim()}::${selectedProfileImage?.uri || ''}`;
+  }, [hasPendingProfileImageChange, hasPendingProfileNameChange, profileName, selectedProfileImage?.uri]);
+
+  useEffect(() => {
+    if (!accessToken || !isAuthenticated || isProfileSaving) {
+      return;
+    }
+
+    if (!pendingProfileDraftKey) {
+      lastAutoSaveAttemptRef.current = null;
+      return;
+    }
+
+    if (lastAutoSaveAttemptRef.current === pendingProfileDraftKey) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      lastAutoSaveAttemptRef.current = pendingProfileDraftKey;
+      void handleSaveProfile({ showValidationAlert: false, showErrorAlert: false });
+    }, PROFILE_AUTO_SAVE_DELAY_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    accessToken,
+    handleSaveProfile,
+    isAuthenticated,
+    isProfileSaving,
+    pendingProfileDraftKey,
+  ]);
+
+  const handleContinueToStamps = useCallback(async () => {
+    const saveSuccessful = await handleSaveProfile();
+    if (!saveSuccessful) {
+      return;
+    }
+
+    router.replace('/(tabs)');
+  }, [handleSaveProfile, router]);
 
   const handleCreateRequest = useCallback(
     async (userId: string) => {
@@ -503,11 +598,16 @@ export default function OnboardingScreen() {
                   </Pressable>
 
                   <View style={styles.profileEditorBody}>
-                    <Text style={styles.cardCopy}>Passe deinen Namen und dein Profilbild direkt hier an.</Text>
+                    <Text style={styles.cardCopy}>
+                      Passe deinen Namen und dein Profilbild direkt hier an. Aenderungen speichern automatisch.
+                    </Text>
                     <TextInput
                       autoCapitalize="words"
                       editable={!isProfileSaving}
-                      onChangeText={setProfileName}
+                      onChangeText={(value) => {
+                        setProfileName(value);
+                        setProfileSaveError(null);
+                      }}
                       placeholder="Dein Name"
                       placeholderTextColor="#8A968A"
                       style={styles.profileInput}
@@ -519,13 +619,8 @@ export default function OnboardingScreen() {
                         label="Profilbild waehlen"
                         onPress={() => void handlePickProfileImage()}
                       />
-                      <ActionButton
-                        disabled={isProfileSaving}
-                        label={isProfileSaving ? 'Speichert...' : 'Profil speichern'}
-                        onPress={() => void handleSaveProfile()}
-                        variant="primary"
-                      />
                     </View>
+                    {profileSaveError ? <Text style={styles.errorText}>{profileSaveError}</Text> : null}
                   </View>
                 </View>
               </>
@@ -596,8 +691,8 @@ export default function OnboardingScreen() {
           <View style={styles.bottomSection}>
             <ActionButton
               disabled={primaryDisabled}
-              label="Zu den Stempelstellen"
-              onPress={() => router.replace('/(tabs)')}
+              label={isProfileSaving ? 'Speichert...' : 'Zu den Stempelstellen'}
+              onPress={() => void handleContinueToStamps()}
               style={[styles.bottomButton, primaryDisabled && styles.bottomButtonDisabled]}
               variant="primary"
             />

@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -29,7 +29,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'near', label: 'In der Nähe' },
 ];
 
-const NEARBY_DISTANCE_KM = 5;
+const NEARBY_DISTANCE_KM = 15;
 const emptySearchIllustration = require('@/assets/images/buddy/telescope.png');
 const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
 
@@ -170,10 +170,19 @@ export default function StampsScreen() {
     return true;
   });
   const isVisitedEmptyState = activeFilter === 'visited' && visitedCount === 0;
-  const emptyStateTitle = isVisitedEmptyState ? 'Noch keine Stempelstellen besucht' : 'Keine passenden Stempelstellen';
+  const isNearEmptyState = activeFilter === 'near' && filteredStamps.length === 0;
+  const emptyStateTitle = isVisitedEmptyState
+    ? 'Noch keine Stempelstellen besucht'
+    : isNearEmptyState
+      ? 'Keine Stempelstellen in der Nähe'
+      : 'Keine passenden Stempelstellen';
   const emptyStateCopy = isVisitedEmptyState
     ? 'Sobald du deine erste Stempelstelle besuchst, erscheint sie hier.'
-    : 'Probier eine andere Suche oder waehle einen anderen Filter.';
+    : isNearEmptyState
+      ? locationState === 'granted'
+        ? `Im Umkreis von ${NEARBY_DISTANCE_KM} km wurden keine Stempelstellen gefunden.`
+        : `Aktiviere deinen Standort, dann suchen wir im Umkreis von ${NEARBY_DISTANCE_KM} km.`
+      : 'Probier eine andere Suche oder waehle einen anderen Filter.';
   const emptyStateIllustration = isVisitedEmptyState ? emptyVisitedIllustration : emptySearchIllustration;
 
   type ListEntry =
