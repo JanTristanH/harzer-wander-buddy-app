@@ -171,7 +171,7 @@ function getCachedMapData(
   return {
     stamps: stampsOverview.stamps.map((stamp) => ({
       ...stamp,
-      visitedAt: undefined,
+      visitedAt: stampsOverview.lastVisited?.stampId === stamp.ID ? stampsOverview.lastVisited.visitedAt : undefined,
       kind: stamp.hasVisited ? ('visited-stamp' as const) : ('open-stamp' as const),
     })),
     parkingSpots: [],
@@ -270,7 +270,19 @@ export function useMapDataQuery() {
     queryKey: queryKeys.mapData(claims?.sub),
     enabled: Boolean(accessToken && isAuthenticated),
     placeholderData: () => getCachedMapData(queryClient, claims?.sub),
-    queryFn: () => authorizedRequest((token) => fetchMapData(token, claims?.sub)),
+    queryFn: () =>
+      authorizedRequest((token) => {
+        const cachedStampsOverview = queryClient.getQueryData<StampsOverviewData>(
+          queryKeys.stampsOverview(claims?.sub)
+        );
+
+        return fetchMapData(
+          token,
+          claims?.sub,
+          cachedStampsOverview?.stamps,
+          cachedStampsOverview?.lastVisited
+        );
+      }),
   });
 }
 
@@ -282,7 +294,7 @@ export function useFriendsOverviewQuery() {
   return useQuery<FriendsOverviewData>({
     queryKey: queryKeys.friendsOverview(claims?.sub),
     enabled: Boolean(accessToken && isAuthenticated),
-    queryFn: () => authorizedRequest((token) => fetchFriendsOverview(token)),
+    queryFn: () => authorizedRequest((token) => fetchFriendsOverview(token, claims?.sub)),
   });
 }
 
@@ -296,7 +308,32 @@ export function useProfileOverviewQuery() {
     queryKey: queryKeys.profileOverview(claims?.sub),
     enabled: Boolean(accessToken && isAuthenticated),
     placeholderData: () => getCachedSelfProfileOverview(queryClient, claims, currentUserProfile),
-    queryFn: () => authorizedRequest((token) => fetchProfileOverview(token, claims?.sub)),
+    queryFn: () =>
+      authorizedRequest((token) => {
+        const cachedStampsOverview = queryClient.getQueryData<StampsOverviewData>(
+          queryKeys.stampsOverview(claims?.sub)
+        );
+        const prefetchedCurrentUser = currentUserProfile
+          ? {
+              id: currentUserProfile.id,
+              name: currentUserProfile.name,
+              picture: currentUserProfile.picture,
+            }
+          : claims?.sub
+            ? {
+                id: claims.sub,
+                name: claims.name,
+                picture: claims.picture,
+              }
+            : null;
+
+        return fetchProfileOverview(
+          token,
+          claims?.sub,
+          prefetchedCurrentUser,
+          cachedStampsOverview?.stamps
+        );
+      }),
   });
 }
 

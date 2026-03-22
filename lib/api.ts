@@ -1,4 +1,5 @@
 import { appConfig } from '@/lib/config';
+import buildODataQuery, { type QueryOptions } from 'odata-query';
 
 export type Stampbox = {
   ID: string;
@@ -21,17 +22,23 @@ type ODataCollection<T> = {
   value?: T[];
 };
 
+type LegacyQueryEntry = [string, string | number | boolean | undefined];
+type ODataQuery = Partial<QueryOptions<unknown>>;
+type QueryInput = LegacyQueryEntry[] | ODataQuery;
+
 type NeighborStampRow = {
   ID: string;
   NeighborsID: string;
   NeighborsNumber?: string;
   distanceKm?: number;
+  neighborStamp?: Pick<Stampbox, 'ID' | 'number' | 'name' | 'heroImageUrl' | 'image' | 'imageCaption'>;
 };
 
 type NeighborParkingRow = {
   ID: string;
   NeighborsID: string;
   distanceKm?: number;
+  neighborParking?: Pick<ParkingSpot, 'ID' | 'name'>;
 };
 
 type TravelTimeRow = {
@@ -60,6 +67,7 @@ type Stamping = {
   createdAt?: string;
   createdBy?: string;
   stamp_ID?: string;
+  stamp?: Pick<Stampbox, 'ID' | 'number' | 'name'>;
 };
 
 export type VisitStamping = Stamping;
@@ -98,6 +106,16 @@ type StampFriendVisitRow = {
   visitedAt?: string | null;
   createdAt?: string | null;
   timestamp?: string | null;
+};
+
+type UserProgressRow = {
+  id?: string;
+  userId?: string;
+  ID?: string;
+  visitedCount?: number | string | null;
+  completionPercent?: number | string | null;
+  stampCount?: number | string | null;
+  totalGroupStampings?: number | string | null;
 };
 
 type PendingFriendshipRequest = {
@@ -335,11 +353,7 @@ function normalizeBaseUrl(url: string) {
   return url.replace(/\/$/, '');
 }
 
-function buildQuery(query?: [string, string | number | boolean | undefined][]) {
-  if (!query) {
-    return '';
-  }
-
+function buildLegacyQuery(query: LegacyQueryEntry[]) {
   const parts = query
     .filter(([, value]) => value !== undefined && value !== '')
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
@@ -347,7 +361,19 @@ function buildQuery(query?: [string, string | number | boolean | undefined][]) {
   return parts.length > 0 ? `?${parts.join('&')}` : '';
 }
 
-function buildUrl(path: string, query?: [string, string | number | boolean | undefined][]) {
+function buildQuery(query?: QueryInput) {
+  if (!query) {
+    return '';
+  }
+
+  if (Array.isArray(query)) {
+    return buildLegacyQuery(query);
+  }
+
+  return encodeURI(buildODataQuery(query));
+}
+
+function buildUrl(path: string, query?: QueryInput) {
   return `${normalizeBaseUrl(appConfig.backendUrl)}/odata/v4/api/${path}${buildQuery(query)}`;
 }
 
@@ -437,7 +463,7 @@ function parseActionStringResult(payload: unknown) {
 async function fetchCollection<T>(
   accessToken: string,
   entitySet: string,
-  query?: [string, string | number | boolean | undefined][]
+  query?: QueryInput
 ) {
   const payload = await fetchOData<ODataCollection<T>>(accessToken, buildUrl(entitySet, query));
   return payload.value ?? [];
@@ -447,9 +473,9 @@ async function fetchEntityById<T>(
   accessToken: string,
   entitySet: string,
   id: string,
-  query?: [string, string | number | boolean | undefined][]
+  query?: LegacyQueryEntry[]
 ) {
-  const fallbacks = [`ID eq ${id}`, `ID eq guid'${id}'`];
+  const fallbacks = [`ID eq ${id}`];
 
   for (const filter of fallbacks) {
     try {
@@ -475,7 +501,7 @@ async function fetchStringEntityById<T>(
   entitySet: string,
   field: string,
   value: string,
-  query?: [string, string | number | boolean | undefined][]
+  query?: LegacyQueryEntry[]
 ) {
   const rows = await fetchCollection<T>(accessToken, entitySet, [
     ...(query ?? []),
@@ -491,10 +517,177 @@ async function fetchStringEntityById<T>(
 }
 
 async function fetchCurrentUserRecord(accessToken: string) {
-  const currentUser = await fetchOData<User>(accessToken, buildUrl('getCurrentUser()'));
-  return fetchStringEntityById<User>(accessToken, 'Users', 'ID', currentUser.ID, [
-    ['$select', 'ID,name,picture,isFriend'],
-  ]);
+  return fetchOData<User>(
+    accessToken,
+    buildUrl('getCurrentUser()', {
+      select: ['ID', 'name', 'picture', 'isFriend'],
+    })
+  );
+}
+
+function normalizeIdList(ids: string[]) {
+  return [...new Set(ids.map((id) => safeTrim(id)).filter(Boolean))];
+}
+
+function toFiniteNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function computeCompletionPercent(visitedCount: number, totalCount: number) {
+  if (totalCount <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round((visitedCount / totalCount) * 100)));
+}
+
+function normalizeOptionalTotalCount(totalCount?: number | null) {
+  return typeof totalCount === 'number' && Number.isFinite(totalCount) && totalCount > 0 ? totalCount : null;
+}
+
+async function fetchTotalStampCount(accessToken: string) {
+  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', {
+    select: ['ID'],
+    top: 500,
+  });
+  return rows.length;
+}
+
+function parseActionArrayResult<T>(payload: unknown) {
+  if (Array.isArray(payload)) {
+    return payload as T[];
+  }
+
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'value' in payload &&
+    Array.isArray((payload as { value?: unknown }).value)
+  ) {
+    return (payload as { value: T[] }).value;
+  }
+
+  const rawValue = parseActionStringResult(payload);
+  if (!rawValue) {
+    return [] as T[];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [] as T[];
+  }
+}
+
+async function fetchUsersProgressFromAction(
+  accessToken: string,
+  userIds: string[],
+  totalCount?: number | null
+) {
+  const uniqueUserIds = normalizeIdList(userIds);
+  if (uniqueUserIds.length === 0) {
+    return new Map<string, { visitedCount: number; completionPercent: number }>();
+  }
+
+  const actionResponse = await mutateOData<unknown>(accessToken, buildUrl('getUsersProgress'), {
+    method: 'POST',
+    body: JSON.stringify({
+      sGroupUserIds: uniqueUserIds.join(','),
+    }),
+  });
+  const rows = parseActionArrayResult<UserProgressRow>(actionResponse);
+  const progressByUserId = new Map<string, { visitedCount: number; completionPercent: number }>();
+  const normalizedTotalCount = normalizeOptionalTotalCount(totalCount);
+
+  for (const row of rows) {
+    const userId = safeTrim(row.userId || row.id || row.ID);
+    if (!userId) {
+      continue;
+    }
+
+    const visitedCountRaw =
+      toFiniteNumber(row.visitedCount) ??
+      toFiniteNumber(row.stampCount) ??
+      toFiniteNumber(row.totalGroupStampings) ??
+      0;
+    const visitedCount = Math.max(0, Math.round(visitedCountRaw));
+    const explicitCompletion = toFiniteNumber(row.completionPercent);
+
+    progressByUserId.set(userId, {
+      visitedCount,
+      completionPercent:
+        explicitCompletion !== null
+          ? Math.max(0, Math.min(100, Math.round(explicitCompletion)))
+          : normalizedTotalCount !== null
+            ? computeCompletionPercent(visitedCount, normalizedTotalCount)
+            : 0,
+    });
+  }
+
+  return progressByUserId;
+}
+
+async function fetchSingleUserProgress(accessToken: string, userId: string, totalCount: number) {
+  const stampboxes = await fetchComparisonStampboxes(accessToken, [userId]);
+  const visitedCount = stampboxes.filter((stamp) => Number(stamp.totalGroupStampings || 0) > 0).length;
+
+  return {
+    visitedCount,
+    completionPercent: computeCompletionPercent(visitedCount, totalCount),
+  };
+}
+
+async function fetchUsersProgress(
+  accessToken: string,
+  userIds: string[],
+  totalCount?: number | null
+) {
+  const uniqueUserIds = normalizeIdList(userIds);
+  if (uniqueUserIds.length === 0) {
+    return new Map<string, { visitedCount: number; completionPercent: number }>();
+  }
+
+  const progressByUserId = new Map<string, { visitedCount: number; completionPercent: number }>();
+  let effectiveTotalCount = normalizeOptionalTotalCount(totalCount);
+
+  try {
+    const actionProgress = await fetchUsersProgressFromAction(accessToken, uniqueUserIds, effectiveTotalCount);
+    for (const [userId, progress] of actionProgress.entries()) {
+      progressByUserId.set(userId, progress);
+    }
+  } catch {
+    // Backend action is optional; fall back to existing per-user reads.
+  }
+
+  const unresolvedUserIds = uniqueUserIds.filter((userId) => !progressByUserId.has(userId));
+  if (unresolvedUserIds.length > 0) {
+    if (effectiveTotalCount === null) {
+      effectiveTotalCount = await fetchTotalStampCount(accessToken);
+    }
+
+    const fallbackEntries = await Promise.all(
+      unresolvedUserIds.map(async (userId) => [
+        userId,
+        await fetchSingleUserProgress(accessToken, userId, effectiveTotalCount || 0),
+      ] as const)
+    );
+
+    for (const [userId, progress] of fallbackEntries) {
+      progressByUserId.set(userId, progress);
+    }
+  }
+
+  return progressByUserId;
 }
 
 async function buildFriendProgress(
@@ -504,22 +697,19 @@ async function buildFriendProgress(
     name?: string;
     picture?: string;
   }>,
-  totalCount: number
+  totalCount?: number
 ) {
-  const friendProgress = await Promise.all(
-    friends.map(async (friend) => {
-      const friendStampboxes = await fetchComparisonStampboxes(accessToken, [friend.ID]);
-      const visitedCount = friendStampboxes.filter((stamp) => Number(stamp.totalGroupStampings || 0) > 0).length;
-
-      return {
-        id: friend.ID,
-        name: friend.name || 'Freund',
-        picture: friend.picture,
-        visitedCount,
-        completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
-      };
-    })
+  const progressByUserId = await fetchUsersProgress(
+    accessToken,
+    friends.map((friend) => friend.ID),
+    totalCount
   );
+  const friendProgress = friends.map((friend) => ({
+    id: friend.ID,
+    name: friend.name || 'Freund',
+    picture: friend.picture,
+    ...(progressByUserId.get(friend.ID) ?? { visitedCount: 0, completionPercent: 0 }),
+  }));
 
   return friendProgress.sort(
     (left, right) => right.visitedCount - left.visitedCount || left.name.localeCompare(right.name)
@@ -534,29 +724,10 @@ async function attachUserProgress<T extends { id: string }>(
     return [] as Array<T & { visitedCount: number; completionPercent: number }>;
   }
 
-  const totalCount = (
-    await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
-      ['$select', 'ID'],
-      ['$top', 300],
-    ])
-  ).length;
-
-  const progressEntries = await Promise.all(
-    users.map(async (user) => {
-      const stampboxes = await fetchComparisonStampboxes(accessToken, [user.id]);
-      const visitedCount = stampboxes.filter((stamp) => Number(stamp.totalGroupStampings || 0) > 0).length;
-
-      return [
-        user.id,
-        {
-          visitedCount,
-          completionPercent: totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0,
-        },
-      ] as const;
-    })
+  const progressByUserId = await fetchUsersProgress(
+    accessToken,
+    users.map((user) => user.id)
   );
-
-  const progressByUserId = new Map(progressEntries);
 
   return users.map((user) => ({
     ...user,
@@ -565,12 +736,16 @@ async function attachUserProgress<T extends { id: string }>(
 }
 
 async function fetchUserFriends(accessToken: string, userId: string) {
-  const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', [
-    ['$select', 'ID,toUser_ID'],
-    ['$filter', `fromUser_ID eq '${escapeODataString(userId)}'`],
-    ['$expand', 'toUser($select=ID,name,picture)'],
-    ['$top', 250],
-  ]);
+  const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', {
+    select: ['ID', 'toUser_ID'],
+    filter: { fromUser_ID: userId },
+    expand: {
+      toUser: {
+        select: ['ID', 'name', 'picture'],
+      },
+    },
+    top: 250,
+  });
 
   return rows
     .map((row) => row.toUser)
@@ -583,16 +758,31 @@ async function fetchComparisonStampboxes(accessToken: string, groupUserIds: stri
     return [] as Stampbox[];
   }
 
-  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
-    [
-      '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds,groupFilterStampings',
+  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', {
+    select: [
+      'ID',
+      'number',
+      'orderBy',
+      'name',
+      'description',
+      'heroImageUrl',
+      'image',
+      'imageCaption',
+      'latitude',
+      'longitude',
+      'hasVisited',
+      'totalGroupStampings',
+      'stampedUsers',
+      'stampedUserIds',
+      'groupFilterStampings',
     ],
-    ['$skip', 0],
-    ['$top', 250],
-    ['$orderby', 'orderBy asc'],
-    ['$filter', `groupFilterStampings ne '${escapeODataString(groupFilter)}'`],
-  ]);
+    skip: 0,
+    top: 250,
+    orderBy: 'orderBy asc',
+    filter: {
+      groupFilterStampings: { ne: groupFilter },
+    },
+  });
 
   return rows.slice().sort((left, right) => {
     const leftKey = left.orderBy || left.number || '';
@@ -606,16 +796,32 @@ async function fetchGuidFilteredCollection<T>(
   entitySet: string,
   field: string,
   id: string,
-  query?: [string, string | number | boolean | undefined][]
+  query?: QueryInput
 ) {
-  const filters = [`${field} eq ${id}`, `${field} eq guid'${id}'`];
+  const filters = [`${field} eq ${id}`];
 
   for (const filter of filters) {
     try {
-      return await fetchCollection<T>(accessToken, entitySet, [
-        ...(query ?? []),
-        ['$filter', filter],
-      ]);
+      if (!query) {
+        return await fetchCollection<T>(accessToken, entitySet, {
+          filter,
+        });
+      }
+
+      if (Array.isArray(query)) {
+        return await fetchCollection<T>(accessToken, entitySet, [...query, ['$filter', filter]]);
+      }
+
+      const existingFilter = query.filter;
+      const mergedFilter =
+        typeof existingFilter === 'string' && existingFilter.trim().length > 0
+          ? `(${existingFilter}) and (${filter})`
+          : filter;
+
+      return await fetchCollection<T>(accessToken, entitySet, {
+        ...query,
+        filter: mergedFilter,
+      });
     } catch {
       continue;
     }
@@ -624,34 +830,49 @@ async function fetchGuidFilteredCollection<T>(
   return [];
 }
 
-async function fetchStampingForStampAndUser(
+async function fetchLatestStampingsForStampAndUsers(
   accessToken: string,
   stampId: string,
-  userId: string
+  userIds: string[]
 ) {
-  const stampFilters = [`stamp_ID eq ${stampId}`, `stamp_ID eq guid'${stampId}'`];
+  const uniqueUserIds = normalizeIdList(userIds);
+  const latestStampings = new Map<string, Stamping>();
+  if (uniqueUserIds.length === 0) {
+    return latestStampings;
+  }
+
+  const createdByFilter = uniqueUserIds
+    .map((userId) => `createdBy eq '${escapeODataString(userId)}'`)
+    .join(' or ');
+  const stampFilters = [`stamp_ID eq ${stampId}`];
 
   for (const stampFilter of stampFilters) {
     try {
-      const rows = await fetchCollection<Stamping>(accessToken, 'Stampings', [
-        ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
-        [
-          '$filter',
-          `${stampFilter} and createdBy eq '${escapeODataString(userId)}'`,
-        ],
-        ['$orderby', 'visitedAt desc,createdAt desc'],
-        ['$top', 1],
-      ]);
+      const rows = await fetchCollection<Stamping>(accessToken, 'Stampings', {
+        select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
+        filter: `${stampFilter} and (${createdByFilter})`,
+        orderBy: 'visitedAt desc,createdAt desc',
+        top: Math.max(20, uniqueUserIds.length * 6),
+      });
 
-      if (rows.length > 0) {
-        return rows[0];
+      for (const row of rows) {
+        const createdBy = safeTrim(row.createdBy);
+        if (!createdBy || latestStampings.has(createdBy)) {
+          continue;
+        }
+
+        latestStampings.set(createdBy, row);
+      }
+
+      if (latestStampings.size > 0) {
+        return latestStampings;
       }
     } catch {
       continue;
     }
   }
 
-  return null;
+  return latestStampings;
 }
 
 async function fetchStampFriendVisits(
@@ -691,76 +912,138 @@ function estimateMinutes(distanceKm: number | null) {
   return Math.max(1, Math.round((distanceKm / 4) * 60));
 }
 
+function createFallbackRouteMetrics(distanceKm: number | null) {
+  return {
+    distanceKm,
+    durationMinutes: estimateMinutes(distanceKm),
+    elevationGainMeters: null,
+    elevationLossMeters: null,
+  } satisfies RouteMetrics;
+}
+
+function selectPreferredRoute(routeRows: TravelTimeRow[]) {
+  return (
+    routeRows.find((row) => {
+      const travelMode = safeNormalizedText(row.travelMode);
+      return (
+        travelMode.includes('walk') ||
+        travelMode.includes('foot') ||
+        travelMode.includes('hike') ||
+        travelMode.includes('pedestrian')
+      );
+    }) ?? routeRows[0]
+  );
+}
+
+function resolveRouteMetrics(routeRows: TravelTimeRow[], fallbackDistanceKm: number | null) {
+  if (routeRows.length === 0) {
+    return createFallbackRouteMetrics(fallbackDistanceKm);
+  }
+
+  const preferredRoute = selectPreferredRoute(routeRows);
+  const distanceKm =
+    typeof preferredRoute.distanceMeters === 'number' && Number.isFinite(preferredRoute.distanceMeters)
+      ? preferredRoute.distanceMeters / 1000
+      : fallbackDistanceKm;
+  const durationMinutes =
+    typeof preferredRoute.durationSeconds === 'number' && Number.isFinite(preferredRoute.durationSeconds)
+      ? Math.max(1, Math.round(preferredRoute.durationSeconds / 60))
+      : estimateMinutes(distanceKm);
+
+  return {
+    distanceKm,
+    durationMinutes,
+    elevationGainMeters:
+      typeof preferredRoute.elevationGain === 'number' && Number.isFinite(preferredRoute.elevationGain)
+        ? preferredRoute.elevationGain
+        : null,
+    elevationLossMeters:
+      typeof preferredRoute.elevationLoss === 'number' && Number.isFinite(preferredRoute.elevationLoss)
+        ? preferredRoute.elevationLoss
+        : null,
+  } satisfies RouteMetrics;
+}
+
+async function fetchRouteMetricsByTargets(
+  accessToken: string,
+  fromPoiId: string,
+  targets: Array<{ toPoiId: string; fallbackDistanceKm?: number | null }>
+) {
+  const normalizedTargets = normalizeIdList(targets.map((target) => target.toPoiId));
+  const fallbackDistanceByToPoi = new Map(
+    targets.map((target) => [
+      safeNormalizedText(target.toPoiId),
+      typeof target.fallbackDistanceKm === 'number' && Number.isFinite(target.fallbackDistanceKm)
+        ? target.fallbackDistanceKm
+        : null,
+    ])
+  );
+  const metricsByToPoi = new Map<string, RouteMetrics>();
+
+  if (normalizedTargets.length === 0) {
+    return metricsByToPoi;
+  }
+
+  const routeFilters = [
+    `fromPoi eq ${fromPoiId} and (${normalizedTargets.map((toPoiId) => `toPoi eq ${toPoiId}`).join(' or ')})`,
+  ];
+
+  let routeRows: TravelTimeRow[] = [];
+  for (const filter of routeFilters) {
+    try {
+      routeRows = await fetchCollection<TravelTimeRow>(accessToken, 'TravelTimes', {
+        select: ['ID', 'toPoi', 'durationSeconds', 'distanceMeters', 'travelMode', 'elevationGain', 'elevationLoss'],
+        filter,
+        top: Math.max(20, normalizedTargets.length * 10),
+      });
+      if (routeRows.length > 0) {
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  const rowsByToPoi = new Map<string, TravelTimeRow[]>();
+  for (const row of routeRows) {
+    const toPoiKey = safeNormalizedText(row.toPoi);
+    if (!toPoiKey) {
+      continue;
+    }
+
+    const list = rowsByToPoi.get(toPoiKey);
+    if (list) {
+      list.push(row);
+    } else {
+      rowsByToPoi.set(toPoiKey, [row]);
+    }
+  }
+
+  for (const toPoiId of normalizedTargets) {
+    const normalizedToPoiId = safeNormalizedText(toPoiId);
+    metricsByToPoi.set(
+      normalizedToPoiId,
+      resolveRouteMetrics(rowsByToPoi.get(normalizedToPoiId) ?? [], fallbackDistanceByToPoi.get(normalizedToPoiId) ?? null)
+    );
+  }
+
+  return metricsByToPoi;
+}
+
 export async function fetchRouteMetrics(
   accessToken: string,
   fromPoiId: string,
   toPoiId: string,
   fallbackDistanceKm: number | null = null
 ) {
-  const normalizedFallbackDistanceKm =
-    typeof fallbackDistanceKm === 'number' && Number.isFinite(fallbackDistanceKm)
-      ? fallbackDistanceKm
-      : null;
-  const routeFilters = [
-    `fromPoi eq ${fromPoiId} and toPoi eq ${toPoiId}`,
-    `fromPoi eq guid'${fromPoiId}' and toPoi eq guid'${toPoiId}'`,
-  ];
+  const normalizedToPoiId = safeNormalizedText(toPoiId);
+  const fallback =
+    typeof fallbackDistanceKm === 'number' && Number.isFinite(fallbackDistanceKm) ? fallbackDistanceKm : null;
+  const metricsByToPoi = await fetchRouteMetricsByTargets(accessToken, fromPoiId, [
+    { toPoiId, fallbackDistanceKm: fallback },
+  ]);
 
-  for (const filter of routeFilters) {
-    try {
-      const routeRows = await fetchCollection<TravelTimeRow>(accessToken, 'TravelTimes', [
-        ['$select', 'ID,durationSeconds,distanceMeters,travelMode,elevationGain,elevationLoss'],
-        ['$filter', filter],
-        ['$top', 20],
-      ]);
-
-      if (routeRows.length === 0) {
-        continue;
-      }
-
-      const walkingRoute =
-        routeRows.find((row) => {
-          const travelMode = safeNormalizedText(row.travelMode);
-          return (
-            travelMode.includes('walk') ||
-            travelMode.includes('foot') ||
-            travelMode.includes('hike') ||
-            travelMode.includes('pedestrian')
-          );
-        }) ?? routeRows[0];
-
-      const distanceKm =
-        typeof walkingRoute.distanceMeters === 'number' && Number.isFinite(walkingRoute.distanceMeters)
-          ? walkingRoute.distanceMeters / 1000
-          : normalizedFallbackDistanceKm;
-      const durationMinutes =
-        typeof walkingRoute.durationSeconds === 'number' && Number.isFinite(walkingRoute.durationSeconds)
-          ? Math.max(1, Math.round(walkingRoute.durationSeconds / 60))
-          : estimateMinutes(distanceKm);
-
-      return {
-        distanceKm,
-        durationMinutes,
-        elevationGainMeters:
-          typeof walkingRoute.elevationGain === 'number' && Number.isFinite(walkingRoute.elevationGain)
-            ? walkingRoute.elevationGain
-            : null,
-        elevationLossMeters:
-          typeof walkingRoute.elevationLoss === 'number' && Number.isFinite(walkingRoute.elevationLoss)
-            ? walkingRoute.elevationLoss
-            : null,
-      } satisfies RouteMetrics;
-    } catch {
-      continue;
-    }
-  }
-
-  return {
-    distanceKm: normalizedFallbackDistanceKm,
-    durationMinutes: estimateMinutes(normalizedFallbackDistanceKm),
-    elevationGainMeters: null,
-    elevationLossMeters: null,
-  } satisfies RouteMetrics;
+  return metricsByToPoi.get(normalizedToPoiId) ?? createFallbackRouteMetrics(fallback);
 }
 
 function getVisitTimestamp(stamping: Stamping) {
@@ -807,15 +1090,129 @@ function stampContainsUser(stamp: Stampbox, user: { ID: string; name?: string })
   return stampContainsUserId(stamp, user.ID) || stampContainsUserName(stamp, user.name);
 }
 
-export async function fetchStampboxes(accessToken: string) {
-  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', [
-    [
-      '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
-    ],
-    ['$orderby', 'orderBy asc'],
-    ['$top', 500],
+type StampboxWithExpandedStampings = Stampbox & {
+  Stampings?: Stamping[];
+};
+
+async function fetchStampWithRecentStampings(accessToken: string, stampId: string) {
+  try {
+    const rows = await fetchGuidFilteredCollection<StampboxWithExpandedStampings>(
+      accessToken,
+      'Stampboxes',
+      'ID',
+      stampId,
+      [
+        [
+          '$select',
+          'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+        ],
+        [
+          '$expand',
+          'Stampings($select=ID,visitedAt,createdAt,createdBy,stamp_ID)',
+        ],
+        ['$top', 1],
+      ]
+    );
+
+    if (rows.length > 0) {
+      const { Stampings: expandedStampings, ...stamp } = rows[0];
+      const sortedStampings = (Array.isArray(expandedStampings) ? expandedStampings : []).sort((left, right) => {
+        const leftVisitedAt = left.visitedAt ? Date.parse(left.visitedAt) : Number.NaN;
+        const rightVisitedAt = right.visitedAt ? Date.parse(right.visitedAt) : Number.NaN;
+        const leftCreatedAt = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+        const rightCreatedAt = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+
+        const leftTime = Number.isFinite(leftVisitedAt)
+          ? leftVisitedAt
+          : Number.isFinite(leftCreatedAt)
+            ? leftCreatedAt
+            : 0;
+        const rightTime = Number.isFinite(rightVisitedAt)
+          ? rightVisitedAt
+          : Number.isFinite(rightCreatedAt)
+            ? rightCreatedAt
+            : 0;
+
+        return rightTime - leftTime;
+      });
+      return {
+        stamp: stamp as Stampbox,
+        stampings: sortedStampings.slice(0, 200),
+      };
+    }
+  } catch {
+    // Fallback below for services that do not support this expand shape.
+  }
+
+  const [stamp, stampings] = await Promise.all([
+    fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
+      [
+        '$select',
+        'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+      ],
+    ]),
+    fetchGuidFilteredCollection<Stamping>(accessToken, 'Stampings', 'stamp_ID', stampId, [
+      ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
+      ['$orderby', 'visitedAt desc,createdAt desc'],
+      ['$top', 200],
+    ]),
   ]);
+
+  return { stamp, stampings };
+}
+
+async function fetchGuidEntitiesByIds<T>(
+  accessToken: string,
+  entitySet: string,
+  idField: string,
+  ids: string[],
+  query?: ODataQuery
+) {
+  const normalizedIds = normalizeIdList(ids);
+  if (normalizedIds.length === 0) {
+    return [] as T[];
+  }
+
+  const configuredTop = typeof query?.top === 'number' ? query.top : 0;
+  const effectiveTop = Math.max(configuredTop, Math.max(20, normalizedIds.length * 5));
+  const filters = [normalizedIds.map((id) => `${idField} eq ${id}`).join(' or ')];
+
+  for (const filter of filters) {
+    try {
+      return await fetchCollection<T>(accessToken, entitySet, {
+        ...(query ?? {}),
+        top: effectiveTop,
+        filter,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return [] as T[];
+}
+
+export async function fetchStampboxes(accessToken: string) {
+  const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', {
+    select: [
+      'ID',
+      'number',
+      'orderBy',
+      'name',
+      'description',
+      'heroImageUrl',
+      'image',
+      'imageCaption',
+      'latitude',
+      'longitude',
+      'hasVisited',
+      'totalGroupStampings',
+      'stampedUsers',
+      'stampedUserIds',
+    ],
+    orderBy: 'orderBy asc',
+    top: 500,
+  });
 
   return rows.slice().sort((left, right) => {
     const leftKey = left.orderBy || left.number || '';
@@ -824,38 +1221,28 @@ export async function fetchStampboxes(accessToken: string) {
   });
 }
 
-export async function fetchMapData(accessToken: string, currentUserId?: string) {
-  const [stamps, parkingSpots, myStampings] = await Promise.all([
-    fetchStampboxes(accessToken),
-    fetchCollection<ParkingSpot>(accessToken, 'ParkingSpots', [
-      ['$select', 'ID,name,description,image,latitude,longitude'],
-      ['$top', 500],
-    ]),
-    currentUserId
-      ? fetchCollection<Stamping>(accessToken, 'Stampings', [
-          ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
-          ['$filter', `createdBy eq '${escapeODataString(currentUserId)}'`],
-          ['$orderby', 'visitedAt desc,createdAt desc'],
-          ['$top', 1000],
-        ])
-      : Promise.resolve([] as Stamping[]),
+export async function fetchMapData(
+  accessToken: string,
+  currentUserId?: string,
+  prefetchedStamps?: Stampbox[],
+  prefetchedLatestVisited?: LatestVisitedStamp | null
+) {
+  const [stamps, parkingSpots, latestVisited] = await Promise.all([
+    prefetchedStamps ? Promise.resolve(prefetchedStamps) : fetchStampboxes(accessToken),
+    fetchCollection<ParkingSpot>(accessToken, 'ParkingSpots', {
+      select: ['ID', 'name', 'description', 'image', 'latitude', 'longitude'],
+      top: 500,
+    }),
+    prefetchedLatestVisited !== undefined
+      ? Promise.resolve(prefetchedLatestVisited)
+      : currentUserId
+        ? fetchLatestVisitedStamp(accessToken, currentUserId)
+        : Promise.resolve(null),
   ]);
 
   const latestVisitByStampId = new Map<string, string>();
-  for (const stamping of myStampings) {
-    if (!stamping.stamp_ID) {
-      continue;
-    }
-
-    const visitTimestamp = getVisitTimestamp(stamping);
-    const currentTimestamp = latestVisitByStampId.get(stamping.stamp_ID);
-    if (!visitTimestamp) {
-      continue;
-    }
-
-    if (!currentTimestamp || new Date(visitTimestamp).getTime() > new Date(currentTimestamp).getTime()) {
-      latestVisitByStampId.set(stamping.stamp_ID, visitTimestamp);
-    }
+  if (latestVisited?.stampId && latestVisited.visitedAt) {
+    latestVisitByStampId.set(latestVisited.stampId, latestVisited.visitedAt);
   }
 
   return {
@@ -882,21 +1269,28 @@ export async function fetchLatestVisitedStamp(accessToken: string, currentUserId
     return null;
   }
 
-  const latestStamping = await fetchCollection<Stamping>(accessToken, 'Stampings', [
-    ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
-    ['$filter', `createdBy eq '${escapeODataString(currentUserId)}'`],
-    ['$orderby', 'visitedAt desc,createdAt desc'],
-    ['$top', 1],
-  ]);
+  const latestStamping = await fetchCollection<Stamping>(accessToken, 'Stampings', {
+    select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
+    filter: { createdBy: currentUserId },
+    orderBy: 'visitedAt desc,createdAt desc',
+    top: 1,
+    expand: {
+      stamp: {
+        select: ['ID', 'number', 'name'],
+      },
+    },
+  });
 
   const latestVisit = latestStamping[0];
-  if (!latestVisit?.stamp_ID) {
+  const expandedStamp = latestVisit?.stamp;
+  const stampId = expandedStamp?.ID || latestVisit?.stamp_ID;
+  if (!stampId) {
     return null;
   }
 
-  const stamp = await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', latestVisit.stamp_ID, [
-    ['$select', 'ID,number,name'],
-  ]);
+  const stamp =
+    expandedStamp ??
+    (await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [['$select', 'ID,number,name']]));
 
   return {
     stampId: stamp.ID,
@@ -917,118 +1311,141 @@ export async function fetchCurrentUserProfile(accessToken: string) {
 }
 
 export async function fetchStampDetail(accessToken: string, stampId: string, currentUserId?: string) {
-  const stamp = await fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
-    [
-      '$select',
-      'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
-    ],
-  ]);
-
-  const [neighborStampRows, neighborParkingRows, stampings, friendships] = await Promise.all([
-    fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsStampStamp', 'ID', stampId, [
-      ['$orderby', 'distanceKm asc'],
-      ['$top', 3],
-    ]),
-    fetchGuidFilteredCollection<NeighborParkingRow>(accessToken, 'NeighborsStampParking', 'ID', stampId, [
-      ['$orderby', 'distanceKm asc'],
-      ['$top', 3],
-    ]),
-    fetchGuidFilteredCollection<Stamping>(accessToken, 'Stampings', 'stamp_ID', stampId, [
-      ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
-      ['$orderby', 'visitedAt desc,createdAt desc'],
-      ['$top', 200],
-    ]),
-    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture,status']]),
+  const [{ stamp, stampings }, neighborStampRows, neighborParkingRows, friendships] = await Promise.all([
+    fetchStampWithRecentStampings(accessToken, stampId),
+    fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsStampStamp', 'ID', stampId, {
+      orderBy: 'distanceKm asc',
+      top: 3,
+      expand: {
+        neighborStamp: {
+          select: ['ID', 'number', 'name', 'heroImageUrl', 'image', 'imageCaption'],
+        },
+      },
+    }),
+    fetchGuidFilteredCollection<NeighborParkingRow>(accessToken, 'NeighborsStampParking', 'ID', stampId, {
+      orderBy: 'distanceKm asc',
+      top: 3,
+      expand: {
+        neighborParking: {
+          select: ['ID', 'name'],
+        },
+      },
+    }),
+    fetchCollection<MyFriend>(accessToken, 'MyFriends', {
+      select: ['ID', 'name', 'picture', 'status'],
+    }),
   ]);
   const friends = friendships.filter((friend) => friend.status === 'accepted');
 
-  const nearbyStamps = (
-    await Promise.all(
-      neighborStampRows.map(async (neighbor) => {
-        const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
-        const routeMetricsPromise = fetchRouteMetrics(
-          accessToken,
-          stampId,
-          neighbor.NeighborsID,
-          fallbackDistanceKm
-        );
-        try {
-          const relatedStamp = await fetchEntityById<Stampbox>(
-            accessToken,
-            'Stampboxes',
-            neighbor.NeighborsID,
-            [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
-          );
-          const routeMetrics = await routeMetricsPromise;
+  const expandedStampById = new Map(
+    neighborStampRows
+      .map((neighbor) => neighbor.neighborStamp)
+      .filter(
+        (neighborStamp): neighborStamp is NonNullable<NeighborStampRow['neighborStamp']> =>
+          Boolean(neighborStamp?.ID)
+      )
+      .map((neighborStamp) => [safeNormalizedText(neighborStamp.ID), neighborStamp])
+  );
+  const expandedParkingById = new Map(
+    neighborParkingRows
+      .map((neighbor) => neighbor.neighborParking)
+      .filter(
+        (neighborParking): neighborParking is NonNullable<NeighborParkingRow['neighborParking']> =>
+          Boolean(neighborParking?.ID)
+      )
+      .map((neighborParking) => [safeNormalizedText(neighborParking.ID), neighborParking])
+  );
+  const missingNeighborStampIds = neighborStampRows
+    .map((neighbor) => neighbor.NeighborsID)
+    .filter((neighborId) => !expandedStampById.has(safeNormalizedText(neighborId)));
+  const missingNeighborParkingIds = neighborParkingRows
+    .map((neighbor) => neighbor.NeighborsID)
+    .filter((neighborId) => !expandedParkingById.has(safeNormalizedText(neighborId)));
 
-          return {
-            ID: relatedStamp.ID,
-            number: relatedStamp.number,
-            name: relatedStamp.name,
-            heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
-            imageCaption: relatedStamp.imageCaption,
-            distanceKm: routeMetrics.distanceKm,
-            durationMinutes: routeMetrics.durationMinutes,
-            elevationGainMeters: routeMetrics.elevationGainMeters,
-            elevationLossMeters: routeMetrics.elevationLossMeters,
-          };
-        } catch {
-          const routeMetrics = await routeMetricsPromise;
-          return {
-            ID: neighbor.NeighborsID,
-            number: neighbor.NeighborsNumber,
-            name: `${neighbor.NeighborsNumber || ''}`.trim(),
-            heroImageUrl: undefined,
-            imageCaption: undefined,
-            distanceKm: routeMetrics.distanceKm,
-            durationMinutes: routeMetrics.durationMinutes,
-            elevationGainMeters: routeMetrics.elevationGainMeters,
-            elevationLossMeters: routeMetrics.elevationLossMeters,
-          };
+  const [missingRelatedStamps, missingRelatedParkingSpots, routeMetricsByNeighbor] =
+    await Promise.all([
+      fetchGuidEntitiesByIds<Stampbox>(
+        accessToken,
+        'Stampboxes',
+        'ID',
+        missingNeighborStampIds,
+        {
+          select: ['ID', 'number', 'name', 'heroImageUrl', 'image', 'imageCaption'],
         }
-      })
-    )
-  ).filter((item) => item.ID !== stamp.ID);
-
-  const nearbyParking = await Promise.all(
-    neighborParkingRows.map(async (neighbor) => {
-      const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
-      const routeMetricsPromise = fetchRouteMetrics(
+      ),
+      fetchGuidEntitiesByIds<ParkingSpot>(
+        accessToken,
+        'ParkingSpots',
+        'ID',
+        missingNeighborParkingIds,
+        {
+          select: ['ID', 'name'],
+        }
+      ),
+      fetchRouteMetricsByTargets(
         accessToken,
         stampId,
-        neighbor.NeighborsID,
-        fallbackDistanceKm
-      );
-      try {
-        const parking = await fetchEntityById<ParkingSpot>(
-          accessToken,
-          'ParkingSpots',
-          neighbor.NeighborsID,
-          [['$select', 'ID,name']]
-        );
-        const routeMetrics = await routeMetricsPromise;
+        [...neighborStampRows, ...neighborParkingRows].map((neighbor) => ({
+          toPoiId: neighbor.NeighborsID,
+          fallbackDistanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+        }))
+      ),
+    ]);
+  const relatedStampById = new Map([...expandedStampById.entries()]);
+  for (const relatedStamp of missingRelatedStamps) {
+    relatedStampById.set(safeNormalizedText(relatedStamp.ID), relatedStamp);
+  }
+  const relatedParkingById = new Map([...expandedParkingById.entries()]);
+  for (const relatedParkingSpot of missingRelatedParkingSpots) {
+    relatedParkingById.set(safeNormalizedText(relatedParkingSpot.ID), relatedParkingSpot);
+  }
 
-        return {
-          ID: parking.ID,
-          name: parking.name || 'Parkplatz',
-          distanceKm: routeMetrics.distanceKm,
-          durationMinutes: routeMetrics.durationMinutes,
-          elevationGainMeters: routeMetrics.elevationGainMeters,
-          elevationLossMeters: routeMetrics.elevationLossMeters,
-        };
-      } catch {
-        const routeMetrics = await routeMetricsPromise;
-        return {
-          ID: neighbor.NeighborsID,
-          name: 'Parkplatz',
-          distanceKm: routeMetrics.distanceKm,
-          durationMinutes: routeMetrics.durationMinutes,
-          elevationGainMeters: routeMetrics.elevationGainMeters,
-          elevationLossMeters: routeMetrics.elevationLossMeters,
-        };
-      }
+  const nearbyStamps = neighborStampRows
+    .map((neighbor) => {
+      const neighborKey = safeNormalizedText(neighbor.NeighborsID);
+      const relatedStamp = relatedStampById.get(neighborKey);
+      const routeMetrics =
+        routeMetricsByNeighbor.get(neighborKey) ??
+        createFallbackRouteMetrics(
+          typeof neighbor.distanceKm === 'number' && Number.isFinite(neighbor.distanceKm)
+            ? neighbor.distanceKm
+            : null
+        );
+
+      return {
+        ID: relatedStamp?.ID || neighbor.NeighborsID,
+        number: relatedStamp?.number || neighbor.NeighborsNumber,
+        name: relatedStamp?.name || `${neighbor.NeighborsNumber || ''}`.trim(),
+        heroImageUrl: relatedStamp?.heroImageUrl || relatedStamp?.image,
+        imageCaption: relatedStamp?.imageCaption,
+        distanceKm: routeMetrics.distanceKm,
+        durationMinutes: routeMetrics.durationMinutes,
+        elevationGainMeters: routeMetrics.elevationGainMeters,
+        elevationLossMeters: routeMetrics.elevationLossMeters,
+      };
     })
-  );
+    .filter((item) => item.ID !== stamp.ID);
+
+  const nearbyParking = neighborParkingRows.map((neighbor) => {
+    const neighborKey = safeNormalizedText(neighbor.NeighborsID);
+    const relatedParking = relatedParkingById.get(neighborKey);
+    const routeMetrics =
+      routeMetricsByNeighbor.get(neighborKey) ??
+      createFallbackRouteMetrics(
+        typeof neighbor.distanceKm === 'number' && Number.isFinite(neighbor.distanceKm)
+          ? neighbor.distanceKm
+          : null
+      );
+
+    return {
+      ID: relatedParking?.ID || neighbor.NeighborsID,
+      name: relatedParking?.name || 'Parkplatz',
+      distanceKm: routeMetrics.distanceKm,
+      durationMinutes: routeMetrics.durationMinutes,
+      elevationGainMeters: routeMetrics.elevationGainMeters,
+      elevationLossMeters: routeMetrics.elevationLossMeters,
+    };
+  });
 
   const friendMap = new Map(friends.map((friend) => [friend.ID, friend]));
   const myVisits = stampings.filter((stamping) => stamping.createdBy === currentUserId);
@@ -1079,27 +1496,14 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
   }
 
   const unresolvedFriendIds = friendIds.filter((friendId) => !latestFriendStampings.has(friendId));
-  const FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE = 10;
-
-  for (
-    let index = 0;
-    index < unresolvedFriendIds.length;
-    index += FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE
-  ) {
-    const friendIdBatch = unresolvedFriendIds.slice(index, index + FRIEND_TIMESTAMP_LOOKUP_BATCH_SIZE);
-    const batchStampings = await Promise.all(
-      friendIdBatch.map(async (friendId) => {
-        const stamping = await fetchStampingForStampAndUser(accessToken, stampId, friendId);
-        return stamping ? ([friendId, stamping] as const) : null;
-      })
+  if (unresolvedFriendIds.length > 0) {
+    const fallbackStampings = await fetchLatestStampingsForStampAndUsers(
+      accessToken,
+      stampId,
+      unresolvedFriendIds
     );
-
-    for (const entry of batchStampings) {
-      if (!entry) {
-        continue;
-      }
-
-      latestFriendStampings.set(entry[0], entry[1]);
+    for (const [friendId, stamping] of fallbackStampings.entries()) {
+      latestFriendStampings.set(friendId, stamping);
     }
   }
 
@@ -1134,109 +1538,143 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
   ]);
 
   const [neighborStampRows, neighborParkingRows] = await Promise.all([
-    fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsParkingStamp', 'ID', parkingId, [
-      ['$orderby', 'distanceKm asc'],
-      ['$top', 3],
-    ]),
+    fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsParkingStamp', 'ID', parkingId, {
+      orderBy: 'distanceKm asc',
+      top: 3,
+      expand: {
+        neighborStamp: {
+          select: ['ID', 'number', 'name', 'heroImageUrl', 'image', 'imageCaption'],
+        },
+      },
+    }),
     fetchGuidFilteredCollection<NeighborParkingRow>(
       accessToken,
       'NeighborsParkingParking',
       'ID',
       parkingId,
-      [
-        ['$orderby', 'distanceKm asc'],
-        ['$top', 3],
-      ]
+      {
+        orderBy: 'distanceKm asc',
+        top: 3,
+        expand: {
+          neighborParking: {
+            select: ['ID', 'name'],
+          },
+        },
+      }
     ),
   ]);
 
-  const nearbyStamps = await Promise.all(
-    neighborStampRows.map(async (neighbor) => {
-      const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
-      const routeMetricsPromise = fetchRouteMetrics(
+  const expandedStampById = new Map(
+    neighborStampRows
+      .map((neighbor) => neighbor.neighborStamp)
+      .filter(
+        (neighborStamp): neighborStamp is NonNullable<NeighborStampRow['neighborStamp']> =>
+          Boolean(neighborStamp?.ID)
+      )
+      .map((neighborStamp) => [safeNormalizedText(neighborStamp.ID), neighborStamp])
+  );
+  const expandedParkingById = new Map(
+    neighborParkingRows
+      .map((neighbor) => neighbor.neighborParking)
+      .filter(
+        (neighborParking): neighborParking is NonNullable<NeighborParkingRow['neighborParking']> =>
+          Boolean(neighborParking?.ID)
+      )
+      .map((neighborParking) => [safeNormalizedText(neighborParking.ID), neighborParking])
+  );
+  const missingNeighborStampIds = neighborStampRows
+    .map((neighbor) => neighbor.NeighborsID)
+    .filter((neighborId) => !expandedStampById.has(safeNormalizedText(neighborId)));
+  const missingNeighborParkingIds = neighborParkingRows
+    .map((neighbor) => neighbor.NeighborsID)
+    .filter((neighborId) => !expandedParkingById.has(safeNormalizedText(neighborId)));
+
+  const [missingRelatedStamps, missingRelatedParkingSpots, routeMetricsByNeighbor] =
+    await Promise.all([
+      fetchGuidEntitiesByIds<Stampbox>(
+        accessToken,
+        'Stampboxes',
+        'ID',
+        missingNeighborStampIds,
+        {
+          select: ['ID', 'number', 'name', 'heroImageUrl', 'image', 'imageCaption'],
+        }
+      ),
+      fetchGuidEntitiesByIds<ParkingSpot>(
+        accessToken,
+        'ParkingSpots',
+        'ID',
+        missingNeighborParkingIds,
+        {
+          select: ['ID', 'name'],
+        }
+      ),
+      fetchRouteMetricsByTargets(
         accessToken,
         parkingId,
-        neighbor.NeighborsID,
-        fallbackDistanceKm
+        [...neighborStampRows, ...neighborParkingRows].map((neighbor) => ({
+          toPoiId: neighbor.NeighborsID,
+          fallbackDistanceKm: typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null,
+        }))
+      ),
+    ]);
+  const relatedStampById = new Map([...expandedStampById.entries()]);
+  for (const relatedStamp of missingRelatedStamps) {
+    relatedStampById.set(safeNormalizedText(relatedStamp.ID), relatedStamp);
+  }
+  const relatedParkingById = new Map([...expandedParkingById.entries()]);
+  for (const relatedParkingSpot of missingRelatedParkingSpots) {
+    relatedParkingById.set(safeNormalizedText(relatedParkingSpot.ID), relatedParkingSpot);
+  }
+
+  const nearbyStamps = neighborStampRows.map((neighbor) => {
+    const neighborKey = safeNormalizedText(neighbor.NeighborsID);
+    const relatedStamp = relatedStampById.get(neighborKey);
+    const routeMetrics =
+      routeMetricsByNeighbor.get(neighborKey) ??
+      createFallbackRouteMetrics(
+        typeof neighbor.distanceKm === 'number' && Number.isFinite(neighbor.distanceKm)
+          ? neighbor.distanceKm
+          : null
       );
-      try {
-        const relatedStamp = await fetchEntityById<Stampbox>(
-          accessToken,
-          'Stampboxes',
-          neighbor.NeighborsID,
-          [['$select', 'ID,number,name,heroImageUrl,image,imageCaption']]
-        );
-        const routeMetrics = await routeMetricsPromise;
 
-        return {
-          ID: relatedStamp.ID,
-          number: relatedStamp.number,
-          name: relatedStamp.name || `Stempel ${relatedStamp.number || '--'}`,
-          heroImageUrl: relatedStamp.heroImageUrl || relatedStamp.image,
-          imageCaption: relatedStamp.imageCaption,
-          distanceKm: routeMetrics.distanceKm,
-          durationMinutes: routeMetrics.durationMinutes,
-          elevationGainMeters: routeMetrics.elevationGainMeters,
-          elevationLossMeters: routeMetrics.elevationLossMeters,
-        };
-      } catch {
-        const routeMetrics = await routeMetricsPromise;
-        return {
-          ID: neighbor.NeighborsID,
-          number: neighbor.NeighborsNumber,
-          name: neighbor.NeighborsNumber ? `Stempel ${neighbor.NeighborsNumber}` : 'Stempelstelle',
-          heroImageUrl: undefined,
-          imageCaption: undefined,
-          distanceKm: routeMetrics.distanceKm,
-          durationMinutes: routeMetrics.durationMinutes,
-          elevationGainMeters: routeMetrics.elevationGainMeters,
-          elevationLossMeters: routeMetrics.elevationLossMeters,
-        };
-      }
+    return {
+      ID: relatedStamp?.ID || neighbor.NeighborsID,
+      number: relatedStamp?.number || neighbor.NeighborsNumber,
+      name:
+        relatedStamp?.name ||
+        (neighbor.NeighborsNumber ? `Stempel ${neighbor.NeighborsNumber}` : 'Stempelstelle'),
+      heroImageUrl: relatedStamp?.heroImageUrl || relatedStamp?.image,
+      imageCaption: relatedStamp?.imageCaption,
+      distanceKm: routeMetrics.distanceKm,
+      durationMinutes: routeMetrics.durationMinutes,
+      elevationGainMeters: routeMetrics.elevationGainMeters,
+      elevationLossMeters: routeMetrics.elevationLossMeters,
+    };
+  });
+
+  const nearbyParking = neighborParkingRows
+    .map((neighbor) => {
+      const neighborKey = safeNormalizedText(neighbor.NeighborsID);
+      const relatedParking = relatedParkingById.get(neighborKey);
+      const routeMetrics =
+        routeMetricsByNeighbor.get(neighborKey) ??
+        createFallbackRouteMetrics(
+          typeof neighbor.distanceKm === 'number' && Number.isFinite(neighbor.distanceKm)
+            ? neighbor.distanceKm
+            : null
+        );
+
+      return {
+        ID: relatedParking?.ID || neighbor.NeighborsID,
+        name: relatedParking?.name || 'Parkplatz',
+        distanceKm: routeMetrics.distanceKm,
+        durationMinutes: routeMetrics.durationMinutes,
+        elevationGainMeters: routeMetrics.elevationGainMeters,
+        elevationLossMeters: routeMetrics.elevationLossMeters,
+      };
     })
-  );
-
-  const nearbyParking = (
-    await Promise.all(
-      neighborParkingRows.map(async (neighbor) => {
-        const fallbackDistanceKm = typeof neighbor.distanceKm === 'number' ? neighbor.distanceKm : null;
-        const routeMetricsPromise = fetchRouteMetrics(
-          accessToken,
-          parkingId,
-          neighbor.NeighborsID,
-          fallbackDistanceKm
-        );
-        try {
-          const relatedParking = await fetchEntityById<ParkingSpot>(
-            accessToken,
-            'ParkingSpots',
-            neighbor.NeighborsID,
-            [['$select', 'ID,name']]
-          );
-          const routeMetrics = await routeMetricsPromise;
-
-          return {
-            ID: relatedParking.ID,
-            name: relatedParking.name || 'Parkplatz',
-            distanceKm: routeMetrics.distanceKm,
-            durationMinutes: routeMetrics.durationMinutes,
-            elevationGainMeters: routeMetrics.elevationGainMeters,
-            elevationLossMeters: routeMetrics.elevationLossMeters,
-          };
-        } catch {
-          const routeMetrics = await routeMetricsPromise;
-          return {
-            ID: neighbor.NeighborsID,
-            name: 'Parkplatz',
-            distanceKm: routeMetrics.distanceKm,
-            durationMinutes: routeMetrics.durationMinutes,
-            elevationGainMeters: routeMetrics.elevationGainMeters,
-            elevationLossMeters: routeMetrics.elevationLossMeters,
-          };
-        }
-      })
-    )
-  ).filter((item) => item.ID !== parking.ID);
+    .filter((item) => item.ID !== parking.ID);
 
   return {
     parking,
@@ -1245,23 +1683,42 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
   } satisfies ParkingDetailData;
 }
 
-export async function fetchProfileOverview(accessToken: string, currentUserId?: string) {
+export async function fetchProfileOverview(
+  accessToken: string,
+  currentUserId?: string,
+  prefetchedCurrentUser?: {
+    id: string;
+    name?: string;
+    picture?: string;
+  } | null,
+  prefetchedStamps?: Stampbox[]
+) {
+  const resolvedCurrentUserId = safeTrim(currentUserId || prefetchedCurrentUser?.id);
   const [currentUser, stamps, stampings, friendships] = await Promise.all([
-    fetchCurrentUserRecord(accessToken),
-    fetchStampboxes(accessToken),
-    fetchCollection<Stamping>(accessToken, 'Stampings', [
-      ['$select', 'ID,visitedAt,createdAt,createdBy,stamp_ID'],
-      ['$orderby', 'visitedAt desc,createdAt desc'],
-      ['$top', 100],
-    ]),
-    fetchCollection<MyFriend>(accessToken, 'MyFriends', [['$select', 'ID,name,picture,status']]),
+    prefetchedCurrentUser?.id
+      ? Promise.resolve({
+          ID: prefetchedCurrentUser.id,
+          name: prefetchedCurrentUser.name,
+          picture: prefetchedCurrentUser.picture,
+        } satisfies User)
+      : fetchCurrentUserRecord(accessToken),
+    prefetchedStamps ? Promise.resolve(prefetchedStamps) : fetchStampboxes(accessToken),
+    resolvedCurrentUserId
+      ? fetchCollection<Stamping>(accessToken, 'Stampings', {
+          select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
+          filter: { createdBy: resolvedCurrentUserId },
+          orderBy: 'visitedAt desc,createdAt desc',
+          top: 100,
+        })
+      : Promise.resolve([] as Stamping[]),
+    fetchCollection<MyFriend>(accessToken, 'MyFriends', {
+      select: ['ID', 'name', 'picture', 'status'],
+    }),
   ]);
   const friends = friendships.filter((friend) => friend.status === 'accepted');
 
   const stampMap = new Map(stamps.map((stamp) => [stamp.ID, stamp]));
-  const myStampings = currentUserId
-    ? stampings.filter((stamping) => stamping.createdBy === currentUserId)
-    : [];
+  const myStampings = stampings;
   const sortedVisits = myStampings
     .slice()
     .sort((left, right) => {
@@ -1334,19 +1791,30 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     await Promise.all([
       fetchStampboxes(accessToken),
       fetchComparisonStampboxes(accessToken, [currentUser.ID, targetUserId]),
-      fetchCollection<Stamping>(accessToken, 'Stampings', [
-        ['$select', 'ID,createdAt,createdBy,stamp_ID'],
-        ['$filter', `createdBy eq '${escapeODataString(targetUserId)}'`],
-        ['$orderby', 'createdAt desc'],
-        ['$top', 200],
-      ]),
-      fetchCollection<MyFriend>(accessToken, 'MyFriends', [
-        ['$select', 'ID,name,picture,FriendshipID,status,isAllowedToStampForMe,isAllowedToStampForFriend'],
-      ]),
-      fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', [
-        ['$select', 'ID,fromUser_ID,toUser_ID,outgoingFriendship_ID'],
-        ['$expand', 'fromUser($select=ID,name,picture),toUser($select=ID,name,picture)'],
-      ]),
+      fetchCollection<Stamping>(accessToken, 'Stampings', {
+        select: ['ID', 'createdAt', 'createdBy', 'stamp_ID'],
+        filter: { createdBy: targetUserId },
+        orderBy: 'createdAt desc',
+        top: 200,
+      }),
+      fetchCollection<MyFriend>(accessToken, 'MyFriends', {
+        select: [
+          'ID',
+          'name',
+          'picture',
+          'FriendshipID',
+          'status',
+          'isAllowedToStampForMe',
+          'isAllowedToStampForFriend',
+        ],
+      }),
+      fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', {
+        select: ['ID', 'fromUser_ID', 'toUser_ID', 'outgoingFriendship_ID'],
+        expand: {
+          fromUser: { select: ['ID', 'name', 'picture'] },
+          toUser: { select: ['ID', 'name', 'picture'] },
+        },
+      }),
       fetchUserFriends(accessToken, targetUserId),
     ]);
 
@@ -1464,27 +1932,35 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
   } satisfies UserProfileOverviewData;
 }
 
-export async function fetchFriendsOverview(accessToken: string) {
-  const [stamps, friendships, currentUser, pendingRequests] = await Promise.all([
-    fetchStampboxes(accessToken),
-    fetchCollection<MyFriend>(accessToken, 'MyFriends', [
-      ['$select', 'ID,name,picture,FriendshipID,status,isAllowedToStampForMe,isAllowedToStampForFriend'],
-    ]),
-    fetchOData<User>(accessToken, buildUrl('getCurrentUser()')),
-    fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', [
-      ['$select', 'ID,fromUser_ID,toUser_ID,outgoingFriendship_ID'],
-      ['$expand', 'fromUser($select=ID,name,picture),toUser($select=ID,name,picture)'],
-    ]),
+export async function fetchFriendsOverview(accessToken: string, currentUserId?: string) {
+  const [friendships, pendingRequests] = await Promise.all([
+    fetchCollection<MyFriend>(accessToken, 'MyFriends', {
+      select: [
+        'ID',
+        'name',
+        'picture',
+        'FriendshipID',
+        'status',
+        'isAllowedToStampForMe',
+        'isAllowedToStampForFriend',
+      ],
+    }),
+    fetchCollection<PendingFriendshipRequest>(accessToken, 'PendingFriendshipRequests', {
+      select: ['ID', 'fromUser_ID', 'toUser_ID', 'outgoingFriendship_ID'],
+      expand: {
+        fromUser: { select: ['ID', 'name', 'picture'] },
+        toUser: { select: ['ID', 'name', 'picture'] },
+      },
+    }),
   ]);
 
-  const totalCount = stamps.length;
   const acceptedFriendships = friendships.filter((friend) => friend.status === 'accepted');
   const pendingSentFriendships = friendships.filter((friend) => friend.status === 'pending');
-  const mappedFriends = await buildFriendProgress(accessToken, acceptedFriendships, totalCount);
+  const mappedFriends = await buildFriendProgress(accessToken, acceptedFriendships);
 
-  const currentUserId = currentUser.ID;
+  const resolvedCurrentUserId = currentUserId || (await fetchCurrentUserRecord(accessToken)).ID;
   const incomingRequests = pendingRequests
-    .filter((request) => request.fromUser_ID === currentUserId)
+    .filter((request) => request.fromUser_ID === resolvedCurrentUserId)
     .map((request) => ({
       id: request.ID,
       pendingRequestId: request.ID,
@@ -1505,7 +1981,7 @@ export async function fetchFriendsOverview(accessToken: string) {
     .sort((left, right) => left.name.localeCompare(right.name));
 
   return {
-    currentUserId,
+    currentUserId: resolvedCurrentUserId,
     friendCount: mappedFriends.length,
     incomingRequestCount: incomingRequests.length,
     outgoingRequestCount: outgoingRequests.length,
@@ -1538,11 +2014,11 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
 
   for (const filter of filters) {
     try {
-      const users = await fetchCollection<User>(accessToken, 'Users', [
-        ['$select', 'ID,name,picture,isFriend'],
-        ['$filter', filter],
-        ['$top', 12],
-      ]);
+      const users = await fetchCollection<User>(accessToken, 'Users', {
+        select: ['ID', 'name', 'picture', 'isFriend'],
+        filter,
+        top: 12,
+      });
 
       return attachUserProgress(
         accessToken,
@@ -1558,10 +2034,10 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
     }
   }
 
-  const users = await fetchCollection<User>(accessToken, 'Users', [
-    ['$select', 'ID,name,picture,isFriend'],
-    ['$top', 50],
-  ]);
+  const users = await fetchCollection<User>(accessToken, 'Users', {
+    select: ['ID', 'name', 'picture', 'isFriend'],
+    top: 50,
+  });
 
   const normalizedQuery = query.toLowerCase();
   return attachUserProgress(
