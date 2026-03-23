@@ -37,7 +37,13 @@ import { FriendsList } from '@/components/friends-list';
 import {
   createStamping,
   deleteStamping,
+  type LatestVisitedStamp,
+  type MapData,
+  type ProfileOverviewData,
+  type Stampbox,
+  type StampDetailData,
   updateStamping,
+  type VisitStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
@@ -45,6 +51,11 @@ import { queryKeys, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
   sub?: string;
+};
+
+type StampsOverviewData = {
+  stamps: Stampbox[];
+  lastVisited: LatestVisitedStamp | null;
 };
 
 type CarouselImageItem = {
@@ -259,18 +270,307 @@ function StampDetailContent() {
       return;
     }
 
+    const nowIsoTimestamp = new Date().toISOString();
+    const optimisticVisitId = `optimistic-${stampId}-${Date.now()}`;
+    const stampSnapshot = detail?.stamp ?? null;
+    const optimisticVisit: VisitStamping = {
+      ID: optimisticVisitId,
+      stamp_ID: stampId,
+      stamp: {
+        ID: stampId,
+        number: stampSnapshot?.number || '--',
+        name: stampSnapshot?.name || 'Stempelstelle',
+      },
+      visitedAt: nowIsoTimestamp,
+      createdAt: nowIsoTimestamp,
+    };
+    const mapDataKey = queryKeys.mapData(claims?.sub);
+    const stampsOverviewKey = queryKeys.stampsOverview(claims?.sub);
+    const profileOverviewKey = queryKeys.profileOverview(claims?.sub);
+    const stampDetailKey = queryKeys.stampDetail(claims?.sub, stampId);
+    const optimisticLastVisited: LatestVisitedStamp = {
+      stampId,
+      stampNumber: stampSnapshot?.number,
+      stampName: stampSnapshot?.name || 'Stempelstelle',
+      visitedAt: nowIsoTimestamp,
+    };
+    let rollbackOptimisticUpdates = () => undefined;
+
     setIsStamping(true);
 
     try {
-      await createStamping(accessToken, stampId);
-      await refetch();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+        queryClient.cancelQueries({ queryKey: mapDataKey }),
+        queryClient.cancelQueries({ queryKey: stampsOverviewKey }),
+        queryClient.cancelQueries({ queryKey: profileOverviewKey }),
+        queryClient.cancelQueries({ queryKey: stampDetailKey }),
+      ]);
+
+      const previousMapData = queryClient.getQueryData<MapData>(mapDataKey);
+      const previousStampsOverview = queryClient.getQueryData<StampsOverviewData>(stampsOverviewKey);
+      const previousProfileOverview = queryClient.getQueryData<ProfileOverviewData>(profileOverviewKey);
+      const previousStampDetail = queryClient.getQueryData<StampDetailData>(stampDetailKey);
+
+      const rollbackQueryData = <T,>(queryKey: readonly unknown[], previousValue: T | undefined) => {
+        if (previousValue === undefined) {
+          queryClient.removeQueries({ queryKey, exact: true });
+          return;
+        }
+
+        queryClient.setQueryData<T>(queryKey, previousValue);
+      };
+
+      rollbackOptimisticUpdates = () => {
+        rollbackQueryData(mapDataKey, previousMapData);
+        rollbackQueryData(stampsOverviewKey, previousStampsOverview);
+        rollbackQueryData(profileOverviewKey, previousProfileOverview);
+        rollbackQueryData(stampDetailKey, previousStampDetail);
+      };
+
+      queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+        if (currentDetail) {
+          const hasVisitAlready = currentDetail.myVisits.some((visit) => visit.ID === optimisticVisit.ID);
+          return {
+            ...currentDetail,
+            stamp: {
+              ...currentDetail.stamp,
+              hasVisited: true,
+              visitedAt: nowIsoTimestamp,
+            },
+            myVisits: hasVisitAlready ? currentDetail.myVisits : [optimisticVisit, ...currentDetail.myVisits],
+          };
+        }
+
+        if (!stampSnapshot) {
+          return currentDetail;
+        }
+
+        return {
+          stamp: {
+            ...stampSnapshot,
+            hasVisited: true,
+            visitedAt: nowIsoTimestamp,
+          },
+          nearbyStamps: [],
+          nearbyParking: [],
+          friendVisits: [],
+          myVisits: [optimisticVisit],
+        };
+      });
+
+      queryClient.setQueryData<MapData>(mapDataKey, (currentMapData) => {
+        if (!currentMapData) {
+          return currentMapData;
+        }
+
+        return {
+          ...currentMapData,
+          stamps: currentMapData.stamps.map((stamp) => {
+            if (stamp.ID !== stampId) {
+              return stamp;
+            }
+
+            return {
+              ...stamp,
+              hasVisited: true,
+              visitedAt: nowIsoTimestamp,
+              kind: 'visited-stamp' as const,
+            };
+          }),
+        };
+      });
+
+      queryClient.setQueryData<StampsOverviewData>(stampsOverviewKey, (currentStampsOverview) => {
+        if (!currentStampsOverview) {
+          return currentStampsOverview;
+        }
+
+        let hasUpdatedStamp = false;
+        const nextStamps = currentStampsOverview.stamps.map((stamp) => {
+          if (stamp.ID !== stampId) {
+            return stamp;
+          }
+
+          hasUpdatedStamp = true;
+          return {
+            ...stamp,
+            hasVisited: true,
+          };
+        });
+
+        if (!hasUpdatedStamp) {
+          return currentStampsOverview;
+        }
+
+        return {
+          ...currentStampsOverview,
+          stamps: nextStamps,
+          lastVisited: optimisticLastVisited,
+        };
+      });
+
+      queryClient.setQueryData<ProfileOverviewData>(profileOverviewKey, (currentProfileOverview) => {
+        if (!currentProfileOverview) {
+          return currentProfileOverview;
+        }
+
+        const stampBeforeUpdate = currentProfileOverview.stamps.find((stamp) => stamp.ID === stampId);
+        const wasVisited = Boolean(stampBeforeUpdate?.hasVisited);
+        let hasUpdatedStamp = false;
+        const nextStamps = currentProfileOverview.stamps.map((stamp) => {
+          if (stamp.ID !== stampId) {
+            return stamp;
+          }
+
+          hasUpdatedStamp = true;
+          return {
+            ...stamp,
+            hasVisited: true,
+          };
+        });
+
+        const nextVisitedCount =
+          !wasVisited && hasUpdatedStamp
+            ? Math.min(currentProfileOverview.totalCount, currentProfileOverview.visitedCount + 1)
+            : currentProfileOverview.visitedCount;
+        const nextOpenCount = Math.max(0, currentProfileOverview.totalCount - nextVisitedCount);
+        const nextCompletionPercent =
+          currentProfileOverview.totalCount > 0
+            ? Math.round((nextVisitedCount / currentProfileOverview.totalCount) * 100)
+            : 0;
+
+        return {
+          ...currentProfileOverview,
+          visitedCount: nextVisitedCount,
+          openCount: nextOpenCount,
+          completionPercent: nextCompletionPercent,
+          stamps: nextStamps,
+          latestVisits: [
+            {
+              id: optimisticVisitId,
+              stampId,
+              stampNumber: stampSnapshot?.number,
+              stampName: stampSnapshot?.name || 'Stempelstelle',
+              visitedAt: nowIsoTimestamp,
+              heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+            },
+            ...currentProfileOverview.latestVisits,
+          ],
+        };
+      });
+
+      const createdStamping = await createStamping(accessToken, stampId);
+      const persistedVisitTimestamp =
+        createdStamping.visitedAt || createdStamping.createdAt || nowIsoTimestamp;
+      const persistedVisit: VisitStamping = {
+        ...createdStamping,
+        stamp_ID: createdStamping.stamp_ID || stampId,
+        stamp: createdStamping.stamp || optimisticVisit.stamp,
+        visitedAt: createdStamping.visitedAt || persistedVisitTimestamp,
+        createdAt: createdStamping.createdAt || persistedVisitTimestamp,
+      };
+      const persistedLastVisited: LatestVisitedStamp = {
+        ...optimisticLastVisited,
+        visitedAt: persistedVisit.visitedAt,
+      };
+
+      queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+        if (!currentDetail) {
+          return currentDetail;
+        }
+
+        const visitsWithoutOptimistic = currentDetail.myVisits.filter(
+          (visit) => visit.ID !== optimisticVisitId
+        );
+        const hasPersistedVisit = visitsWithoutOptimistic.some((visit) => visit.ID === persistedVisit.ID);
+        const nextVisits = hasPersistedVisit
+          ? visitsWithoutOptimistic
+          : [persistedVisit, ...visitsWithoutOptimistic];
+
+        return {
+          ...currentDetail,
+          stamp: {
+            ...currentDetail.stamp,
+            hasVisited: true,
+            visitedAt: persistedVisit.visitedAt,
+          },
+          myVisits: nextVisits,
+        };
+      });
+
+      queryClient.setQueryData<MapData>(mapDataKey, (currentMapData) => {
+        if (!currentMapData) {
+          return currentMapData;
+        }
+
+        return {
+          ...currentMapData,
+          stamps: currentMapData.stamps.map((stamp) => {
+            if (stamp.ID !== stampId) {
+              return stamp;
+            }
+
+            return {
+              ...stamp,
+              hasVisited: true,
+              visitedAt: persistedVisit.visitedAt,
+              kind: 'visited-stamp' as const,
+            };
+          }),
+        };
+      });
+
+      queryClient.setQueryData<StampsOverviewData>(stampsOverviewKey, (currentStampsOverview) => {
+        if (!currentStampsOverview) {
+          return currentStampsOverview;
+        }
+
+        return {
+          ...currentStampsOverview,
+          lastVisited: persistedLastVisited,
+        };
+      });
+
+      queryClient.setQueryData<ProfileOverviewData>(profileOverviewKey, (currentProfileOverview) => {
+        if (!currentProfileOverview) {
+          return currentProfileOverview;
+        }
+
+        const latestVisitsWithoutOptimistic = currentProfileOverview.latestVisits.filter(
+          (visit) => visit.id !== optimisticVisitId
+        );
+        const hasPersistedVisit = latestVisitsWithoutOptimistic.some(
+          (visit) => visit.id === persistedVisit.ID
+        );
+        const nextLatestVisits = hasPersistedVisit
+          ? latestVisitsWithoutOptimistic
+          : [
+              {
+                id: persistedVisit.ID,
+                stampId,
+                stampNumber: stampSnapshot?.number,
+                stampName: stampSnapshot?.name || 'Stempelstelle',
+                visitedAt: persistedVisit.visitedAt,
+                heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+              },
+              ...latestVisitsWithoutOptimistic,
+            ];
+
+        return {
+          ...currentProfileOverview,
+          latestVisits: nextLatestVisits,
+        };
+      });
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: stampsOverviewKey }),
+        queryClient.invalidateQueries({ queryKey: mapDataKey }),
+        queryClient.invalidateQueries({ queryKey: profileOverviewKey }),
+        queryClient.invalidateQueries({ queryKey: stampDetailKey }),
       ]);
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
+      rollbackOptimisticUpdates();
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -633,14 +933,26 @@ function StampDetailContent() {
     });
   }, [activeCarouselIndex, carouselImages.length, isImageCarouselVisible]);
 
+  const getCarouselScrollIndex = useCallback((offsetX: number) => {
+    if (windowWidth <= 0) {
+      return 0;
+    }
+
+    const nextIndex = Math.round(offsetX / windowWidth);
+    return Math.min(Math.max(0, nextIndex), Math.max(0, carouselImages.length - 1));
+  }, [carouselImages.length, windowWidth]);
+
+  const handleCarouselScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const boundedIndex = getCarouselScrollIndex(event.nativeEvent.contentOffset.x);
+      setActiveCarouselIndex((current) => (current === boundedIndex ? current : boundedIndex));
+    },
+    [getCarouselScrollIndex]
+  );
+
   const handleCarouselScrollEnd = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (windowWidth <= 0) {
-        return;
-      }
-
-      const nextIndex = Math.round(event.nativeEvent.contentOffset.x / windowWidth);
-      const boundedIndex = Math.min(Math.max(0, nextIndex), Math.max(0, carouselImages.length - 1));
+      const boundedIndex = getCarouselScrollIndex(event.nativeEvent.contentOffset.x);
 
       if (boundedIndex !== activeCarouselIndex) {
         setZoomedImageId(null);
@@ -650,7 +962,7 @@ function StampDetailContent() {
 
       setActiveCarouselIndex(boundedIndex);
     },
-    [activeCarouselIndex, carouselImages.length, resetCarouselPan, windowWidth]
+    [activeCarouselIndex, getCarouselScrollIndex, resetCarouselPan]
   );
 
   if (!stampId) {
@@ -1018,9 +1330,11 @@ function StampDetailContent() {
             horizontal
             initialNumToRender={1}
             keyExtractor={(item) => item.id}
+            onScroll={handleCarouselScroll}
             onMomentumScrollEnd={handleCarouselScrollEnd}
             pagingEnabled
             ref={carouselListRef}
+            scrollEventThrottle={16}
             scrollEnabled={zoomedImageId === null}
             renderItem={({ item }) => (
               <View style={[styles.carouselSlide, { width: windowWidth }]}>

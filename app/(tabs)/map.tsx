@@ -21,12 +21,18 @@ import {
   createStamping,
   fetchRouteMetrics,
   fetchStampDetail,
+  type LatestVisitedStamp,
+  type MapData,
   type MapParkingSpot,
   type MapStamp,
+  type ProfileOverviewData,
   type RouteMetrics,
+  type Stampbox,
   type StampDetailData,
+  type VisitStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
 import { queryKeys, useMapDataQuery } from '@/lib/queries';
 
 type VisitFilter = 'all' | 'visited' | 'open';
@@ -40,6 +46,11 @@ type Coordinate = {
 type LocationState = 'idle' | 'loading' | 'granted' | 'denied';
 type AuthClaims = {
   sub?: string;
+};
+
+type StampsOverviewData = {
+  stamps: Stampbox[];
+  lastVisited: LatestVisitedStamp | null;
 };
 
 type BaseMarkerItem = {
@@ -846,70 +857,336 @@ export default function MapScreen() {
       return;
     }
 
+    const stampId = selectedItem.stampId;
+    const nowIsoTimestamp = new Date().toISOString();
+    const optimisticVisitId = `optimistic-${stampId}-${Date.now()}`;
+    const stampSnapshot =
+      data?.stamps.find((stamp) => stamp.ID === stampId) ?? null;
+    const optimisticVisit: VisitStamping = {
+      ID: optimisticVisitId,
+      stamp_ID: stampId,
+      stamp: {
+        ID: stampId,
+        number: stampSnapshot?.number || '--',
+        name: stampSnapshot?.name || selectedItem.title,
+      },
+      visitedAt: nowIsoTimestamp,
+      createdAt: nowIsoTimestamp,
+    };
+    const mapDataKey = queryKeys.mapData(claims?.sub);
+    const stampsOverviewKey = queryKeys.stampsOverview(claims?.sub);
+    const profileOverviewKey = queryKeys.profileOverview(claims?.sub);
+    const stampDetailKey = queryKeys.stampDetail(claims?.sub, stampId);
+    const optimisticLastVisited: LatestVisitedStamp = {
+      stampId,
+      stampNumber: stampSnapshot?.number,
+      stampName: stampSnapshot?.name || selectedItem.title,
+      visitedAt: nowIsoTimestamp,
+    };
+    let rollbackOptimisticUpdates = () => undefined;
+
     setIsStamping(true);
 
     try {
-      const createdStamping = await createStamping(accessToken, selectedItem.stampId);
-      const visitTimestamp = createdStamping.visitedAt || createdStamping.createdAt || new Date().toISOString();
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: mapDataKey }),
+        queryClient.cancelQueries({ queryKey: stampsOverviewKey }),
+        queryClient.cancelQueries({ queryKey: profileOverviewKey }),
+        queryClient.cancelQueries({ queryKey: stampDetailKey }),
+      ]);
 
-      queryClient.setQueryData<StampDetailData>(
-        queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
-        (currentDetail) => {
-          const nextVisit = {
-            ...createdStamping,
-            stamp_ID: createdStamping.stamp_ID || selectedItem.stampId,
-            visitedAt: createdStamping.visitedAt || visitTimestamp,
-            createdAt: createdStamping.createdAt || visitTimestamp,
-          };
+      const previousMapData = queryClient.getQueryData<MapData>(mapDataKey);
+      const previousStampsOverview = queryClient.getQueryData<StampsOverviewData>(stampsOverviewKey);
+      const previousProfileOverview = queryClient.getQueryData<ProfileOverviewData>(profileOverviewKey);
+      const previousStampDetail = queryClient.getQueryData<StampDetailData>(stampDetailKey);
 
-          if (currentDetail) {
-            const hasVisitAlready = currentDetail.myVisits.some((visit) => visit.ID === nextVisit.ID);
-            return {
-              ...currentDetail,
-              stamp: {
-                ...currentDetail.stamp,
-                hasVisited: true,
-                visitedAt: nextVisit.visitedAt,
-              },
-              myVisits: hasVisitAlready ? currentDetail.myVisits : [nextVisit, ...currentDetail.myVisits],
-            };
+      const rollbackQueryData = <T,>(queryKey: readonly unknown[], previousValue: T | undefined) => {
+        if (previousValue === undefined) {
+          queryClient.removeQueries({ queryKey, exact: true });
+          return;
+        }
+
+        queryClient.setQueryData<T>(queryKey, previousValue);
+      };
+
+      rollbackOptimisticUpdates = () => {
+        rollbackQueryData(mapDataKey, previousMapData);
+        rollbackQueryData(stampsOverviewKey, previousStampsOverview);
+        rollbackQueryData(profileOverviewKey, previousProfileOverview);
+        rollbackQueryData(stampDetailKey, previousStampDetail);
+      };
+
+      queryClient.setQueryData<MapData>(mapDataKey, (currentMapData) => {
+        if (!currentMapData) {
+          return currentMapData;
+        }
+
+        let hasUpdatedStamp = false;
+        const nextStamps = currentMapData.stamps.map((stamp) => {
+          if (stamp.ID !== stampId) {
+            return stamp;
           }
 
-          const cachedStamp = data?.stamps.find((stamp) => stamp.ID === selectedItem.stampId);
-          if (!cachedStamp) {
-            return currentDetail;
-          }
-
+          hasUpdatedStamp = true;
           return {
+            ...stamp,
+            hasVisited: true,
+            visitedAt: nowIsoTimestamp,
+            kind: 'visited-stamp' as const,
+          };
+        });
+
+        if (!hasUpdatedStamp) {
+          return currentMapData;
+        }
+
+        return {
+          ...currentMapData,
+          stamps: nextStamps,
+        };
+      });
+
+      queryClient.setQueryData<StampsOverviewData>(stampsOverviewKey, (currentStampsOverview) => {
+        if (!currentStampsOverview) {
+          return currentStampsOverview;
+        }
+
+        let hasUpdatedStamp = false;
+        const nextStamps = currentStampsOverview.stamps.map((stamp) => {
+          if (stamp.ID !== stampId) {
+            return stamp;
+          }
+
+          hasUpdatedStamp = true;
+          return {
+            ...stamp,
+            hasVisited: true,
+          };
+        });
+
+        if (!hasUpdatedStamp) {
+          return currentStampsOverview;
+        }
+
+        return {
+          ...currentStampsOverview,
+          stamps: nextStamps,
+          lastVisited: optimisticLastVisited,
+        };
+      });
+
+      queryClient.setQueryData<ProfileOverviewData>(profileOverviewKey, (currentProfileOverview) => {
+        if (!currentProfileOverview) {
+          return currentProfileOverview;
+        }
+
+        const stampBeforeUpdate = currentProfileOverview.stamps.find((stamp) => stamp.ID === stampId);
+        const wasVisited = Boolean(stampBeforeUpdate?.hasVisited);
+        let hasUpdatedStamp = false;
+        const nextStamps = currentProfileOverview.stamps.map((stamp) => {
+          if (stamp.ID !== stampId) {
+            return stamp;
+          }
+
+          hasUpdatedStamp = true;
+          return {
+            ...stamp,
+            hasVisited: true,
+          };
+        });
+
+        const nextVisitedCount = !wasVisited && hasUpdatedStamp
+          ? Math.min(currentProfileOverview.totalCount, currentProfileOverview.visitedCount + 1)
+          : currentProfileOverview.visitedCount;
+        const nextOpenCount = Math.max(0, currentProfileOverview.totalCount - nextVisitedCount);
+        const nextCompletionPercent =
+          currentProfileOverview.totalCount > 0
+            ? Math.round((nextVisitedCount / currentProfileOverview.totalCount) * 100)
+            : 0;
+        const nextLatestVisit = {
+          id: optimisticVisitId,
+          stampId,
+          stampNumber: stampSnapshot?.number,
+          stampName: stampSnapshot?.name || selectedItem.title,
+          visitedAt: nowIsoTimestamp,
+          heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+        };
+
+        return {
+          ...currentProfileOverview,
+          visitedCount: nextVisitedCount,
+          openCount: nextOpenCount,
+          completionPercent: nextCompletionPercent,
+          stamps: nextStamps,
+          latestVisits: [nextLatestVisit, ...currentProfileOverview.latestVisits],
+        };
+      });
+
+      queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+        if (currentDetail) {
+          const hasVisitAlready = currentDetail.myVisits.some((visit) => visit.ID === optimisticVisit.ID);
+          return {
+            ...currentDetail,
             stamp: {
-              ...cachedStamp,
+              ...currentDetail.stamp,
               hasVisited: true,
-              visitedAt: nextVisit.visitedAt,
+              visitedAt: nowIsoTimestamp,
             },
-            nearbyStamps: [],
-            nearbyParking: [],
-            friendVisits: [],
-            myVisits: [nextVisit],
+            myVisits: hasVisitAlready ? currentDetail.myVisits : [optimisticVisit, ...currentDetail.myVisits],
           };
         }
-      );
+
+        if (!stampSnapshot) {
+          return currentDetail;
+        }
+
+        return {
+          stamp: {
+            ...stampSnapshot,
+            hasVisited: true,
+            visitedAt: nowIsoTimestamp,
+          },
+          nearbyStamps: [],
+          nearbyParking: [],
+          friendVisits: [],
+          myVisits: [optimisticVisit],
+        };
+      });
+
+      const createdStamping = await createStamping(accessToken, stampId);
+      const persistedVisitTimestamp =
+        createdStamping.visitedAt || createdStamping.createdAt || nowIsoTimestamp;
+      const persistedVisit: VisitStamping = {
+        ...createdStamping,
+        stamp_ID: createdStamping.stamp_ID || stampId,
+        stamp: createdStamping.stamp || optimisticVisit.stamp,
+        visitedAt: createdStamping.visitedAt || persistedVisitTimestamp,
+        createdAt: createdStamping.createdAt || persistedVisitTimestamp,
+      };
+      const persistedLastVisited: LatestVisitedStamp = {
+        ...optimisticLastVisited,
+        visitedAt: persistedVisit.visitedAt,
+      };
+
+      queryClient.setQueryData<MapData>(mapDataKey, (currentMapData) => {
+        if (!currentMapData) {
+          return currentMapData;
+        }
+
+        return {
+          ...currentMapData,
+          stamps: currentMapData.stamps.map((stamp) => {
+            if (stamp.ID !== stampId) {
+              return stamp;
+            }
+
+            return {
+              ...stamp,
+              hasVisited: true,
+              visitedAt: persistedVisit.visitedAt,
+              kind: 'visited-stamp' as const,
+            };
+          }),
+        };
+      });
+
+      queryClient.setQueryData<StampsOverviewData>(stampsOverviewKey, (currentStampsOverview) => {
+        if (!currentStampsOverview) {
+          return currentStampsOverview;
+        }
+
+        return {
+          ...currentStampsOverview,
+          lastVisited: persistedLastVisited,
+        };
+      });
+
+      queryClient.setQueryData<ProfileOverviewData>(profileOverviewKey, (currentProfileOverview) => {
+        if (!currentProfileOverview) {
+          return currentProfileOverview;
+        }
+
+        const latestVisitsWithoutOptimistic = currentProfileOverview.latestVisits.filter(
+          (visit) => visit.id !== optimisticVisitId
+        );
+        const hasPersistedVisit = latestVisitsWithoutOptimistic.some(
+          (visit) => visit.id === persistedVisit.ID
+        );
+        const nextLatestVisits = hasPersistedVisit
+          ? latestVisitsWithoutOptimistic
+          : [
+              {
+                id: persistedVisit.ID,
+                stampId,
+                stampNumber: stampSnapshot?.number,
+                stampName: stampSnapshot?.name || selectedItem.title,
+                visitedAt: persistedVisit.visitedAt,
+                heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+              },
+              ...latestVisitsWithoutOptimistic,
+            ];
+
+        return {
+          ...currentProfileOverview,
+          latestVisits: nextLatestVisits,
+        };
+      });
+
+      queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+        if (currentDetail) {
+          const visitsWithoutOptimistic = currentDetail.myVisits.filter(
+            (visit) => visit.ID !== optimisticVisitId
+          );
+          const hasPersistedVisitAlready = visitsWithoutOptimistic.some(
+            (visit) => visit.ID === persistedVisit.ID
+          );
+          const nextVisits = hasPersistedVisitAlready
+            ? visitsWithoutOptimistic
+            : [persistedVisit, ...visitsWithoutOptimistic];
+
+          return {
+            ...currentDetail,
+            stamp: {
+              ...currentDetail.stamp,
+              hasVisited: true,
+              visitedAt: persistedVisit.visitedAt,
+            },
+            myVisits: nextVisits,
+          };
+        }
+
+        if (!stampSnapshot) {
+          return currentDetail;
+        }
+
+        return {
+          stamp: {
+            ...stampSnapshot,
+            hasVisited: true,
+            visitedAt: persistedVisit.visitedAt,
+          },
+          nearbyStamps: [],
+          nearbyParking: [],
+          friendVisits: [],
+          myVisits: [persistedVisit],
+        };
+      });
 
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
-        }),
+        queryClient.invalidateQueries({ queryKey: stampsOverviewKey }),
+        queryClient.invalidateQueries({ queryKey: mapDataKey }),
+        queryClient.invalidateQueries({ queryKey: profileOverviewKey }),
+        queryClient.invalidateQueries({ queryKey: stampDetailKey }),
       ]);
       void queryClient
         .prefetchQuery({
-          queryKey: queryKeys.stampDetail(claims?.sub, selectedItem.stampId),
-          queryFn: () => fetchStampDetail(accessToken, selectedItem.stampId, claims?.sub),
+          queryKey: stampDetailKey,
+          queryFn: () => fetchStampDetail(accessToken, stampId, claims?.sub),
         })
         .catch(() => undefined);
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
+      rollbackOptimisticUpdates();
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -1095,52 +1372,89 @@ export default function MapScreen() {
 
           const stampItem = item as StampMarkerItem;
           const colors = markerColors(stampItem.kind);
+          const markerLabel = stampItem.number || '--';
+          const markerImage = getPreGeneratedMapMarkerImageSource({
+            kind: stampItem.kind,
+            label: markerLabel,
+          });
+
+          if (!markerImage) {
+            return (
+              <Marker
+                anchor={MARKER_ANCHOR}
+                coordinate={stampItem.coordinate}
+                key={stampItem.id}
+                onPress={() => handleMarkerPress(stampItem)}>
+                <View collapsable={false} style={styles.pinMarker}>
+                  <View
+                    style={[
+                      styles.pinHead,
+                      styles.stampMarkerHead,
+                      { backgroundColor: colors.fill, shadowColor: colors.shadow },
+                    ]}>
+                    <Text style={[styles.stampMarkerText, { color: colors.text }]}>{markerLabel}</Text>
+                  </View>
+                  <View style={styles.pinTipWrap}>
+                    <View style={[styles.pinTip, { backgroundColor: colors.fill }]} />
+                  </View>
+                </View>
+              </Marker>
+            );
+          }
+
           return (
             <Marker
               anchor={MARKER_ANCHOR}
               coordinate={stampItem.coordinate}
+              image={markerImage}
               key={stampItem.id}
-              onPress={() => handleMarkerPress(stampItem)}>
-              <View collapsable={false} style={styles.pinMarker}>
-                <View
-                  style={[
-                    styles.pinHead,
-                    styles.stampMarkerHead,
-                    { backgroundColor: colors.fill, shadowColor: colors.shadow },
-                  ]}>
-                  <Text style={[styles.stampMarkerText, { color: colors.text }]}>
-                    {stampItem.number || '--'}
-                  </Text>
-                </View>
-                <View style={styles.pinTipWrap}>
-                  <View style={[styles.pinTip, { backgroundColor: colors.fill }]} />
-                </View>
-              </View>
-            </Marker>
+              onPress={() => handleMarkerPress(stampItem)}
+              pinColor={markerImage ? undefined : colors.fill}
+              tracksViewChanges={false}
+            />
           );
         })}
         {visibleParkingItems.map((item) => {
           const colors = markerColors(item.kind);
+          const markerImage = getPreGeneratedMapMarkerImageSource({
+            kind: item.kind,
+            label: 'P',
+          });
+
+          if (!markerImage) {
+            return (
+              <Marker
+                anchor={MARKER_ANCHOR}
+                coordinate={item.coordinate}
+                key={item.id}
+                onPress={() => handleMarkerPress(item)}>
+                <View collapsable={false} style={styles.pinMarker}>
+                  <View
+                    style={[
+                      styles.pinHead,
+                      styles.parkingMarkerHead,
+                      { backgroundColor: colors.fill, shadowColor: colors.shadow },
+                    ]}>
+                    <Text style={[styles.parkingMarkerText, { color: colors.text }]}>P</Text>
+                  </View>
+                  <View style={styles.pinTipWrap}>
+                    <View style={[styles.pinTip, styles.pinTipCompact, { backgroundColor: colors.fill }]} />
+                  </View>
+                </View>
+              </Marker>
+            );
+          }
+
           return (
             <Marker
               anchor={MARKER_ANCHOR}
               coordinate={item.coordinate}
+              image={markerImage}
               key={item.id}
-              onPress={() => handleMarkerPress(item)}>
-              <View collapsable={false} style={styles.pinMarker}>
-                <View
-                  style={[
-                    styles.pinHead,
-                    styles.parkingMarkerHead,
-                    { backgroundColor: colors.fill, shadowColor: colors.shadow },
-                  ]}>
-                  <Text style={[styles.parkingMarkerText, { color: colors.text }]}>P</Text>
-                </View>
-                <View style={styles.pinTipWrap}>
-                  <View style={[styles.pinTip, styles.pinTipCompact, { backgroundColor: colors.fill }]} />
-                </View>
-              </View>
-            </Marker>
+              onPress={() => handleMarkerPress(item)}
+              pinColor={markerImage ? undefined : colors.fill}
+              tracksViewChanges={false}
+            />
           );
         })}
       </MapView>
