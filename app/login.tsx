@@ -62,7 +62,7 @@ export default function LoginScreen() {
     useAuth();
 
   if (isAuthenticated && !isLoading) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href={(hasCompletedOnboarding ? '/(tabs)' : '/onboarding') as never} />;
   }
 
   const errorMessage = configError || authError;

@@ -11,7 +11,17 @@ export default function IndexScreen() {
 
   return (
     <Redirect
-      href={(isAuthenticated ? '/(tabs)' : hasCompletedOnboarding ? '/login' : '/onboarding') as never}
+      href={
+        (
+          isAuthenticated
+            ? hasCompletedOnboarding
+              ? '/(tabs)'
+              : '/onboarding'
+            : hasCompletedOnboarding
+              ? '/login'
+              : '/onboarding'
+        ) as never
+      }
     />
   );
 }
