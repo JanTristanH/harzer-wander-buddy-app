@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   createTour,
+  deleteTour,
   fetchAllPointsOfInterest,
   fetchParkingDetail,
   fetchFriendsOverview,
@@ -12,9 +13,11 @@ import {
   fetchTourPath,
   fetchTours,
   fetchProfileOverview,
+  previewTourByPOIList,
   fetchUserProfileOverview,
   fetchStampboxes,
   updateTourByPOIList,
+  updateTourName,
   type FriendsOverviewData,
   type LatestVisitedStamp,
   type MapData,
@@ -575,6 +578,80 @@ export function useUpdateTourByPOIListMutation(tourId?: string) {
         updateTourByPOIList(token, {
           TourID: tourId,
           POIList: variables.poiIds.join(';'),
+        })
+      );
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.toursOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tourDetail(claims?.sub, tourId) }),
+      ]);
+    },
+  });
+}
+
+export function usePreviewTourByPOIListMutation(tourId?: string) {
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useMutation<
+    TourUpdateResponse,
+    Error,
+    {
+      poiIds: string[];
+    }
+  >({
+    mutationFn: (variables) => {
+      if (!tourId) {
+        throw new Error('Tour ID is required');
+      }
+
+      return authorizedRequest((token) =>
+        previewTourByPOIList(token, {
+          TourID: tourId,
+          POIList: variables.poiIds.join(';'),
+        })
+      );
+    },
+  });
+}
+
+export function useDeleteTourMutation(tourId?: string) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const queryClient = useQueryClient();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useMutation<null, Error, void>({
+    mutationFn: () => {
+      if (!tourId) {
+        throw new Error('Tour ID is required');
+      }
+
+      return authorizedRequest((token) => deleteTour(token, tourId));
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.toursOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tourDetail(claims?.sub, tourId) }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateTourNameMutation(tourId?: string) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const queryClient = useQueryClient();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useMutation<null, Error, { name: string }>({
+    mutationFn: (variables) => {
+      if (!tourId) {
+        throw new Error('Tour ID is required');
+      }
+
+      return authorizedRequest((token) =>
+        updateTourName(token, {
+          tourId,
+          name: variables.name,
         })
       );
     },

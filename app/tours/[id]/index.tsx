@@ -1,17 +1,100 @@
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
+  type ImageSourcePropType,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
+import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { usePointsOfInterestQuery, useTourDetailQuery } from '@/lib/queries';
+import { HttpStatusError, type Tour, type TourUpdateResponse } from '@/lib/api';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
+import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
+import {
+  useDeleteTourMutation,
+  useMapDataQuery,
+  usePreviewTourByPOIListMutation,
+  usePointsOfInterestQuery,
+  useTourDetailQuery,
+  useUpdateTourByPOIListMutation,
+  useUpdateTourNameMutation,
+} from '@/lib/queries';
+
+const HARZ_REGION: Region = {
+  latitude: 51.7544,
+  longitude: 10.6182,
+  latitudeDelta: 0.42,
+  longitudeDelta: 0.42,
+};
+
+const MAP_EDGE_PADDING = {
+  top: 70,
+  right: 70,
+  bottom: 70,
+  left: 70,
+};
+
+const MIN_ZOOM_DELTA = 0.008;
+const MAX_ZOOM_DELTA = 1.2;
+const MAP_MARKER_LIMIT = 260;
+const SEARCH_RESULT_LIMIT = 5;
+const PREVIEW_DEBOUNCE_MS = 700;
+const DIGITS_ONLY_PATTERN = /^\d+$/;
+
+type Coordinate = {
+  latitude: number;
+  longitude: number;
+};
+
+type TourMapMarkerKind = 'visited-stamp' | 'open-stamp' | 'parking' | 'poi';
+
+type TourMapItem = {
+  ID: string;
+  name: string;
+  typeLabel: string;
+  markerLabel: string;
+  stampNumber?: string;
+  kind: TourMapMarkerKind;
+  latitude: number;
+  longitude: number;
+  description?: string;
+  imageUrl?: string;
+};
+
+type LiveTourMetrics = {
+  distance: number | null;
+  duration: number | null;
+  stampCount: number | null;
+  totalElevationGain: number | null;
+  totalElevationLoss: number | null;
+};
+
+type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+
+type SearchCandidate = TourMapItem & {
+  distanceKm: number;
+};
+
+type SearchResultRank = {
+  matchTier: number;
+  matchIndex: number;
+  numberDelta: number;
+  nameLength: number;
+};
 
 function formatDistance(distanceMeters: number | null) {
   if (distanceMeters === null || !Number.isFinite(distanceMeters)) {
@@ -45,25 +128,1190 @@ function formatElevation(value: number | null) {
   return `${Math.round(value)} m`;
 }
 
+function formatDistanceKm(distanceKm: number) {
+  if (!Number.isFinite(distanceKm)) {
+    return '-- km';
+  }
+
+  if (distanceKm < 1) {
+    return `${Math.round(distanceKm * 1000)} m`;
+  }
+
+  return `${distanceKm.toFixed(1).replace('.', ',')} km`;
+}
+
+function formatAlphabeticOrder(position: number) {
+  if (!Number.isFinite(position) || position <= 0) {
+    return '?';
+  }
+
+  let value = Math.floor(position);
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+
+  return label;
+}
+
+function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
+  return typeof value?.latitude === 'number' && typeof value?.longitude === 'number';
+}
+
+function cleanText(value?: string | null) {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function derivePoiSequence(
+  path: {
+    rank: number;
+    travelTime?: {
+      fromPoi?: string;
+      toPoi?: string;
+    };
+  }[]
+) {
+  const sorted = [...path].sort((left, right) => left.rank - right.rank);
+  const result: string[] = [];
+
+  for (let index = 0; index < sorted.length; index += 1) {
+    const entry = sorted[index];
+    const fromPoi = entry.travelTime?.fromPoi?.trim();
+    const toPoi = entry.travelTime?.toPoi?.trim();
+
+    if (index === 0 && fromPoi) {
+      result.push(fromPoi);
+    }
+
+    if (toPoi) {
+      result.push(toPoi);
+    }
+  }
+
+  return result;
+}
+
+function clampDelta(value: number) {
+  return Math.min(MAX_ZOOM_DELTA, Math.max(MIN_ZOOM_DELTA, value));
+}
+
+function normalizeSearchValue(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function extractNumericToken(value?: string | null) {
+  const normalized = cleanText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/\d{1,4}/);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(match[0], 10);
+  return Number.isFinite(parsed) ? String(parsed) : null;
+}
+
+function inferStampNumberFromPoi(poi: {
+  stampNumber?: string;
+  poiType?: string;
+  name?: string;
+  orderBy?: string;
+}) {
+  const explicit = extractNumericToken(poi.stampNumber);
+  if (explicit) {
+    return explicit;
+  }
+
+  const byOrder = extractNumericToken(poi.orderBy);
+  if (byOrder) {
+    return byOrder;
+  }
+
+  const normalizedType = normalizeSearchValue(poi.poiType || '');
+  const normalizedName = normalizeSearchValue(poi.name || '');
+  const looksLikeStamp =
+    normalizedType.includes('stempel') ||
+    normalizedType.includes('stamp') ||
+    normalizedName.includes('stempel') ||
+    normalizedName.includes('stamp');
+
+  if (!looksLikeStamp) {
+    return null;
+  }
+
+  return extractNumericToken(poi.name);
+}
+
+function haversineDistanceKm(from: Coordinate, to: Coordinate) {
+  const toRad = (degrees: number) => (degrees * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRad(to.latitude - from.latitude);
+  const deltaLng = toRad(to.longitude - from.longitude);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRad(from.latitude)) *
+      Math.cos(toRad(to.latitude)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function arraysEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
+}
+
+function createLiveTourMetrics(tour: Tour): LiveTourMetrics {
+  return {
+    distance: tour.distance,
+    duration: tour.duration,
+    stampCount: tour.stampCount,
+    totalElevationGain: tour.totalElevationGain,
+    totalElevationLoss: tour.totalElevationLoss,
+  };
+}
+
+function updateMetricsFromResponse(current: LiveTourMetrics, response: TourUpdateResponse): LiveTourMetrics {
+  return {
+    distance: response.distance ?? current.distance,
+    duration: response.duration ?? current.duration,
+    stampCount: response.stampCount ?? current.stampCount,
+    totalElevationGain: response.totalElevationGain ?? current.totalElevationGain,
+    totalElevationLoss: response.totalElevationLoss ?? current.totalElevationLoss,
+  };
+}
+
+function createEmptyLiveTourMetrics(): LiveTourMetrics {
+  return {
+    distance: null,
+    duration: null,
+    stampCount: null,
+    totalElevationGain: null,
+    totalElevationLoss: null,
+  };
+}
+
+function rankSearchItem(item: TourMapItem, normalizedQuery: string): SearchResultRank | null {
+  const name = normalizeSearchValue(item.name);
+  const description = normalizeSearchValue(item.description ?? '');
+  const nameIndex = name.indexOf(normalizedQuery);
+  const descriptionIndex = description.indexOf(normalizedQuery);
+
+  if (nameIndex < 0 && descriptionIndex < 0) {
+    return null;
+  }
+
+  const normalizedStampNumber = normalizeSearchValue(item.stampNumber || '');
+  const normalizedMarkerNumber =
+    item.kind === 'parking' ? '' : normalizeSearchValue(extractNumericToken(item.markerLabel) || '');
+  const normalizedNumber = normalizedStampNumber || normalizedMarkerNumber;
+
+  const hasNumericQuery = DIGITS_ONLY_PATTERN.test(normalizedQuery);
+  const hasNumericNumber =
+    normalizedNumber.length > 0 && DIGITS_ONLY_PATTERN.test(normalizedNumber);
+  const queryValue = hasNumericQuery ? Number.parseInt(normalizedQuery, 10) : Number.NaN;
+  const numberValue = hasNumericNumber ? Number.parseInt(normalizedNumber, 10) : Number.NaN;
+  const numberDelta =
+    Number.isFinite(queryValue) && Number.isFinite(numberValue)
+      ? Math.abs(numberValue - queryValue)
+      : Number.MAX_SAFE_INTEGER;
+
+  if (normalizedNumber && normalizedNumber === normalizedQuery) {
+    return { matchTier: 0, matchIndex: 0, numberDelta, nameLength: name.length };
+  }
+
+  if (name === normalizedQuery) {
+    return { matchTier: 1, matchIndex: 0, numberDelta, nameLength: name.length };
+  }
+
+  if (normalizedNumber && normalizedNumber.startsWith(normalizedQuery)) {
+    return { matchTier: 2, matchIndex: 0, numberDelta, nameLength: name.length };
+  }
+
+  if (nameIndex === 0) {
+    return { matchTier: 3, matchIndex: 0, numberDelta, nameLength: name.length };
+  }
+
+  if (nameIndex > 0) {
+    return { matchTier: 4, matchIndex: nameIndex, numberDelta, nameLength: name.length };
+  }
+
+  return { matchTier: 5, matchIndex: descriptionIndex, numberDelta, nameLength: name.length };
+}
+
+function getStampNumber(item?: TourMapItem | null) {
+  if (!item) {
+    return null;
+  }
+
+  const explicitStampNumber = extractNumericToken(item.stampNumber);
+  if (explicitStampNumber) {
+    return explicitStampNumber;
+  }
+
+  if (
+    item.kind !== 'visited-stamp' &&
+    item.kind !== 'open-stamp' &&
+    item.kind !== 'poi'
+  ) {
+    return null;
+  }
+
+  const markerLabel = extractNumericToken(item.markerLabel);
+  if (!markerLabel || markerLabel === '--') {
+    return null;
+  }
+
+  return markerLabel;
+}
+
+function getMapItemGradientColors(kind: TourMapMarkerKind): readonly [string, string] {
+  if (kind === 'visited-stamp') {
+    return ['#4b875f', '#8fd2a4'] as const;
+  }
+
+  if (kind === 'open-stamp') {
+    return ['#ab8d7d', '#dbc6b7'] as const;
+  }
+
+  if (kind === 'parking') {
+    return ['#2f7dd7', '#6cb1ff'] as const;
+  }
+
+  return ['#5c7f62', '#9fc3a5'] as const;
+}
+
+function resolveMapItemImageSource(
+  imageUrl: string | undefined,
+  accessToken: string | null
+): ImageSourcePropType | null {
+  if (!imageUrl) {
+    return null;
+  }
+
+  const source = buildAuthenticatedImageSource(imageUrl, accessToken);
+  if (typeof source === 'string') {
+    return { uri: source };
+  }
+
+  return source;
+}
+
 export default function TourDetailScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
+  const { accessToken } = useAuth();
+  const claims = useIdTokenClaims<{ sub?: string }>();
+  const currentUserId = claims?.sub;
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const tourId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const { data, error, isPending, isFetching } = useTourDetailQuery(tourId);
-  const { data: poiData } = usePointsOfInterestQuery();
+  const { data, error, isPending, isFetching, refetch } = useTourDetailQuery(tourId);
+  const { data: poiData = [], isPending: isPoiPending } = usePointsOfInterestQuery();
+  const { data: mapData, isPending: isMapDataPending } = useMapDataQuery();
+  const deleteTourMutation = useDeleteTourMutation(tourId);
+  const updateTourNameMutation = useUpdateTourNameMutation(tourId);
+  const updateTourMutation = useUpdateTourByPOIListMutation(tourId);
+  const { mutateAsync: previewTour } = usePreviewTourByPOIListMutation(tourId);
 
-  const poiNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const poi of poiData ?? []) {
-      map.set(poi.ID.toLowerCase(), poi.name);
+  const [draftPoiIds, setDraftPoiIds] = useState<string[]>([]);
+  const [lastPersistedPoiIds, setLastPersistedPoiIds] = useState<string[]>([]);
+  const [hasInitialized, setHasInitialized] = useState(false);
+  const [selectedMapItemId, setSelectedMapItemId] = useState<string | null>(null);
+  const [poiSearchQuery, setPoiSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [mapCenter, setMapCenter] = useState<Coordinate>({
+    latitude: HARZ_REGION.latitude,
+    longitude: HARZ_REGION.longitude,
+  });
+  const [liveTourMetrics, setLiveTourMetrics] = useState<LiveTourMetrics | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [lastSaveErrorCode, setLastSaveErrorCode] = useState<403 | 404 | 422 | null>(null);
+  const [blockingErrorCode, setBlockingErrorCode] = useState<403 | 404 | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+  const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [tourNameDraft, setTourNameDraft] = useState('');
+
+  const mapRef = useRef<MapView | null>(null);
+  const regionRef = useRef<Region>(HARZ_REGION);
+  const lastMarkerPressAtRef = useRef(0);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewRequestIdRef = useRef(0);
+  const fullscreenProgress = useSharedValue(0);
+  const fullscreenAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: 0.94 + fullscreenProgress.value * 0.06 }],
+  }));
+  const cancelPendingPreview = useCallback(() => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
     }
-    return map;
-  }, [poiData]);
 
-  const pathRows = useMemo(() => {
-    const rows = [...(data?.path ?? [])].sort((left, right) => left.rank - right.rank);
-    return rows;
-  }, [data?.path]);
+    previewRequestIdRef.current += 1;
+  }, []);
+
+  const openMapFullscreen = useCallback(() => {
+    setIsMapFullscreen(true);
+  }, []);
+
+  const closeMapFullscreen = useCallback(() => {
+    fullscreenProgress.value = withTiming(
+      0,
+      {
+        duration: 220,
+        easing: Easing.inOut(Easing.cubic),
+      },
+      (finished) => {
+        if (finished) {
+          runOnJS(setIsMapFullscreen)(false);
+        }
+      }
+    );
+  }, [fullscreenProgress]);
+
+  useEffect(() => {
+    if (!tourId) {
+      return;
+    }
+
+    setHasInitialized(false);
+    setBlockingErrorCode(null);
+    setLastSaveErrorCode(null);
+    setStatusMessage(null);
+    setSaveStatus('idle');
+    setIsRenameModalVisible(false);
+    setIsEditMode(false);
+  }, [tourId]);
+
+  useEffect(() => {
+    return () => {
+      cancelPendingPreview();
+    };
+  }, [cancelPendingPreview]);
+
+  useEffect(() => {
+    if (!isMapFullscreen) {
+      return;
+    }
+
+    fullscreenProgress.value = 0;
+    fullscreenProgress.value = withTiming(1, {
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [fullscreenProgress, isMapFullscreen]);
+
+  const originalPoiIds = useMemo(() => derivePoiSequence(data?.path ?? []), [data?.path]);
+
+  useEffect(() => {
+    if (!data || hasInitialized) {
+      return;
+    }
+
+    // Skip placeholder tour detail state (cached tour with empty path) while
+    // the real tour detail request is still in flight.
+    if (isFetching && originalPoiIds.length === 0) {
+      return;
+    }
+
+    setDraftPoiIds(originalPoiIds);
+    setLastPersistedPoiIds(originalPoiIds);
+    setLiveTourMetrics(createLiveTourMetrics(data.tour));
+    setHasInitialized(true);
+  }, [data, hasInitialized, isFetching, originalPoiIds]);
+
+  useEffect(() => {
+    if (!data || isRenameModalVisible) {
+      return;
+    }
+
+    setTourNameDraft(data.tour.name);
+  }, [data, isRenameModalVisible]);
+
+  const allMapItems = useMemo<TourMapItem[]>(() => {
+    const itemsById = new Map<string, TourMapItem>();
+
+    for (const poi of poiData) {
+      if (!hasCoordinate(poi)) {
+        continue;
+      }
+
+      const inferredStampNumber = inferStampNumberFromPoi(poi);
+      itemsById.set(poi.ID.toLowerCase(), {
+        ID: poi.ID,
+        name: cleanText(poi.name) || poi.ID,
+        typeLabel: inferredStampNumber ? 'Stempel' : cleanText(poi.poiType) || 'POI',
+        markerLabel: inferredStampNumber || 'POI',
+        stampNumber: inferredStampNumber || undefined,
+        kind: 'poi',
+        latitude: poi.latitude,
+        longitude: poi.longitude,
+        description: cleanText(poi.description),
+        imageUrl: cleanText(poi.heroImageUrl),
+      });
+    }
+
+    for (const stamp of mapData?.stamps ?? []) {
+      if (!hasCoordinate(stamp)) {
+        continue;
+      }
+
+      const markerLabel = cleanText(stamp.number) || '--';
+      itemsById.set(stamp.ID.toLowerCase(), {
+        ID: stamp.ID,
+        name: cleanText(stamp.name) || stamp.ID,
+        typeLabel: stamp.kind === 'visited-stamp' ? 'Besucht' : 'Unbesucht',
+        markerLabel,
+        stampNumber: extractNumericToken(markerLabel) || undefined,
+        kind: stamp.kind,
+        latitude: stamp.latitude,
+        longitude: stamp.longitude,
+        description: cleanText(stamp.description),
+        imageUrl: cleanText(stamp.heroImageUrl || stamp.image),
+      });
+    }
+
+    for (const parkingSpot of mapData?.parkingSpots ?? []) {
+      if (!hasCoordinate(parkingSpot)) {
+        continue;
+      }
+
+      itemsById.set(parkingSpot.ID.toLowerCase(), {
+        ID: parkingSpot.ID,
+        name: cleanText(parkingSpot.name) || 'Parkplatz',
+        typeLabel: 'Parkplatz',
+        markerLabel: 'P',
+        kind: 'parking',
+        latitude: parkingSpot.latitude,
+        longitude: parkingSpot.longitude,
+        description: cleanText(parkingSpot.description),
+        imageUrl: cleanText(parkingSpot.image),
+      });
+    }
+
+    return Array.from(itemsById.values());
+  }, [mapData?.parkingSpots, mapData?.stamps, poiData]);
+
+  const mapItemById = useMemo(() => {
+    const nextMap = new Map<string, TourMapItem>();
+    for (const item of allMapItems) {
+      nextMap.set(item.ID.toLowerCase(), item);
+    }
+
+    return nextMap;
+  }, [allMapItems]);
+
+  const draftPoiStats = useMemo(() => {
+    const positionsById = new Map<string, number[]>();
+    draftPoiIds.forEach((poiId, index) => {
+      const normalizedId = poiId.toLowerCase();
+      const positions = positionsById.get(normalizedId) ?? [];
+      positions.push(index + 1);
+      positionsById.set(normalizedId, positions);
+    });
+
+    return { positionsById };
+  }, [draftPoiIds]);
+
+  const selectedMapItem = useMemo(() => {
+    if (!selectedMapItemId) {
+      return null;
+    }
+
+    return mapItemById.get(selectedMapItemId.toLowerCase()) ?? null;
+  }, [mapItemById, selectedMapItemId]);
+
+  const mapItemsForRendering = useMemo(() => {
+    const pinnedById = new Map<string, TourMapItem>();
+
+    for (const draftPoiId of draftPoiIds) {
+      const item = mapItemById.get(draftPoiId.toLowerCase());
+      if (item) {
+        pinnedById.set(item.ID.toLowerCase(), item);
+      }
+    }
+
+    if (selectedMapItem) {
+      pinnedById.set(selectedMapItem.ID.toLowerCase(), selectedMapItem);
+    }
+
+    const visible = Array.from(pinnedById.values());
+    const parkingItems = allMapItems.filter((item) => item.kind === 'parking');
+    const stampItems = allMapItems.filter(
+      (item) => item.kind === 'visited-stamp' || item.kind === 'open-stamp'
+    );
+    const poiItems = allMapItems.filter((item) => item.kind === 'poi');
+
+    // Essential markers: parking and stamps are always shown.
+    for (const parkingItem of parkingItems) {
+      if (pinnedById.has(parkingItem.ID.toLowerCase())) {
+        continue;
+      }
+      visible.push(parkingItem);
+    }
+
+    for (const stampItem of stampItems) {
+      if (pinnedById.has(stampItem.ID.toLowerCase())) {
+        continue;
+      }
+      visible.push(stampItem);
+    }
+
+    // Optional markers: only add generic POIs up to the remaining limit.
+    const remainingPoiSlots = Math.max(0, MAP_MARKER_LIMIT - visible.length);
+    if (remainingPoiSlots <= 0) {
+      return visible;
+    }
+
+    for (const poiItem of poiItems) {
+      if (visible.length >= MAP_MARKER_LIMIT) {
+        break;
+      }
+
+      if (pinnedById.has(poiItem.ID.toLowerCase())) {
+        continue;
+      }
+
+      visible.push(poiItem);
+    }
+
+    return visible;
+  }, [allMapItems, draftPoiIds, mapItemById, selectedMapItem]);
+
+  const routeCoordinates = useMemo(
+    () =>
+      draftPoiIds
+        .map((poiId) => mapItemById.get(poiId.toLowerCase()))
+        .filter((item): item is TourMapItem => Boolean(item))
+        .map((item) => ({ latitude: item.latitude, longitude: item.longitude })),
+    [draftPoiIds, mapItemById]
+  );
+
+  const hasPendingChanges = useMemo(
+    () => !arraysEqual(draftPoiIds, lastPersistedPoiIds),
+    [draftPoiIds, lastPersistedPoiIds]
+  );
+
+  useEffect(() => {
+    if (!hasInitialized || !data) {
+      return;
+    }
+
+    if (saveStatus === 'saving' || saveStatus === 'pending' || hasPendingChanges) {
+      return;
+    }
+
+    setLiveTourMetrics(createLiveTourMetrics(data.tour));
+    if (!arraysEqual(lastPersistedPoiIds, originalPoiIds)) {
+      setLastPersistedPoiIds(originalPoiIds);
+    }
+  }, [data, hasInitialized, hasPendingChanges, lastPersistedPoiIds, originalPoiIds, saveStatus]);
+
+  const canEnterEditMode = Boolean(
+    currentUserId &&
+      data?.tour.createdBy &&
+      data.tour.createdBy === currentUserId
+  );
+  const editingBlocked = !isEditMode || blockingErrorCode === 403 || blockingErrorCode === 404;
+  const selectedItemInTourCount = selectedMapItem
+    ? (draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? []).length
+    : 0;
+  const selectedStampNumber = getStampNumber(selectedMapItem);
+  const selectedMapItemImageSource = useMemo<ImageSourcePropType | null>(
+    () => resolveMapItemImageSource(selectedMapItem?.imageUrl, accessToken),
+    [accessToken, selectedMapItem?.imageUrl]
+  );
+  const resetDraftToPersistedState = useCallback(() => {
+    cancelPendingPreview();
+    setDraftPoiIds(lastPersistedPoiIds);
+    setLastSaveErrorCode(null);
+    setSaveStatus('idle');
+    setStatusMessage(null);
+
+    if (data?.tour) {
+      setLiveTourMetrics(createLiveTourMetrics(data.tour));
+    }
+  }, [cancelPendingPreview, data?.tour, lastPersistedPoiIds]);
+  const handleEnterEditMode = useCallback(() => {
+    if (!canEnterEditMode || isEditMode) {
+      return;
+    }
+
+    setDraftPoiIds(lastPersistedPoiIds);
+    setLastSaveErrorCode(null);
+    setSaveStatus('idle');
+    setStatusMessage(null);
+    setIsEditMode(true);
+  }, [canEnterEditMode, isEditMode, lastPersistedPoiIds]);
+  const handleExitEditMode = useCallback(() => {
+    if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
+      return;
+    }
+
+    const exitMode = () => {
+      setIsRenameModalVisible(false);
+      setIsEditMode(false);
+    };
+
+    if (!hasPendingChanges) {
+      exitMode();
+      return;
+    }
+
+    Alert.alert(
+      'Aenderungen verwerfen?',
+      'Ungespeicherte Aenderungen gehen verloren. Bearbeitungsmodus trotzdem verlassen?',
+      [
+        {
+          text: 'Weiter bearbeiten',
+          style: 'cancel',
+        },
+        {
+          text: 'Verwerfen',
+          style: 'destructive',
+          onPress: () => {
+            resetDraftToPersistedState();
+            exitMode();
+          },
+        },
+      ]
+    );
+  }, [
+    hasPendingChanges,
+    isEditMode,
+    resetDraftToPersistedState,
+    updateTourMutation.isPending,
+    updateTourNameMutation.isPending,
+  ]);
+  useEffect(() => {
+    if (!isEditMode || canEnterEditMode) {
+      return;
+    }
+
+    resetDraftToPersistedState();
+    setIsRenameModalVisible(false);
+    setIsEditMode(false);
+  }, [canEnterEditMode, isEditMode, resetDraftToPersistedState]);
+  const skipNextPreventRemoveRef = useRef(false);
+
+  usePreventRemove(isEditMode && hasPendingChanges && !updateTourMutation.isPending, (event) => {
+    if (skipNextPreventRemoveRef.current) {
+      skipNextPreventRemoveRef.current = false;
+      return;
+    }
+
+    Alert.alert(
+      'Ungespeicherte Aenderungen',
+      'Du hast ungespeicherte Aenderungen an der Tour. Ohne Speichern verwerfen?',
+      [
+        {
+          text: 'Weiter bearbeiten',
+          style: 'cancel',
+        },
+        {
+          text: 'Verwerfen',
+          style: 'destructive',
+          onPress: () => {
+            skipNextPreventRemoveRef.current = true;
+            navigation.dispatch(event.data.action);
+          },
+        },
+      ]
+    );
+  });
+
+  const searchResults = useMemo<SearchCandidate[]>(() => {
+    if (!isSearchFocused || allMapItems.length === 0) {
+      return [];
+    }
+
+    const normalizedQuery = normalizeSearchValue(poiSearchQuery);
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return allMapItems
+      .map((item, originalIndex) => {
+        const rank = rankSearchItem(item, normalizedQuery);
+        if (!rank) {
+          return null;
+        }
+
+        return {
+          item,
+          originalIndex,
+          rank,
+          distanceKm: haversineDistanceKm(mapCenter, {
+            latitude: item.latitude,
+            longitude: item.longitude,
+          }),
+        };
+      })
+      .filter(
+        (
+          entry
+        ): entry is { item: TourMapItem; originalIndex: number; rank: SearchResultRank; distanceKm: number } =>
+          entry !== null
+      )
+      .sort((left, right) => {
+        if (left.rank.matchTier !== right.rank.matchTier) {
+          return left.rank.matchTier - right.rank.matchTier;
+        }
+
+        if (left.rank.matchIndex !== right.rank.matchIndex) {
+          return left.rank.matchIndex - right.rank.matchIndex;
+        }
+
+        if (left.rank.numberDelta !== right.rank.numberDelta) {
+          return left.rank.numberDelta - right.rank.numberDelta;
+        }
+
+        if (left.rank.nameLength !== right.rank.nameLength) {
+          return left.rank.nameLength - right.rank.nameLength;
+        }
+
+        if (left.distanceKm !== right.distanceKm) {
+          return left.distanceKm - right.distanceKm;
+        }
+
+        if (left.originalIndex !== right.originalIndex) {
+          return left.originalIndex - right.originalIndex;
+        }
+
+        return left.item.name.localeCompare(right.item.name, 'de');
+      })
+      .slice(0, SEARCH_RESULT_LIMIT)
+      .map((entry) => ({
+        ...entry.item,
+        distanceKm: entry.distanceKm,
+      }));
+  }, [allMapItems, isSearchFocused, mapCenter, poiSearchQuery]);
+
+  useEffect(() => {
+    if (!isMapReady) {
+      return;
+    }
+
+    const coordinatesToFit =
+      routeCoordinates.length > 0
+        ? routeCoordinates
+        : allMapItems
+            .slice(0, 16)
+            .map((item) => ({ latitude: item.latitude, longitude: item.longitude }));
+
+    if (coordinatesToFit.length === 0 || !mapRef.current) {
+      return;
+    }
+
+    if (coordinatesToFit.length === 1) {
+      const coordinate = coordinatesToFit[0];
+      const nextRegion: Region = {
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
+      };
+      regionRef.current = nextRegion;
+      setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
+      mapRef.current.animateToRegion(nextRegion, 240);
+      return;
+    }
+
+    mapRef.current.fitToCoordinates(coordinatesToFit, {
+      edgePadding: MAP_EDGE_PADDING,
+      animated: true,
+    });
+  }, [allMapItems, isMapReady, routeCoordinates]);
+
+  const handleZoomBy = useCallback((factor: number) => {
+    if (!mapRef.current) {
+      return;
+    }
+
+    const nextRegion: Region = {
+      ...regionRef.current,
+      latitudeDelta: clampDelta(regionRef.current.latitudeDelta * factor),
+      longitudeDelta: clampDelta(regionRef.current.longitudeDelta * factor),
+    };
+
+    regionRef.current = nextRegion;
+    setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
+    mapRef.current.animateToRegion(nextRegion, 180);
+  }, []);
+
+  const focusMapItemOnMap = useCallback((item: TourMapItem, options?: { updateSearchQuery?: boolean }) => {
+    lastMarkerPressAtRef.current = Date.now();
+
+    const nextRegion: Region = {
+      latitude: item.latitude,
+      longitude: item.longitude,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    };
+
+    setSelectedMapItemId(item.ID);
+    if (options?.updateSearchQuery) {
+      setPoiSearchQuery(item.name);
+    }
+    setIsSearchFocused(false);
+    regionRef.current = nextRegion;
+    setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
+    mapRef.current?.animateToRegion(nextRegion, 220);
+  }, []);
+
+  const performSave = useCallback(
+    async function saveDraft(poiIds: string[], options?: { manual?: boolean }) {
+      if (editingBlocked) {
+        return;
+      }
+
+      if (poiIds.length < 2) {
+        if (options?.manual) {
+          Alert.alert(
+            'Zu wenige Punkte',
+            'Mindestens zwei Punkte benoetigt (Start und Ziel), bevor gespeichert werden kann.'
+          );
+        }
+        return;
+      }
+
+      cancelPendingPreview();
+
+      setSaveStatus('saving');
+      setStatusMessage('Wird gespeichert...');
+      setLastSaveErrorCode(null);
+
+      try {
+        const response = await updateTourMutation.mutateAsync({ poiIds });
+        setLiveTourMetrics((current) =>
+          updateMetricsFromResponse(
+            current || createEmptyLiveTourMetrics(),
+            response
+          )
+        );
+        setLastPersistedPoiIds(poiIds);
+        setSaveStatus('saved');
+        setStatusMessage('Alle Aenderungen gespeichert');
+        setLastSaveErrorCode(null);
+        const refreshed = await refetch();
+        if (refreshed.data?.tour) {
+          setLiveTourMetrics(createLiveTourMetrics(refreshed.data.tour));
+          const refreshedPoiIds = derivePoiSequence(refreshed.data.path ?? []);
+          setDraftPoiIds(refreshedPoiIds);
+          setLastPersistedPoiIds(refreshedPoiIds);
+        }
+      } catch (nextError) {
+        setSaveStatus('error');
+
+        if (nextError instanceof HttpStatusError) {
+          if (nextError.status === 403) {
+            setBlockingErrorCode(403);
+            setLastSaveErrorCode(403);
+            setStatusMessage('Bearbeitung gesperrt');
+            return;
+          }
+
+          if (nextError.status === 404) {
+            setBlockingErrorCode(404);
+            setLastSaveErrorCode(404);
+            setStatusMessage('Tour nicht mehr vorhanden');
+            return;
+          }
+
+          if (nextError.status === 422) {
+            setLastSaveErrorCode(422);
+            setStatusMessage('Route unvollstaendig berechenbar');
+            return;
+          }
+        }
+
+        setStatusMessage('Speichern fehlgeschlagen');
+      }
+    },
+    [cancelPendingPreview, editingBlocked, refetch, updateTourMutation]
+  );
+
+  useEffect(() => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+
+    if (!isEditMode) {
+      previewRequestIdRef.current += 1;
+      return;
+    }
+
+    if (!hasInitialized || editingBlocked || updateTourMutation.isPending) {
+      return;
+    }
+
+    if (!hasPendingChanges) {
+      return;
+    }
+
+    setSaveStatus((current) => (current === 'saving' ? current : 'pending'));
+    setStatusMessage('Aenderungen ausstehend...');
+
+    if (draftPoiIds.length < 2) {
+      setLastSaveErrorCode(null);
+      return;
+    }
+
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    previewTimerRef.current = setTimeout(() => {
+      previewTimerRef.current = null;
+      void (async () => {
+        try {
+          const response = await previewTour({ poiIds: draftPoiIds });
+          if (previewRequestIdRef.current !== requestId) {
+            return;
+          }
+
+          setLiveTourMetrics((current) =>
+            updateMetricsFromResponse(
+              current || createEmptyLiveTourMetrics(),
+              response
+            )
+          );
+          setLastSaveErrorCode(null);
+          setStatusMessage('Vorschau aktualisiert (nicht gespeichert)');
+        } catch (nextError) {
+          if (previewRequestIdRef.current !== requestId) {
+            return;
+          }
+
+          if (nextError instanceof HttpStatusError) {
+            if (nextError.status === 403) {
+              setBlockingErrorCode(403);
+              setLastSaveErrorCode(403);
+              setSaveStatus('error');
+              setStatusMessage('Bearbeitung gesperrt');
+              return;
+            }
+
+            if (nextError.status === 404) {
+              setBlockingErrorCode(404);
+              setLastSaveErrorCode(404);
+              setSaveStatus('error');
+              setStatusMessage('Tour nicht mehr vorhanden');
+              return;
+            }
+
+            if (nextError.status === 422) {
+              setLastSaveErrorCode(422);
+              setStatusMessage('Route unvollstaendig berechenbar');
+              return;
+            }
+          }
+
+          setStatusMessage('Vorschau konnte nicht aktualisiert werden');
+        }
+      })();
+    }, PREVIEW_DEBOUNCE_MS);
+  }, [
+    draftPoiIds,
+    isEditMode,
+    editingBlocked,
+    hasInitialized,
+    hasPendingChanges,
+    previewTour,
+    updateTourMutation.isPending,
+  ]);
+
+  const handleAppendSelectedPoi = useCallback(() => {
+    if (editingBlocked || !selectedMapItem) {
+      return;
+    }
+
+    setDraftPoiIds((current) => [...current, selectedMapItem.ID]);
+  }, [editingBlocked, selectedMapItem]);
+
+  const openMapItemDetailPage = useCallback(
+    (item: TourMapItem) => {
+      if (item.kind === 'parking') {
+        router.push({
+          pathname: '/parking/[id]',
+          params: {
+            id: item.ID,
+            disableNavigation: '1',
+            source: 'tour',
+          },
+        } as never);
+        return;
+      }
+
+      const stampNumber = getStampNumber(item);
+      if (
+        item.kind === 'visited-stamp' ||
+        item.kind === 'open-stamp' ||
+        stampNumber
+      ) {
+        router.push({
+          pathname: '/stamps/[id]',
+          params: {
+            id: item.ID,
+            disableNavigation: '1',
+            source: 'tour',
+          },
+        } as never);
+        return;
+      }
+
+      Alert.alert(
+        'Keine Detailseite verfuegbar',
+        'Fuer diesen Punkt ist aktuell keine separate Detailseite vorhanden.'
+      );
+    },
+    [router]
+  );
+
+  const openSelectedItemDetailPage = useCallback(() => {
+    if (!selectedMapItem) {
+      return;
+    }
+
+    openMapItemDetailPage(selectedMapItem);
+  }, [openMapItemDetailPage, selectedMapItem]);
+
+  const openListItemDetailPage = useCallback(
+    (item?: TourMapItem) => {
+      if (!item) {
+        return;
+      }
+
+      openMapItemDetailPage(item);
+    },
+    [openMapItemDetailPage]
+  );
+
+  const movePoi = useCallback(
+    (index: number, direction: -1 | 1) => {
+      if (editingBlocked) {
+        return;
+      }
+
+      setDraftPoiIds((current) => {
+        const targetIndex = index + direction;
+        if (targetIndex < 0 || targetIndex >= current.length) {
+          return current;
+        }
+
+        const next = [...current];
+        const temp = next[targetIndex];
+        next[targetIndex] = next[index];
+        next[index] = temp;
+        return next;
+      });
+    },
+    [editingBlocked]
+  );
+
+  const removePoiAtIndex = useCallback(
+    (index: number) => {
+      if (editingBlocked) {
+        return;
+      }
+
+      setDraftPoiIds((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    },
+    [editingBlocked]
+  );
+
+  const handleDeleteTour = useCallback(() => {
+    if (editingBlocked || deleteTourMutation.isPending) {
+      return;
+    }
+
+    Alert.alert('Tour loeschen?', 'Diese Aktion kann nicht rueckgaengig gemacht werden.', [
+      {
+        text: 'Abbrechen',
+        style: 'cancel',
+      },
+      {
+        text: 'Loeschen',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await deleteTourMutation.mutateAsync();
+              router.replace('/(tabs)/tours' as never);
+            } catch (nextError) {
+              if (nextError instanceof HttpStatusError && nextError.status === 404) {
+                router.replace('/(tabs)/tours' as never);
+                return;
+              }
+
+              Alert.alert(
+                'Tour konnte nicht geloescht werden',
+                nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+              );
+            }
+          })();
+        },
+      },
+    ]);
+  }, [deleteTourMutation, editingBlocked, router]);
+
+  const closeRenameModal = useCallback(() => {
+    if (updateTourNameMutation.isPending) {
+      return;
+    }
+
+    setIsRenameModalVisible(false);
+    setTourNameDraft(data?.tour.name ?? '');
+  }, [data?.tour.name, updateTourNameMutation.isPending]);
+
+  const handleSubmitRename = useCallback(async () => {
+    if (editingBlocked || updateTourNameMutation.isPending || !data) {
+      return;
+    }
+
+    const normalizedName = tourNameDraft.trim();
+    if (!normalizedName) {
+      Alert.alert('Name fehlt', 'Bitte gib einen Namen fuer die Tour ein.');
+      return;
+    }
+
+    if (normalizedName === data.tour.name) {
+      closeRenameModal();
+      return;
+    }
+
+    try {
+      await updateTourNameMutation.mutateAsync({ name: normalizedName });
+      setStatusMessage('Tourname aktualisiert');
+      setSaveStatus((current) => (current === 'saving' ? current : 'saved'));
+      await refetch();
+      setIsRenameModalVisible(false);
+    } catch (nextError) {
+      Alert.alert(
+        'Name konnte nicht gespeichert werden',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    }
+  }, [
+    closeRenameModal,
+    data,
+    editingBlocked,
+    refetch,
+    tourNameDraft,
+    updateTourNameMutation,
+  ]);
 
   if (!tourId) {
     return (
@@ -75,7 +1323,7 @@ export default function TourDetailScreen() {
     );
   }
 
-  if (isPending && !data) {
+  if ((isPending && !data) || isPoiPending || isMapDataPending || !liveTourMetrics) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
@@ -97,69 +1345,535 @@ export default function TourDetailScreen() {
     );
   }
 
-  const tour = data.tour;
+  const saveStateLabel = (() => {
+    if (!isEditMode) {
+      return 'Nur Ansicht';
+    }
+    if (blockingErrorCode === 403) {
+      return 'Bearbeitung gesperrt';
+    }
+    if (blockingErrorCode === 404) {
+      return 'Tour nicht mehr vorhanden';
+    }
+    if (saveStatus === 'saving') {
+      return 'Wird gespeichert...';
+    }
+    if (saveStatus === 'pending' || hasPendingChanges) {
+      return 'Aenderungen ausstehend...';
+    }
+    if (saveStatus === 'saved') {
+      return 'Alle Aenderungen gespeichert';
+    }
+    if (saveStatus === 'error' && lastSaveErrorCode === 422) {
+      return 'Route unvollstaendig berechenbar';
+    }
+    return statusMessage || 'Bereit';
+  })();
+
+  const renderTourMap = (isFullscreen: boolean) => (
+    <View style={[styles.mapCard, isFullscreen && styles.mapCardFullscreen]}>
+      <MapView
+        ref={mapRef}
+        initialRegion={HARZ_REGION}
+        onMapReady={() => setIsMapReady(true)}
+        onPress={() => {
+          if (Date.now() - lastMarkerPressAtRef.current < 250) {
+            return;
+          }
+
+          setSelectedMapItemId(null);
+          setIsSearchFocused(false);
+        }}
+        onRegionChangeComplete={(nextRegion) => {
+          regionRef.current = nextRegion;
+          setMapCenter({
+            latitude: nextRegion.latitude,
+            longitude: nextRegion.longitude,
+          });
+        }}
+        style={StyleSheet.absoluteFill}
+        toolbarEnabled={false}>
+        {routeCoordinates.length > 1 ? (
+          <Polyline coordinates={routeCoordinates} strokeColor="#2e6b4b" strokeWidth={4} />
+        ) : null}
+
+        {mapItemsForRendering.map((item) => {
+          const normalizedItemId = item.ID.toLowerCase();
+          const routePositions = draftPoiStats.positionsById.get(normalizedItemId) ?? [];
+          const isInTour = routePositions.length > 0;
+          const routePositionsLabel = routePositions.map((position) => formatAlphabeticOrder(position)).join(',');
+          const isSelected = selectedMapItemId === item.ID;
+
+          const markerImage =
+            item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
+              ? getPreGeneratedMapMarkerImageSource({
+                  kind: item.kind,
+                  label: item.kind === 'parking' ? 'P' : item.markerLabel,
+                })
+              : null;
+
+          if (markerImage) {
+            return (
+              <Marker
+                anchor={{ x: 0.5, y: 1 }}
+                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+                key={item.ID}
+                onPress={() => focusMapItemOnMap(item)}>
+                <View collapsable={false} style={styles.imageMarkerWrap}>
+                  {isSelected ? <View style={styles.selectedImageMarkerHalo} /> : null}
+                  <Image source={markerImage} style={styles.imageMarkerAsset} />
+                  {isInTour ? (
+                    <View style={styles.routeOrderBadge}>
+                      <Text style={styles.routeOrderBadgeLabel}>{routePositionsLabel}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </Marker>
+            );
+          }
+
+          return (
+            <Marker
+              coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+              key={item.ID}
+              onPress={() => focusMapItemOnMap(item)}>
+              <View
+                style={[
+                  styles.markerFallback,
+                  isInTour && styles.markerFallbackInTour,
+                  isSelected && styles.markerFallbackSelected,
+                ]}>
+                <Text style={[styles.markerFallbackLabel, isInTour && styles.markerFallbackLabelInTour]}>
+                  {isInTour ? routePositionsLabel : item.markerLabel}
+                </Text>
+              </View>
+            </Marker>
+          );
+        })}
+      </MapView>
+
+      <View style={[styles.mapTopBar, isFullscreen && { top: insets.top + 10 }]}>
+        <View style={styles.mapTopControlsRow}>
+          <View style={styles.mapSearchWrap}>
+            <Feather color="#6d7d6e" name="search" size={14} />
+            <TextInput
+              onBlur={() => setIsSearchFocused(false)}
+              onChangeText={setPoiSearchQuery}
+              onFocus={() => setIsSearchFocused(true)}
+              placeholder="Punkte auf der Karte suchen"
+              placeholderTextColor="#7b8776"
+              style={styles.mapSearchInput}
+              value={poiSearchQuery}
+            />
+          </View>
+
+          <Pressable
+            onPress={isFullscreen ? closeMapFullscreen : openMapFullscreen}
+            style={({ pressed }) => [styles.mapFullscreenButton, pressed && styles.pressed]}>
+            <Feather color="#2e3a2e" name={isFullscreen ? 'minimize-2' : 'maximize-2'} size={16} />
+          </Pressable>
+        </View>
+
+        {isSearchFocused && searchResults.length > 0 ? (
+          <View style={styles.searchResultsPopover}>
+            {searchResults.map((item) => {
+              const stampNumber = getStampNumber(item);
+              return (
+                <Pressable
+                  key={item.ID}
+                  onPress={() => focusMapItemOnMap(item, { updateSearchQuery: true })}
+                  style={({ pressed }) => [styles.searchResultRow, pressed && styles.pressed]}>
+                  <Text numberOfLines={1} style={styles.searchResultTitle}>
+                    {stampNumber ? `#${stampNumber} · ${item.name}` : item.name}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.searchResultMeta}>
+                    {`${stampNumber ? `Stempel ${stampNumber} • ` : ''}${item.typeLabel} • ${formatDistanceKm(item.distanceKm)}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+      </View>
+
+      <View style={[styles.mapZoomControls, isFullscreen && { top: insets.top + 72 }]}>
+        <Pressable onPress={() => handleZoomBy(0.65)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
+          <Text style={styles.zoomButtonLabel}>+</Text>
+        </Pressable>
+        <Pressable onPress={() => handleZoomBy(1.55)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
+          <Text style={styles.zoomButtonLabel}>−</Text>
+        </Pressable>
+      </View>
+
+      {selectedMapItem ? (
+        <View style={[styles.mapBottomSheet, isFullscreen && { bottom: insets.bottom + 12 }]}>
+          <Pressable
+            onPress={openSelectedItemDetailPage}
+            style={({ pressed }) => [styles.mapBottomInfoTap, pressed && styles.pressed]}>
+            <View style={styles.mapBottomInfoRow}>
+              {selectedMapItemImageSource ? (
+                <Image source={selectedMapItemImageSource} style={styles.mapBottomArtwork} />
+              ) : (
+                <LinearGradient
+                  colors={getMapItemGradientColors(selectedMapItem.kind)}
+                  style={styles.mapBottomArtwork}
+                />
+              )}
+              <View style={styles.mapBottomInfoCopy}>
+                <Text numberOfLines={1} style={styles.mapBottomTitle}>
+                  {`${selectedStampNumber ? `#${selectedStampNumber} · ` : ''}${selectedMapItem.name}`}
+                </Text>
+                <Text numberOfLines={1} style={styles.mapBottomMeta}>
+                  {`${selectedStampNumber ? `Stempel ${selectedStampNumber} • ` : ''}${selectedMapItem.typeLabel}`}
+                </Text>
+              </View>
+              <View style={styles.mapBottomOpenHint}>
+                <Text style={styles.mapBottomOpenLabel}>Oeffnen</Text>
+                <Feather color="#4d5b4d" name="chevron-right" size={16} />
+              </View>
+            </View>
+          </Pressable>
+          {isEditMode ? (
+            <Pressable
+              disabled={editingBlocked}
+              onPress={handleAppendSelectedPoi}
+              style={({ pressed }) => [
+                styles.addButton,
+                editingBlocked && styles.addButtonDisabled,
+                pressed && !editingBlocked && styles.pressed,
+              ]}>
+              <Text style={styles.addButtonLabel}>
+                {selectedItemInTourCount > 0 ? 'Nochmals hinzufuegen' : 'Zur Tour hinzufuegen'}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}>
         <View style={styles.headerWrap}>
-          <Pressable
-            onPress={() => {
-              if (router.canGoBack()) {
-                router.back();
-                return;
-              }
+          <View style={styles.headerTopRow}>
+            <Pressable
+              onPress={() => {
+                if (router.canGoBack()) {
+                  router.back();
+                  return;
+                }
 
-              router.replace('/(tabs)/tours' as never);
-            }}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-            <Feather color="#1e2a1e" name="arrow-left" size={16} />
-          </Pressable>
-          <Text style={styles.title}>{tour.name}</Text>
-          <Text style={styles.subtitle}>{`${formatDistance(tour.distance)} • ${formatDuration(tour.duration)} • ${tour.stampCount ?? 0} Stempel`}</Text>
+                router.replace('/(tabs)/tours' as never);
+              }}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+              <Feather color="#1e2a1e" name="arrow-left" size={16} />
+            </Pressable>
+
+            <View style={styles.headerActions}>
+              {canEnterEditMode ? (
+                <Pressable
+                  disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
+                  onPress={isEditMode ? handleExitEditMode : handleEnterEditMode}
+                  style={({ pressed }) => [
+                    styles.modeHeaderButton,
+                    (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                      styles.modeHeaderButtonDisabled,
+                    pressed &&
+                      !(updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                      styles.pressed,
+                  ]}>
+                  <Feather
+                    color={
+                      updateTourMutation.isPending || updateTourNameMutation.isPending
+                        ? '#9ba59a'
+                        : '#2e6b4b'
+                    }
+                    name={isEditMode ? 'check' : 'edit-2'}
+                    size={14}
+                  />
+                  <Text
+                    style={[
+                      styles.modeHeaderButtonLabel,
+                      (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                        styles.modeHeaderButtonLabelDisabled,
+                    ]}>
+                    {isEditMode ? 'Fertig' : 'Bearbeiten'}
+                  </Text>
+                </Pressable>
+              ) : null}
+
+              {isEditMode ? (
+                <Pressable
+                  disabled={editingBlocked || updateTourNameMutation.isPending}
+                  onPress={() => {
+                    setTourNameDraft(data.tour.name);
+                    setIsRenameModalVisible(true);
+                  }}
+                  style={({ pressed }) => [
+                    styles.renameHeaderButton,
+                    (editingBlocked || updateTourNameMutation.isPending) && styles.renameHeaderButtonDisabled,
+                    pressed && !editingBlocked && !updateTourNameMutation.isPending && styles.pressed,
+                  ]}>
+                  <Feather
+                    color={editingBlocked || updateTourNameMutation.isPending ? '#9ba59a' : '#2e6b4b'}
+                    name="edit-2"
+                    size={14}
+                  />
+                  <Text
+                    style={[
+                      styles.renameHeaderButtonLabel,
+                      (editingBlocked || updateTourNameMutation.isPending) &&
+                        styles.renameHeaderButtonLabelDisabled,
+                    ]}>
+                    Name
+                  </Text>
+                </Pressable>
+              ) : null}
+
+              {isEditMode ? (
+                <Pressable
+                  disabled={editingBlocked || deleteTourMutation.isPending}
+                  onPress={handleDeleteTour}
+                  style={({ pressed }) => [
+                    styles.deleteHeaderButton,
+                    (editingBlocked || deleteTourMutation.isPending) && styles.deleteHeaderButtonDisabled,
+                    pressed && !editingBlocked && !deleteTourMutation.isPending && styles.pressed,
+                  ]}>
+                  <Feather
+                    color={editingBlocked || deleteTourMutation.isPending ? '#b8a8a8' : '#a34e4e'}
+                    name="trash-2"
+                    size={14}
+                  />
+                  <Text
+                    style={[
+                      styles.deleteHeaderButtonLabel,
+                      (editingBlocked || deleteTourMutation.isPending) && styles.deleteHeaderButtonLabelDisabled,
+                    ]}>
+                    {deleteTourMutation.isPending ? 'Loesche...' : 'Loeschen'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+
+          <Text style={styles.title}>{data.tour.name}</Text>
+          <Text style={styles.subtitle}>{`${formatDistance(liveTourMetrics.distance)} • ${formatDuration(liveTourMetrics.duration)} • ${liveTourMetrics.stampCount ?? 0} Stempel`}</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Tourprofil</Text>
-          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(tour.distance)}`}</Text>
-          <Text style={styles.cardLine}>{`Dauer: ${formatDuration(tour.duration)}`}</Text>
-          <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(tour.totalElevationGain)} • ↓${formatElevation(tour.totalElevationLoss)}`}</Text>
-          <Text style={styles.cardLine}>{`Stempel: ${tour.stampCount ?? 0}`}</Text>
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>Tourprofil</Text>
+            <Text style={styles.profileStatusText}>{saveStateLabel}</Text>
+          </View>
+          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(liveTourMetrics.distance)}`}</Text>
+          <Text style={styles.cardLine}>{`Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
+          <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(liveTourMetrics.totalElevationGain)} • ↓${formatElevation(liveTourMetrics.totalElevationLoss)}`}</Text>
+          <Text style={styles.cardLine}>{`Stempel: ${liveTourMetrics.stampCount ?? 0}`}</Text>
         </View>
 
+        {blockingErrorCode === 403 ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningTitle}>Bearbeitung gesperrt</Text>
+            <Text style={styles.warningBody}>Diese Tour gehoert nicht zum aktuellen Benutzer.</Text>
+          </View>
+        ) : null}
+        {blockingErrorCode === 404 ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningTitle}>Tour nicht mehr vorhanden</Text>
+            <Text style={styles.warningBody}>Die Tour wurde entfernt oder ist nicht mehr verfuegbar.</Text>
+          </View>
+        ) : null}
+        {lastSaveErrorCode === 422 ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningTitle}>Route unvollstaendig</Text>
+            <Text style={styles.warningBody}>
+              Die Route kann mit dieser Reihenfolge nicht vollstaendig berechnet werden. Bitte Reihenfolge
+              oder Punkte anpassen.
+            </Text>
+          </View>
+        ) : null}
+
+        {isMapFullscreen ? null : renderTourMap(false)}
+
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Pfad</Text>
-          {pathRows.length === 0 ? (
-            <Text style={styles.cardLine}>Keine Teilstrecken vorhanden.</Text>
+          <Text style={styles.cardTitle}>Aktuelle Reihenfolge</Text>
+          {draftPoiIds.length === 0 ? (
+            <Text style={styles.cardLine}>Noch keine Punkte in der Tour.</Text>
           ) : (
-            pathRows.map((row) => {
-              const fromPoiId = row.travelTime?.fromPoi || '';
-              const toPoiId = row.travelTime?.toPoi || '';
-              const fromPoiLabel = poiNameById.get(fromPoiId.toLowerCase()) || fromPoiId || 'Unbekannt';
-              const toPoiLabel = poiNameById.get(toPoiId.toLowerCase()) || toPoiId || 'Unbekannt';
-              const distanceLabel = row.travelTime?.distanceMeters
-                ? formatDistance(row.travelTime.distanceMeters)
-                : '-- km';
-              const durationLabel = formatDuration(row.travelTime?.durationSeconds ?? null);
+            draftPoiIds.map((poiId, index) => {
+              const item = mapItemById.get(poiId.toLowerCase());
+              const title = item?.name || poiId;
+              const stampNumber = getStampNumber(item);
+              const pathItemImageSource = resolveMapItemImageSource(item?.imageUrl, accessToken);
 
               return (
-                <View key={`${row.travelTime_ID || 'path'}-${row.rank}`} style={styles.pathRow}>
-                  <Text style={styles.pathTitle}>{`${row.rank + 1}. ${fromPoiLabel} -> ${toPoiLabel}`}</Text>
-                  <Text style={styles.pathMeta}>{`${distanceLabel} • ${durationLabel}`}</Text>
+                <View key={`${poiId}-${index}`} style={styles.pathRow}>
+                  <Pressable
+                    disabled={!item}
+                    onPress={() => openListItemDetailPage(item)}
+                    style={({ pressed }) => [
+                      styles.pathOpenable,
+                      pressed && item && styles.pressed,
+                    ]}>
+                    {pathItemImageSource ? (
+                      <Image source={pathItemImageSource} style={styles.pathArtwork} />
+                    ) : item ? (
+                      <LinearGradient
+                        colors={getMapItemGradientColors(item.kind)}
+                        style={styles.pathArtwork}
+                      />
+                    ) : (
+                      <View style={[styles.pathArtwork, styles.pathArtworkFallback]}>
+                        <Text style={styles.pathArtworkFallbackLabel}>?</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.pathCopy}>
+                      <Text style={styles.pathTitle}>
+                        {`${formatAlphabeticOrder(index + 1)}. ${stampNumber ? `#${stampNumber} · ` : ''}${title}`}
+                      </Text>
+                      <Text style={styles.pathMeta}>
+                        {stampNumber
+                          ? `Stempel ${stampNumber} • ${item?.typeLabel || 'Unbekannt'}`
+                          : item?.typeLabel || 'Unbekannt'}
+                      </Text>
+                    </View>
+                    {item ? <Feather color="#4d5b4d" name="chevron-right" size={16} /> : null}
+                  </Pressable>
+                  {isEditMode ? (
+                    <View style={styles.pathActions}>
+                      <Pressable
+                        disabled={editingBlocked || index === 0}
+                        onPress={() => movePoi(index, -1)}
+                        style={({ pressed }) => [
+                          styles.iconButton,
+                          (editingBlocked || index === 0) && styles.iconButtonDisabled,
+                          pressed && !editingBlocked && index !== 0 && styles.pressed,
+                        ]}>
+                        <Feather
+                          color={editingBlocked || index === 0 ? '#9ba59a' : '#2e3a2e'}
+                          name="arrow-up"
+                          size={14}
+                        />
+                      </Pressable>
+
+                      <Pressable
+                        disabled={editingBlocked || index === draftPoiIds.length - 1}
+                        onPress={() => movePoi(index, 1)}
+                        style={({ pressed }) => [
+                          styles.iconButton,
+                          (editingBlocked || index === draftPoiIds.length - 1) && styles.iconButtonDisabled,
+                          pressed && !editingBlocked && index !== draftPoiIds.length - 1 && styles.pressed,
+                        ]}>
+                        <Feather
+                          color={editingBlocked || index === draftPoiIds.length - 1 ? '#9ba59a' : '#2e3a2e'}
+                          name="arrow-down"
+                          size={14}
+                        />
+                      </Pressable>
+
+                      <Pressable
+                        disabled={editingBlocked}
+                        onPress={() => removePoiAtIndex(index)}
+                        style={({ pressed }) => [
+                          styles.iconButton,
+                          editingBlocked && styles.iconButtonDisabled,
+                          pressed && !editingBlocked && styles.pressed,
+                        ]}>
+                        <Feather color={editingBlocked ? '#9ba59a' : '#a34e4e'} name="trash-2" size={14} />
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
               );
             })
           )}
         </View>
 
-        <Pressable
-          onPress={() => router.push(`/tours/${encodeURIComponent(tour.ID)}/edit` as never)}
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
-          <Text style={styles.primaryButtonLabel}>Tour bearbeiten</Text>
-        </Pressable>
+        {isEditMode ? (
+          <Pressable
+            disabled={editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2}
+            onPress={() => void performSave(draftPoiIds, { manual: true })}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2) &&
+                styles.primaryButtonDisabled,
+              pressed &&
+                !editingBlocked &&
+                !updateTourMutation.isPending &&
+                draftPoiIds.length >= 2 &&
+                styles.pressed,
+            ]}>
+            <Text style={styles.primaryButtonLabel}>
+              {updateTourMutation.isPending ? 'Speichere...' : 'Jetzt speichern'}
+            </Text>
+          </Pressable>
+        ) : null}
 
         {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Tourdaten im Hintergrund...</Text> : null}
       </ScrollView>
+
+      <Modal
+        animationType="none"
+        visible={isMapFullscreen}
+        onRequestClose={closeMapFullscreen}>
+        <View style={styles.mapFullscreenSafeArea}>
+          <Animated.View style={[styles.mapFullscreenContent, fullscreenAnimatedStyle]}>
+            {renderTourMap(true)}
+          </Animated.View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isEditMode && isRenameModalVisible}
+        onRequestClose={closeRenameModal}>
+        <View style={styles.renameModalOverlay}>
+          <Pressable style={styles.renameModalBackdrop} onPress={closeRenameModal} />
+          <View style={styles.renameModalCard}>
+            <View style={styles.renameModalHeader}>
+              <Text style={styles.renameModalTitle}>Tourname bearbeiten</Text>
+              <Pressable
+                accessibilityLabel="Umbenennen schliessen"
+                disabled={updateTourNameMutation.isPending}
+                onPress={closeRenameModal}
+                style={({ pressed }) => [styles.renameModalCloseButton, pressed && styles.pressed]}>
+                <Feather color="#1E2A1E" name="x" size={16} />
+              </Pressable>
+            </View>
+
+            <View style={styles.renameInputShell}>
+              <TextInput
+                autoFocus
+                maxLength={120}
+                onChangeText={setTourNameDraft}
+                onSubmitEditing={() => void handleSubmitRename()}
+                placeholder="Tourname"
+                placeholderTextColor="#7b8776"
+                style={styles.renameInput}
+                value={tourNameDraft}
+              />
+            </View>
+
+            <Pressable
+              disabled={updateTourNameMutation.isPending}
+              onPress={() => void handleSubmitRename()}
+              style={({ pressed }) => [
+                styles.renameSaveButton,
+                updateTourNameMutation.isPending && styles.renameSaveButtonDisabled,
+                pressed && !updateTourNameMutation.isPending && styles.pressed,
+              ]}>
+              <Text style={styles.renameSaveButtonLabel}>
+                {updateTourNameMutation.isPending ? 'Speichere...' : 'Name speichern'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -170,13 +1884,51 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f3ee',
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingHorizontal: 16,
+    paddingTop: 12,
     paddingBottom: 40,
     gap: 12,
   },
   headerWrap: {
     gap: 6,
+    paddingHorizontal: 4,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modeHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#eef4ee',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  modeHeaderButtonDisabled: {
+    opacity: 0.7,
+  },
+  modeHeaderButtonLabel: {
+    color: '#2e6b4b',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  modeHeaderButtonLabelDisabled: {
+    color: '#9ba59a',
   },
   backButton: {
     width: 32,
@@ -190,6 +1942,131 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
+  },
+  renameHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#eef4ee',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  renameHeaderButtonDisabled: {
+    opacity: 0.7,
+  },
+  renameHeaderButtonLabel: {
+    color: '#2e6b4b',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  renameHeaderButtonLabelDisabled: {
+    color: '#9ba59a',
+  },
+  deleteHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#fff2f2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  deleteHeaderButtonDisabled: {
+    opacity: 0.7,
+  },
+  deleteHeaderButtonLabel: {
+    color: '#a34e4e',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  deleteHeaderButtonLabelDisabled: {
+    color: '#b8a8a8',
+  },
+  renameModalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-start',
+  },
+  renameModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(46,58,46,0.35)',
+  },
+  renameModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    marginHorizontal: 20,
+    marginTop: 120,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
+    elevation: 10,
+    gap: 12,
+  },
+  renameModalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  renameModalTitle: {
+    color: '#1E2A1E',
+    fontSize: 20,
+    lineHeight: 24,
+    fontFamily: 'serif',
+  },
+  renameModalCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#F0E9DD',
+    borderRadius: 8,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  renameInputShell: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d9ddcf',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  renameInput: {
+    color: '#2e3a2e',
+    fontSize: 15,
+    lineHeight: 20,
+    paddingVertical: 0,
+  },
+  renameSaveButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: '#2E6B4B',
+    paddingVertical: 10,
+  },
+  renameSaveButtonDisabled: {
+    opacity: 0.7,
+  },
+  renameSaveButtonLabel: {
+    color: '#F5F3EE',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   title: {
     color: '#1e2a1e',
@@ -214,22 +2091,350 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 2,
   },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardTitle: {
     color: '#1e2a1e',
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '700',
   },
+  profileStatusText: {
+    color: '#2e6b4b',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+  },
   cardLine: {
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
   },
+  warningBanner: {
+    borderRadius: 16,
+    backgroundColor: '#fff6ea',
+    borderWidth: 1,
+    borderColor: '#efd9b7',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  warningTitle: {
+    color: '#6b4d14',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  warningBody: {
+    color: '#7d6a45',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  mapCard: {
+    height: 440,
+    borderRadius: 22,
+    overflow: 'visible',
+    backgroundColor: '#e7ebde',
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    elevation: 6,
+  },
+  mapCardFullscreen: {
+    flex: 1,
+    height: undefined,
+    borderRadius: 0,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
+  },
+  mapFullscreenSafeArea: {
+    flex: 1,
+    backgroundColor: '#1e2a1e',
+  },
+  mapFullscreenContent: {
+    flex: 1,
+  },
+  mapTopBar: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    zIndex: 10,
+  },
+  mapTopControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mapSearchWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  mapFullscreenButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  mapSearchInput: {
+    flex: 1,
+    color: '#2e3a2e',
+    fontSize: 12,
+    lineHeight: 16,
+    paddingVertical: 0,
+  },
+  searchResultsPopover: {
+    marginTop: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    paddingVertical: 6,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 4,
+  },
+  searchResultRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 2,
+  },
+  searchResultTitle: {
+    color: '#1e2a1e',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  searchResultMeta: {
+    color: '#6b7a6b',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  mapZoomControls: {
+    position: 'absolute',
+    right: 12,
+    top: 74,
+    gap: 8,
+  },
+  zoomButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  zoomButtonLabel: {
+    color: '#2e3a2e',
+    fontSize: 20,
+    lineHeight: 22,
+  },
+  imageMarkerWrap: {
+    width: 44,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  selectedImageMarkerHalo: {
+    position: 'absolute',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(46,107,75,0.18)',
+    top: 1,
+  },
+  imageMarkerAsset: {
+    width: 34,
+    height: 40,
+    resizeMode: 'contain',
+  },
+  routeOrderBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#1e2a1e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeOrderBadgeLabel: {
+    color: '#f5f3ee',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  markerFallback: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    backgroundColor: '#c1a093',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  markerFallbackInTour: {
+    backgroundColor: '#2e6b4b',
+  },
+  markerFallbackSelected: {
+    borderColor: '#1e2a1e',
+    transform: [{ scale: 1.08 }],
+  },
+  markerFallbackLabel: {
+    color: '#f5f3ee',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  markerFallbackLabelInTour: {
+    color: '#f5f3ee',
+  },
+  mapBottomSheet: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  mapBottomInfoTap: {
+    borderRadius: 10,
+    paddingVertical: 2,
+  },
+  mapBottomInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mapBottomArtwork: {
+    width: 56,
+    height: 56,
+    borderRadius: 14,
+  },
+  mapBottomInfoCopy: {
+    flex: 1,
+    minWidth: 1,
+    gap: 2,
+  },
+  mapBottomOpenHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingLeft: 6,
+  },
+  mapBottomOpenLabel: {
+    color: '#4d5b4d',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+  },
+  mapBottomTitle: {
+    color: '#1e2a1e',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  mapBottomMeta: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  addButton: {
+    backgroundColor: '#2e6b4b',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addButtonDisabled: {
+    backgroundColor: '#b8c7bb',
+  },
+  addButtonLabel: {
+    color: '#f5f3ee',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
   pathRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
     backgroundColor: '#f5f3ee',
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  pathOpenable: {
+    flex: 1,
+    minWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 10,
+    paddingVertical: 2,
+  },
+  pathArtwork: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+  },
+  pathArtworkFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#a3aea2',
+  },
+  pathArtworkFallbackLabel: {
+    color: '#f5f3ee',
+    fontSize: 14,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  pathCopy: {
+    flex: 1,
+    minWidth: 1,
     gap: 2,
   },
   pathTitle: {
@@ -239,9 +2444,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   pathMeta: {
-    color: '#6b7a6b',
+    color: '#748074',
     fontSize: 11,
     lineHeight: 14,
+  },
+  pathActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  iconButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButtonDisabled: {
+    backgroundColor: '#f0f2ee',
   },
   primaryButton: {
     backgroundColor: '#2e6b4b',
@@ -251,6 +2472,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 4,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: '#b8c7bb',
   },
   primaryButtonLabel: {
     color: '#f5f3ee',

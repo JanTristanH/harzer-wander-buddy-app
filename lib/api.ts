@@ -78,6 +78,7 @@ type PointOfInterestRow = {
   ID: string;
   name?: string;
   poiType?: string;
+  stampNumber?: string;
   orderBy?: string;
   latitude?: number | string;
   longitude?: number | string;
@@ -444,6 +445,7 @@ export type PointOfInterest = {
   ID: string;
   name: string;
   poiType: string;
+  stampNumber?: string;
   orderBy?: string;
   latitude?: number;
   longitude?: number;
@@ -805,6 +807,7 @@ function normalizePointOfInterestRow(value: PointOfInterestRow) {
     ID: value.ID,
     name: safeTrim(value.name) || value.ID,
     poiType: safeTrim(value.poiType) || 'unknown',
+    stampNumber: safeTrim(value.stampNumber) || undefined,
     orderBy: safeTrim(value.orderBy) || undefined,
     latitude: toFiniteNumber(value.latitude) ?? undefined,
     longitude: toFiniteNumber(value.longitude) ?? undefined,
@@ -1628,10 +1631,7 @@ export async function fetchTourById(accessToken: string, tourId: string, groupUs
   }
 
   const groupFilter = normalizeIdList(groupUserIds).join(',');
-  const filters = [
-    `ID eq guid'${escapeODataString(normalizedTourId)}'`,
-    `ID eq ${normalizedTourId}`,
-  ];
+  const filters = [`ID eq ${normalizedTourId}`];
 
   for (const idFilter of filters) {
     const filter = groupFilter
@@ -1696,16 +1696,80 @@ export async function createTour(
   return normalizeTourRow(parsed as TourRow);
 }
 
+export async function deleteTour(accessToken: string, tourId: string) {
+  const normalizedTourId = safeTrim(tourId);
+  if (!normalizedTourId) {
+    throw new Error('Tour ID is required');
+  }
+
+  const paths = [
+    `Tours(${normalizedTourId})`,
+    `Tours(guid'${escapeODataString(normalizedTourId)}')`,
+    buildStringKeyPath('Tours', normalizedTourId),
+  ];
+
+  for (const path of paths) {
+    try {
+      return await mutateOData<null>(accessToken, buildUrl(path), {
+        method: 'DELETE',
+      });
+    } catch (error) {
+      if (error instanceof HttpStatusError && (error.status === 400 || error.status === 404)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new HttpStatusError(404, 'Tour not found');
+}
+
+export async function updateTourName(accessToken: string, payload: { tourId: string; name: string }) {
+  const normalizedTourId = safeTrim(payload.tourId);
+  const normalizedName = safeTrim(payload.name);
+
+  if (!normalizedTourId) {
+    throw new Error('Tour ID is required');
+  }
+
+  if (!normalizedName) {
+    throw new Error('Tour name is required');
+  }
+
+  const paths = [
+    `Tours(${normalizedTourId})`,
+    `Tours(guid'${escapeODataString(normalizedTourId)}')`,
+    buildStringKeyPath('Tours', normalizedTourId),
+  ];
+
+  for (const path of paths) {
+    try {
+      return await mutateOData<null>(accessToken, buildUrl(path), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: normalizedName,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof HttpStatusError && (error.status === 400 || error.status === 404)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new HttpStatusError(404, 'Tour not found');
+}
+
 export async function fetchTourPath(accessToken: string, tourId: string) {
   const normalizedTourId = safeTrim(tourId);
   if (!normalizedTourId) {
     return [] as TourPathEntry[];
   }
 
-  const filters = [
-    `tour_ID eq guid'${escapeODataString(normalizedTourId)}'`,
-    `tour_ID eq ${normalizedTourId}`,
-  ];
+  const filters = [`tour_ID eq ${normalizedTourId}`];
 
   for (const filter of filters) {
     try {
@@ -1761,12 +1825,32 @@ export async function updateTourByPOIList(
   return normalizeTourUpdateResponse(parsed);
 }
 
+export async function previewTourByPOIList(
+  accessToken: string,
+  payload: {
+    TourID: string;
+    POIList: string;
+  }
+) {
+  const response = await mutateOData<unknown>(accessToken, buildUrl('previewTourByPOIList'), {
+    method: 'POST',
+    body: JSON.stringify({
+      TourID: safeTrim(payload.TourID),
+      POIList: safeTrim(payload.POIList),
+    }),
+  });
+
+  const parsed = parseODataFunctionResult<unknown>(response, 'previewTourByPOIList');
+  return normalizeTourUpdateResponse(parsed);
+}
+
 export async function fetchAllPointsOfInterest(accessToken: string) {
   const rows = await fetchCollection<PointOfInterestRow>(accessToken, 'AllPointsOfInterest', {
     select: [
       'ID',
       'name',
       'poiType',
+      'stampNumber',
       'orderBy',
       'latitude',
       'longitude',

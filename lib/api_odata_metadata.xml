@@ -78,6 +78,10 @@
           <Parameter Name="TourID" Type="Edm.Guid" Mode="In" Nullable="true"/>
           <Parameter Name="POIList" Type="Edm.String" Mode="In" Nullable="true"/>
         </FunctionImport>
+        <FunctionImport Name="previewTourByPOIList" ReturnType="Edm.String" m:HttpMethod="POST">
+          <Parameter Name="TourID" Type="Edm.Guid" Mode="In" Nullable="true"/>
+          <Parameter Name="POIList" Type="Edm.String" Mode="In" Nullable="true"/>
+        </FunctionImport>
         <FunctionImport Name="updateOrderBy" ReturnType="Edm.String" m:HttpMethod="GET"/>
         <FunctionImport Name="getCurrentUser" EntitySet="Users" ReturnType="api.Users" m:HttpMethod="GET"/>
         <FunctionImport Name="getCurrentUserID" EntitySet="Users" ReturnType="api.Users" m:HttpMethod="GET"/>

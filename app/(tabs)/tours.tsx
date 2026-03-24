@@ -16,7 +16,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Tour } from '@/lib/api';
+import { useIdTokenClaims } from '@/lib/auth';
 import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
+
+type FilterKey = 'mine' | 'all';
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'mine', label: 'Meine' },
+  { key: 'all', label: 'Alle' },
+];
 
 function formatDistance(distanceMeters: number | null) {
   if (distanceMeters === null || !Number.isFinite(distanceMeters)) {
@@ -74,7 +82,10 @@ function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
 
 export default function ToursTabScreen() {
   const router = useRouter();
+  const claims = useIdTokenClaims<{ sub?: string }>();
+  const currentUserId = claims?.sub;
   const [query, setQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<FilterKey>('mine');
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const { data, error, isPending, isFetching, refetch } = useToursOverviewQuery();
   const createTourMutation = useCreateTourMutation();
@@ -82,14 +93,23 @@ export default function ToursTabScreen() {
 
   const filteredTours = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return tours;
-    }
+    return tours.filter((tour) => {
+      const matchesFilter = activeFilter === 'all' || !currentUserId || tour.createdBy === currentUserId;
+      if (!matchesFilter) {
+        return false;
+      }
 
-    return tours.filter((tour) => tour.name.toLowerCase().includes(normalized));
-  }, [query, tours]);
+      if (!normalized) {
+        return true;
+      }
+
+      return tour.name.toLowerCase().includes(normalized);
+    });
+  }, [activeFilter, currentUserId, query, tours]);
 
   const blockingError = !data ? error : null;
+  const isMineFilter = activeFilter === 'mine';
+  const isSearching = query.trim().length > 0;
 
   const handleQuickstart = async () => {
     try {
@@ -98,7 +118,7 @@ export default function ToursTabScreen() {
         idListTravelTimes: '',
       });
 
-      router.push(`/tours/${encodeURIComponent(created.ID)}/edit` as never);
+      router.push(`/tours/${encodeURIComponent(created.ID)}` as never);
     } catch (nextError) {
       Alert.alert(
         'Tour konnte nicht erstellt werden',
@@ -137,8 +157,16 @@ export default function ToursTabScreen() {
         keyExtractor={(item) => item.ID}
         ListEmptyComponent={
           <View style={styles.emptyStateWrap}>
-            <Text style={styles.emptyStateTitle}>Keine Touren gefunden</Text>
-            <Text style={styles.emptyStateBody}>Passe die Suche an oder erstelle eine neue Tour.</Text>
+            <Text style={styles.emptyStateTitle}>
+              {isMineFilter ? 'Keine eigenen Touren gefunden' : 'Keine Touren gefunden'}
+            </Text>
+            <Text style={styles.emptyStateBody}>
+              {isMineFilter
+                ? isSearching
+                  ? 'Passe die Suche an oder wechsle auf Alle.'
+                  : 'Erstelle eine neue Tour oder wechsle auf Alle.'
+                : 'Passe die Suche an oder erstelle eine neue Tour.'}
+            </Text>
           </View>
         }
         ListHeaderComponent={
@@ -167,6 +195,26 @@ export default function ToursTabScreen() {
               />
             </View>
 
+            <View style={styles.filterRow}>
+              {FILTERS.map((filter) => {
+                const isActive = activeFilter === filter.key;
+                return (
+                  <Pressable
+                    key={filter.key}
+                    onPress={() => setActiveFilter(filter.key)}
+                    style={({ pressed }) => [
+                      styles.filterPill,
+                      isActive && styles.filterPillActive,
+                      pressed && styles.filterPillPressed,
+                    ]}>
+                    <Text style={[styles.filterPillLabel, isActive && styles.filterPillLabelActive]}>
+                      {filter.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
           </View>
         }
@@ -193,6 +241,18 @@ export default function ToursTabScreen() {
         )}
         showsVerticalScrollIndicator={false}
       />
+
+      <Pressable
+        accessibilityLabel="Neue Tour erstellen"
+        disabled={createTourMutation.isPending}
+        onPress={() => void handleQuickstart()}
+        style={({ pressed }) => [
+          styles.floatingAddButton,
+          createTourMutation.isPending && styles.floatingAddButtonDisabled,
+          pressed && styles.pressed,
+        ]}>
+        <Feather color="#F5F3EE" name="plus" size={24} />
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -277,6 +337,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 16,
     paddingVertical: 0,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  filterPill: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#ebe5d7',
+  },
+  filterPillActive: {
+    backgroundColor: '#2e6b4b',
+  },
+  filterPillPressed: {
+    opacity: 0.85,
+  },
+  filterPillLabel: {
+    color: '#526452',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  filterPillLabelActive: {
+    color: '#f5f3ee',
+    fontWeight: '700',
+  },
+  floatingAddButton: {
+    alignItems: 'center',
+    backgroundColor: '#2E6B4B',
+    borderRadius: 18,
+    bottom: 108,
+    height: 52,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 20,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    width: 52,
+  },
+  floatingAddButtonDisabled: {
+    opacity: 0.7,
   },
   cardRow: {
     paddingHorizontal: 20,

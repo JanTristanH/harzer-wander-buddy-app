@@ -92,9 +92,17 @@ function Section({
 
 function ParkingDetailContent() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    id?: string | string[];
+    disableNavigation?: string | string[];
+  }>();
   const { accessToken } = useAuth();
   const parkingId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const disableNavigationParam = Array.isArray(params.disableNavigation)
+    ? params.disableNavigation[0]
+    : params.disableNavigation;
+  const isNavigationDisabled =
+    disableNavigationParam === '1' || disableNavigationParam === 'true';
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useParkingDetailQuery(parkingId);
 
@@ -218,9 +226,15 @@ function ParkingDetailContent() {
             ) : detail.nearbyStamps.length > 0 ? (
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
+                  disabled={isNavigationDisabled}
                   key={neighbor.ID}
-                  onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
-                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
+                  onPress={
+                    isNavigationDisabled ? undefined : () => router.push(`/stamps/${neighbor.ID}` as never)
+                  }
+                  style={({ pressed }) => [
+                    styles.rowItem,
+                    pressed && !isNavigationDisabled && styles.rowItemPressed,
+                  ]}>
                   {neighbor.heroImageUrl ? (
                     <Image
                       contentFit="cover"
@@ -244,7 +258,9 @@ function ParkingDetailContent() {
                       {formatElevationSummary(neighbor.elevationGainMeters, neighbor.elevationLossMeters)}
                     </Text>
                   </View>
-                  <Feather color="#8b957f" name="chevron-right" size={18} />
+                  {!isNavigationDisabled ? (
+                    <Feather color="#8b957f" name="chevron-right" size={18} />
+                  ) : null}
                 </Pressable>
               ))
             ) : (
@@ -271,9 +287,17 @@ function ParkingDetailContent() {
             ) : detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((nearbyParking) => (
                 <Pressable
+                  disabled={isNavigationDisabled}
                   key={nearbyParking.ID}
-                  onPress={() => router.push(`/parking/${nearbyParking.ID}` as never)}
-                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
+                  onPress={
+                    isNavigationDisabled
+                      ? undefined
+                      : () => router.push(`/parking/${nearbyParking.ID}` as never)
+                  }
+                  style={({ pressed }) => [
+                    styles.rowItem,
+                    pressed && !isNavigationDisabled && styles.rowItemPressed,
+                  ]}>
                   <View style={[styles.rowBadge, styles.rowBadgeParking]}>
                     <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelParking]}>P</Text>
                   </View>
@@ -288,7 +312,9 @@ function ParkingDetailContent() {
                       )}
                     </Text>
                   </View>
-                  <Feather color="#8b957f" name="chevron-right" size={18} />
+                  {!isNavigationDisabled ? (
+                    <Feather color="#8b957f" name="chevron-right" size={18} />
+                  ) : null}
                 </Pressable>
               ))
             ) : (
@@ -312,18 +338,25 @@ function ParkingDetailContent() {
               <Feather color="#2e3a2e" name="navigation" size={16} />
               <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
             </Pressable>
-            <Pressable
-              onPress={handleShowOnMap}
-              style={({ pressed }) => [
-                styles.secondaryButton,
-                styles.secondaryButtonHalf,
-                styles.secondaryButtonWithIcon,
-                pressed && styles.secondaryButtonPressed,
-              ]}>
-              <Feather color="#2e3a2e" name="map-pin" size={16} />
-              <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
-            </Pressable>
+            {!isNavigationDisabled ? (
+              <Pressable
+                onPress={handleShowOnMap}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  styles.secondaryButtonHalf,
+                  styles.secondaryButtonWithIcon,
+                  pressed && styles.secondaryButtonPressed,
+                ]}>
+                <Feather color="#2e3a2e" name="map-pin" size={16} />
+                <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
+              </Pressable>
+            ) : null}
           </View>
+          {isNavigationDisabled ? (
+            <Text style={styles.navigationDisabledHint}>
+              Verlinkungen zu anderen Stempeln und Parkplaetzen sind hier deaktiviert.
+            </Text>
+          ) : null}
         </View>
       </View>
     </SafeAreaView>
@@ -585,6 +618,12 @@ const styles = StyleSheet.create({
     color: '#2e3a2e',
     fontSize: 13,
     lineHeight: 16,
+    textAlign: 'center',
+  },
+  navigationDisabledHint: {
+    color: '#7c8779',
+    fontSize: 11,
+    lineHeight: 14,
     textAlign: 'center',
   },
 });

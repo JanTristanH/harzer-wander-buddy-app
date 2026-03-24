@@ -8,6 +8,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import { AppState, type AppStateStatus, Platform } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -50,25 +51,27 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="onboarding" />
-            <Stack.Screen name="login" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="profile/edit" />
-            <Stack.Screen name="profile/[userId]" />
-            <Stack.Screen name="tours/[id]" />
-            <Stack.Screen name="tours/[id]/edit" />
-            <Stack.Screen name="stamps/[id]" />
-            <Stack.Screen name="parking/[id]" />
-          </Stack>
-          <StatusBar style="light" />
-        </ThemeProvider>
-        <QueryFocusBridge />
-        <QueryAuthBridge />
-      </AuthProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AuthProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen name="onboarding" />
+              <Stack.Screen name="login" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="profile/edit" />
+              <Stack.Screen name="profile/[userId]" />
+              <Stack.Screen name="tours/[id]/index" />
+              <Stack.Screen name="tours/[id]/edit" />
+              <Stack.Screen name="stamps/[id]" />
+              <Stack.Screen name="parking/[id]" />
+            </Stack>
+            <StatusBar style="light" />
+          </ThemeProvider>
+          <QueryFocusBridge />
+          <QueryAuthBridge />
+        </AuthProvider>
+      </GestureHandlerRootView>
     </QueryClientProvider>
   );
 }
