@@ -21,7 +21,7 @@ const PLATFORM_SCALE_PROFILES = [
   },
   {
     platform: 'android',
-    scale: Number.parseFloat(process.env.MAP_MARKER_SCALE_ANDROID || '1.25'),
+    scale: Number.parseFloat(process.env.MAP_MARKER_SCALE_ANDROID || '.7'),
   },
 ];
 
