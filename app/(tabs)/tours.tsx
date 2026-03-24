@@ -1,0 +1,384 @@
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import React, { useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import type { Tour } from '@/lib/api';
+import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
+
+function formatDistance(distanceMeters: number | null) {
+  if (distanceMeters === null || !Number.isFinite(distanceMeters)) {
+    return '-- km';
+  }
+
+  return `${(distanceMeters / 1000).toFixed(1).replace('.', ',')} km`;
+}
+
+function formatDuration(durationSeconds: number | null) {
+  if (durationSeconds === null || !Number.isFinite(durationSeconds)) {
+    return '--:-- h';
+  }
+
+  const totalMinutes = Math.max(1, Math.round(durationSeconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes} min`;
+  }
+
+  return `${hours}:${String(minutes).padStart(2, '0')} h`;
+}
+
+function formatElevation(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return '-- m';
+  }
+
+  return `${Math.round(value)} m`;
+}
+
+function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+      <View style={styles.cardHeaderRow}>
+        <Text numberOfLines={1} style={styles.cardTitle}>
+          {item.name}
+        </Text>
+        <Feather color="#8b957f" name="chevron-right" size={18} />
+      </View>
+
+      <Text style={styles.cardMeta}>
+        {`${formatDistance(item.distance)} • ${formatDuration(item.duration)} • ${item.stampCount ?? 0} Stempel`}
+      </Text>
+
+      <View style={styles.cardFooterRow}>
+        <Text style={styles.cardFooterText}>{`↑${formatElevation(item.totalElevationGain)} • ↓${formatElevation(item.totalElevationLoss)}`}</Text>
+        <Text style={styles.cardFooterTextMuted}>{item.createdAt ? new Date(item.createdAt).toLocaleDateString('de-DE') : ''}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+export default function ToursTabScreen() {
+  const router = useRouter();
+  const [query, setQuery] = useState('');
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const { data, error, isPending, isFetching, refetch } = useToursOverviewQuery();
+  const createTourMutation = useCreateTourMutation();
+  const tours = useMemo(() => data ?? [], [data]);
+
+  const filteredTours = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      return tours;
+    }
+
+    return tours.filter((tour) => tour.name.toLowerCase().includes(normalized));
+  }, [query, tours]);
+
+  const blockingError = !data ? error : null;
+
+  const handleQuickstart = async () => {
+    try {
+      const created = await createTourMutation.mutateAsync({
+        name: 'Neue Tour',
+        idListTravelTimes: '',
+      });
+
+      router.push(`/tours/${encodeURIComponent(created.ID)}/edit` as never);
+    } catch (nextError) {
+      Alert.alert(
+        'Tour konnte nicht erstellt werden',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    }
+  };
+
+  if (isPending && !data) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centered}>
+          <ActivityIndicator color="#2e6b4b" size="large" />
+          <Text style={styles.helperText}>Lade Touren...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (blockingError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>Touren konnten nicht geladen werden</Text>
+          <Text style={styles.errorBody}>{blockingError.message}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <FlatList
+        contentContainerStyle={styles.listContent}
+        data={filteredTours}
+        keyExtractor={(item) => item.ID}
+        ListEmptyComponent={
+          <View style={styles.emptyStateWrap}>
+            <Text style={styles.emptyStateTitle}>Keine Touren gefunden</Text>
+            <Text style={styles.emptyStateBody}>Passe die Suche an oder erstelle eine neue Tour.</Text>
+          </View>
+        }
+        ListHeaderComponent={
+          <View style={styles.headerWrap}>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>Touren</Text>
+              <Text style={styles.totalLabel}>{`${tours.length} gesamt`}</Text>
+            </View>
+
+            <Pressable onPress={handleQuickstart} style={({ pressed }) => [pressed && styles.pressed]}>
+              <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
+                <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
+                <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
+                <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
+              </LinearGradient>
+            </Pressable>
+
+            <View style={styles.searchShell}>
+              <Feather color="#6d7d6e" name="search" size={14} />
+              <TextInput
+                onChangeText={setQuery}
+                placeholder="Suche nach Tourname"
+                placeholderTextColor="#7b8776"
+                style={styles.searchInput}
+                value={query}
+              />
+            </View>
+
+            {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
+          </View>
+        }
+        refreshControl={
+          <RefreshControl
+            onRefresh={() => {
+              void (async () => {
+                setIsPullRefreshing(true);
+                try {
+                  await refetch();
+                } finally {
+                  setIsPullRefreshing(false);
+                }
+              })();
+            }}
+            refreshing={isPullRefreshing}
+            tintColor="#2e6b4b"
+          />
+        }
+        renderItem={({ item }) => (
+          <View style={styles.cardRow}>
+            <TourCard item={item} onPress={() => router.push(`/tours/${encodeURIComponent(item.ID)}` as never)} />
+          </View>
+        )}
+        showsVerticalScrollIndicator={false}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f3ee',
+  },
+  listContent: {
+    paddingTop: 20,
+    paddingBottom: 220,
+  },
+  headerWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    gap: 12,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: {
+    color: '#1e2a1e',
+    fontSize: 24,
+    lineHeight: 30,
+    fontFamily: 'serif',
+  },
+  totalLabel: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  quickstartCard: {
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 6,
+  },
+  quickstartEyebrow: {
+    color: '#f5f3ee',
+    fontSize: 12,
+    lineHeight: 16,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  quickstartTitle: {
+    color: '#f5f3ee',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '700',
+  },
+  quickstartBody: {
+    color: '#f5f3ee',
+    fontSize: 12,
+    lineHeight: 16,
+    opacity: 0.9,
+  },
+  searchShell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  searchInput: {
+    flex: 1,
+    color: '#2e3a2e',
+    fontSize: 13,
+    lineHeight: 16,
+    paddingVertical: 0,
+  },
+  cardRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+  },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+    gap: 6,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  cardTitle: {
+    flex: 1,
+    color: '#1e2a1e',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  cardMeta: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  cardFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  cardFooterText: {
+    color: '#445244',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  cardFooterTextMuted: {
+    color: '#8b957f',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  refreshHint: {
+    color: '#4d6d56',
+    fontSize: 13,
+  },
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 12,
+  },
+  helperText: {
+    color: '#496149',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  errorTitle: {
+    color: '#3d2a15',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  errorBody: {
+    color: '#655d4a',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  emptyStateWrap: {
+    marginHorizontal: 20,
+    marginTop: 8,
+    backgroundColor: '#fffaf0',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 6,
+  },
+  emptyStateTitle: {
+    color: '#2e3a2e',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  emptyStateBody: {
+    color: '#6b7a6b',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  pressed: {
+    opacity: 0.85,
+  },
+});

@@ -1,21 +1,31 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  createTour,
+  fetchAllPointsOfInterest,
   fetchParkingDetail,
   fetchFriendsOverview,
   fetchLatestVisitedStamp,
   fetchMapData,
   fetchStampDetail,
+  fetchTourById,
+  fetchTourPath,
+  fetchTours,
   fetchProfileOverview,
   fetchUserProfileOverview,
   fetchStampboxes,
+  updateTourByPOIList,
   type FriendsOverviewData,
   type LatestVisitedStamp,
   type MapData,
   type ParkingDetailData,
+  type PointOfInterest,
   type ProfileOverviewData,
   type StampDetailData,
   type Stampbox,
+  type Tour,
+  type TourPathEntry,
+  type TourUpdateResponse,
   type UserProfileOverviewData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
@@ -29,6 +39,11 @@ type AuthClaims = {
 type StampsOverviewData = {
   stamps: Stampbox[];
   lastVisited: LatestVisitedStamp | null;
+};
+
+export type TourDetailData = {
+  tour: Tour;
+  path: TourPathEntry[];
 };
 
 export async function fetchStampsOverviewData(accessToken: string, userId?: string): Promise<StampsOverviewData> {
@@ -46,6 +61,10 @@ export async function fetchStampsOverviewData(accessToken: string, userId?: stri
 export const queryKeys = {
   stampsOverview: (userId?: string) => ['stamps-overview', userId ?? 'anonymous'] as const,
   mapData: (userId?: string) => ['map-data', userId ?? 'anonymous'] as const,
+  toursOverview: (userId?: string) => ['tours-overview', userId ?? 'anonymous'] as const,
+  tourDetail: (userId: string | undefined, tourId: string | undefined) =>
+    ['tour-detail', userId ?? 'anonymous', tourId ?? 'unknown'] as const,
+  pointsOfInterest: (userId?: string) => ['points-of-interest', userId ?? 'anonymous'] as const,
   friendsOverview: (userId?: string) => ['friends-overview', userId ?? 'anonymous'] as const,
   profileOverview: (userId?: string) => ['profile-overview', userId ?? 'anonymous'] as const,
   userProfileOverview: (userId: string | undefined, targetUserId: string | undefined) =>
@@ -441,5 +460,129 @@ export function useUserProfileOverviewQuery(targetUserId?: string) {
       } satisfies UserProfileOverviewData;
     },
     queryFn: () => authorizedRequest((token) => fetchUserProfileOverview(token, targetUserId!)),
+  });
+}
+
+export function useToursOverviewQuery() {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useQuery<Tour[]>({
+    queryKey: queryKeys.toursOverview(claims?.sub),
+    enabled: Boolean(accessToken && isAuthenticated),
+    queryFn: () =>
+      authorizedRequest((token) =>
+        fetchTours(token, claims?.sub ? [claims.sub] : [])
+      ),
+  });
+}
+
+export function useTourDetailQuery(tourId?: string) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+  const queryClient = useQueryClient();
+
+  return useQuery<TourDetailData>({
+    queryKey: queryKeys.tourDetail(claims?.sub, tourId),
+    enabled: Boolean(accessToken && isAuthenticated && tourId),
+    placeholderData: () => {
+      if (!tourId) {
+        return undefined;
+      }
+
+      const cachedTours = queryClient.getQueryData<Tour[]>(queryKeys.toursOverview(claims?.sub)) ?? [];
+      const cachedTour = cachedTours.find((tour) => tour.ID === tourId);
+      if (!cachedTour) {
+        return undefined;
+      }
+
+      return {
+        tour: cachedTour,
+        path: [],
+      } satisfies TourDetailData;
+    },
+    queryFn: () =>
+      authorizedRequest(async (token) => {
+        const [tour, path] = await Promise.all([
+          fetchTourById(token, tourId!, claims?.sub ? [claims.sub] : []),
+          fetchTourPath(token, tourId!),
+        ]);
+
+        return { tour, path } satisfies TourDetailData;
+      }),
+  });
+}
+
+export function usePointsOfInterestQuery() {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useQuery<PointOfInterest[]>({
+    queryKey: queryKeys.pointsOfInterest(claims?.sub),
+    enabled: Boolean(accessToken && isAuthenticated),
+    queryFn: () => authorizedRequest((token) => fetchAllPointsOfInterest(token)),
+  });
+}
+
+export function useCreateTourMutation() {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const queryClient = useQueryClient();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useMutation<
+    Tour,
+    Error,
+    {
+      name: string;
+      idListTravelTimes?: string;
+    }
+  >({
+    mutationFn: (variables) =>
+      authorizedRequest((token) =>
+        createTour(token, {
+          name: variables.name,
+          idListTravelTimes: variables.idListTravelTimes ?? '',
+          groupFilterStampings: claims?.sub ?? undefined,
+        })
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.toursOverview(claims?.sub) });
+    },
+  });
+}
+
+export function useUpdateTourByPOIListMutation(tourId?: string) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const queryClient = useQueryClient();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useMutation<
+    TourUpdateResponse,
+    Error,
+    {
+      poiIds: string[];
+    }
+  >({
+    mutationFn: (variables) => {
+      if (!tourId) {
+        throw new Error('Tour ID is required');
+      }
+
+      return authorizedRequest((token) =>
+        updateTourByPOIList(token, {
+          TourID: tourId,
+          POIList: variables.poiIds.join(';'),
+        })
+      );
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.toursOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tourDetail(claims?.sub, tourId) }),
+      ]);
+    },
   });
 }

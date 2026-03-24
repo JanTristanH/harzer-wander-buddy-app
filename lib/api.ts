@@ -52,6 +52,40 @@ type TravelTimeRow = {
   elevationLoss?: number;
 };
 
+type TourPathRow = {
+  tour_ID?: string;
+  travelTime_ID?: string;
+  rank?: number | string;
+  travelTime?: TravelTimeRow;
+};
+
+type TourRow = {
+  ID: string;
+  name?: string;
+  distance?: number | string;
+  duration?: number | string;
+  stampCount?: number | string;
+  idListTravelTimes?: string;
+  totalElevationGain?: number | string;
+  totalElevationLoss?: number | string;
+  createdBy?: string;
+  createdAt?: string;
+  groupFilterStampings?: string;
+  AverageGroupStampings?: number | string;
+};
+
+type PointOfInterestRow = {
+  ID: string;
+  name?: string;
+  poiType?: string;
+  orderBy?: string;
+  latitude?: number | string;
+  longitude?: number | string;
+  heroImageUrl?: string;
+  imageCaption?: string;
+  description?: string;
+};
+
 export type ParkingSpot = {
   ID: string;
   name?: string;
@@ -342,6 +376,82 @@ export type MapData = {
   parkingSpots: MapParkingSpot[];
 };
 
+export type Tour = {
+  ID: string;
+  name: string;
+  distance: number | null;
+  duration: number | null;
+  stampCount: number | null;
+  idListTravelTimes: string;
+  totalElevationGain: number | null;
+  totalElevationLoss: number | null;
+  createdBy?: string;
+  createdAt?: string;
+  groupFilterStampings?: string;
+  averageGroupStampings: number | null;
+};
+
+export type TourPathEntry = {
+  travelTime_ID: string;
+  tour_ID: string;
+  rank: number;
+  travelTime?: {
+    ID: string;
+    fromPoi?: string;
+    toPoi?: string;
+    durationSeconds: number | null;
+    distanceMeters: number | null;
+    travelMode?: string;
+    elevationGain: number | null;
+    elevationLoss: number | null;
+  };
+};
+
+export type TourDetailResponse = {
+  stampCount: number | null;
+  distance: number | null;
+  duration: number | null;
+  id: string;
+  groupSize: number | null;
+  averageGroupStampings: number | null;
+  path: TourPathEntry[];
+};
+
+export type TourUpdateResponse = {
+  ID: string;
+  distance: number | null;
+  duration: number | null;
+  stampCount: number | null;
+  idListTravelTimes: string;
+  totalElevationGain: number | null;
+  totalElevationLoss: number | null;
+  path: TourPathEntry[];
+};
+
+export type HikingRouteResult = {
+  id: string;
+  stampCount: number | null;
+  distance: number | null;
+  duration: number | null;
+  path: TourPathEntry[];
+};
+
+export type HikingRouteCalculationResponse = {
+  results: HikingRouteResult[];
+};
+
+export type PointOfInterest = {
+  ID: string;
+  name: string;
+  poiType: string;
+  orderBy?: string;
+  latitude?: number;
+  longitude?: number;
+  heroImageUrl?: string;
+  imageCaption?: string;
+  description?: string;
+};
+
 export type RouteMetrics = {
   distanceKm: number | null;
   durationMinutes: number | null;
@@ -389,6 +499,97 @@ function escapeODataString(value: string) {
   return value.replace(/'/g, "''");
 }
 
+export class HttpStatusError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, message: string, body = '') {
+    super(message);
+    this.name = 'HttpStatusError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+function parsePotentialJson(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+
+  if (
+    !(trimmed.startsWith('{') && trimmed.endsWith('}')) &&
+    !(trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    return value;
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function unwrapODataEnvelope(payload: unknown, functionName?: string): unknown {
+  if (payload === null || payload === undefined) {
+    return payload;
+  }
+
+  if (typeof payload === 'string') {
+    const parsed = parsePotentialJson(payload);
+    if (parsed === payload) {
+      return payload;
+    }
+
+    return unwrapODataEnvelope(parsed, functionName);
+  }
+
+  if (typeof payload !== 'object') {
+    return payload;
+  }
+
+  const record = payload as Record<string, unknown>;
+
+  if (functionName && functionName in record) {
+    return unwrapODataEnvelope(record[functionName], functionName);
+  }
+
+  if ('oData' in record) {
+    return unwrapODataEnvelope(record.oData, functionName);
+  }
+
+  if ('d' in record) {
+    return unwrapODataEnvelope(record.d, functionName);
+  }
+
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === 'value') {
+    return unwrapODataEnvelope(record.value, functionName);
+  }
+
+  return payload;
+}
+
+function parseODataFunctionResult<T>(payload: unknown, functionName: string): T {
+  const unwrapped = unwrapODataEnvelope(payload, functionName);
+
+  if (typeof unwrapped === 'string') {
+    const parsed = parsePotentialJson(unwrapped);
+    return (parsed as T) ?? (unwrapped as T);
+  }
+
+  return unwrapped as T;
+}
+
+async function readErrorBody(response: Response) {
+  try {
+    return (await response.text()).trim();
+  } catch {
+    return '';
+  }
+}
+
 async function fetchOData<T>(accessToken: string, url: string) {
   const response = await fetch(url, {
     headers: {
@@ -397,14 +598,19 @@ async function fetchOData<T>(accessToken: string, url: string) {
     },
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const error = new Error('Unauthorized');
     error.name = 'UnauthorizedError';
     throw error;
   }
 
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
+    const errorBody = await readErrorBody(response);
+    throw new HttpStatusError(
+      response.status,
+      errorBody || `Request failed with status ${response.status}`,
+      errorBody
+    );
   }
 
   return (await response.json()) as T;
@@ -425,15 +631,19 @@ async function mutateOData<T>(
     },
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const error = new Error('Unauthorized');
     error.name = 'UnauthorizedError';
     throw error;
   }
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    const errorBody = await readErrorBody(response);
+    throw new HttpStatusError(
+      response.status,
+      errorBody || `Request failed with status ${response.status}`,
+      errorBody
+    );
   }
 
   if (response.status === 204) {
@@ -540,6 +750,68 @@ function toFiniteNumber(value: unknown) {
   }
 
   return null;
+}
+
+function toRoundedNumberOrNull(value: unknown) {
+  const parsed = toFiniteNumber(value);
+  return parsed === null ? null : Math.round(parsed);
+}
+
+function normalizeTravelTime(value?: TravelTimeRow) {
+  if (!value?.ID) {
+    return undefined;
+  }
+
+  return {
+    ID: value.ID,
+    fromPoi: safeTrim(value.fromPoi) || undefined,
+    toPoi: safeTrim(value.toPoi) || undefined,
+    durationSeconds: toRoundedNumberOrNull(value.durationSeconds),
+    distanceMeters: toRoundedNumberOrNull(value.distanceMeters),
+    travelMode: safeTrim(value.travelMode) || undefined,
+    elevationGain: toFiniteNumber(value.elevationGain),
+    elevationLoss: toFiniteNumber(value.elevationLoss),
+  } satisfies TourPathEntry['travelTime'];
+}
+
+function normalizeTourPathEntry(value: TourPathRow) {
+  return {
+    travelTime_ID: safeTrim(value.travelTime_ID),
+    tour_ID: safeTrim(value.tour_ID),
+    rank: toRoundedNumberOrNull(value.rank) ?? 0,
+    travelTime: normalizeTravelTime(value.travelTime),
+  } satisfies TourPathEntry;
+}
+
+function normalizeTourRow(value: TourRow) {
+  return {
+    ID: value.ID,
+    name: safeTrim(value.name) || 'Unbenannte Tour',
+    distance: toFiniteNumber(value.distance),
+    duration: toFiniteNumber(value.duration),
+    stampCount: toRoundedNumberOrNull(value.stampCount),
+    idListTravelTimes: safeTrim(value.idListTravelTimes),
+    totalElevationGain: toFiniteNumber(value.totalElevationGain),
+    totalElevationLoss: toFiniteNumber(value.totalElevationLoss),
+    createdBy: safeTrim(value.createdBy) || undefined,
+    createdAt: safeTrim(value.createdAt) || undefined,
+    groupFilterStampings: safeTrim(value.groupFilterStampings) || undefined,
+    averageGroupStampings: toRoundedNumberOrNull(value.AverageGroupStampings),
+  } satisfies Tour;
+}
+
+function normalizePointOfInterestRow(value: PointOfInterestRow) {
+  return {
+    ID: value.ID,
+    name: safeTrim(value.name) || value.ID,
+    poiType: safeTrim(value.poiType) || 'unknown',
+    orderBy: safeTrim(value.orderBy) || undefined,
+    latitude: toFiniteNumber(value.latitude) ?? undefined,
+    longitude: toFiniteNumber(value.longitude) ?? undefined,
+    heroImageUrl: safeTrim(value.heroImageUrl) || undefined,
+    imageCaption: safeTrim(value.imageCaption) || undefined,
+    description: safeTrim(value.description) || undefined,
+  } satisfies PointOfInterest;
 }
 
 function computeCompletionPercent(visitedCount: number, totalCount: number) {
@@ -1262,6 +1534,282 @@ export async function fetchMapData(
       kind: 'parking' as const,
     })),
   } satisfies MapData;
+}
+
+function normalizeTourDetailResponse(rawValue: unknown) {
+  const value = (rawValue && typeof rawValue === 'object' ? rawValue : {}) as Record<string, unknown>;
+  const path = Array.isArray(value.path) ? value.path : [];
+
+  return {
+    stampCount: toRoundedNumberOrNull(value.stampCount),
+    distance: toFiniteNumber(value.distance),
+    duration: toFiniteNumber(value.duration),
+    id: safeTrim(value.id),
+    groupSize: toRoundedNumberOrNull(value.groupSize),
+    averageGroupStampings: toRoundedNumberOrNull(value.averageGroupStampings ?? value.AverageGroupStampings),
+    path: path
+      .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+      .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+  } satisfies TourDetailResponse;
+}
+
+function normalizeTourUpdateResponse(rawValue: unknown) {
+  const value = (rawValue && typeof rawValue === 'object' ? rawValue : {}) as Record<string, unknown>;
+  const path = Array.isArray(value.path) ? value.path : [];
+
+  return {
+    ID: safeTrim(value.ID),
+    distance: toFiniteNumber(value.distance),
+    duration: toFiniteNumber(value.duration),
+    stampCount: toRoundedNumberOrNull(value.stampCount),
+    idListTravelTimes: safeTrim(value.idListTravelTimes),
+    totalElevationGain: toFiniteNumber(value.totalElevationGain),
+    totalElevationLoss: toFiniteNumber(value.totalElevationLoss),
+    path: path
+      .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+      .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+  } satisfies TourUpdateResponse;
+}
+
+function normalizeHikingRouteCalculationResponse(rawValue: unknown) {
+  const value = (rawValue && typeof rawValue === 'object' ? rawValue : {}) as Record<string, unknown>;
+  const rawResults = Array.isArray(value.results) ? value.results : [];
+
+  return {
+    results: rawResults
+      .map((rawResult) => {
+        const result =
+          rawResult && typeof rawResult === 'object' ? (rawResult as Record<string, unknown>) : {};
+        const rawPath = Array.isArray(result.path) ? result.path : [];
+
+        return {
+          id: safeTrim(result.id),
+          stampCount: toRoundedNumberOrNull(result.stampCount),
+          distance: toFiniteNumber(result.distance),
+          duration: toFiniteNumber(result.duration),
+          path: rawPath
+            .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+            .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+        } satisfies HikingRouteResult;
+      })
+      .filter((result) => Boolean(result.id)),
+  } satisfies HikingRouteCalculationResponse;
+}
+
+export async function fetchTours(accessToken: string, groupUserIds: string[] = []) {
+  const groupFilter = normalizeIdList(groupUserIds).join(',');
+  const rows = await fetchCollection<TourRow>(accessToken, 'Tours', {
+    select: [
+      'ID',
+      'name',
+      'distance',
+      'duration',
+      'stampCount',
+      'idListTravelTimes',
+      'totalElevationGain',
+      'totalElevationLoss',
+      'createdBy',
+      'createdAt',
+      'groupFilterStampings',
+      'AverageGroupStampings',
+    ],
+    orderBy: 'createdAt desc',
+    top: 250,
+    ...(groupFilter ? { filter: { groupFilterStampings: { ne: groupFilter } } } : {}),
+  });
+
+  return rows.map((row) => normalizeTourRow(row));
+}
+
+export async function fetchTourById(accessToken: string, tourId: string, groupUserIds: string[] = []) {
+  const normalizedTourId = safeTrim(tourId);
+  if (!normalizedTourId) {
+    throw new Error('Tour ID is required');
+  }
+
+  const groupFilter = normalizeIdList(groupUserIds).join(',');
+  const filters = [
+    `ID eq guid'${escapeODataString(normalizedTourId)}'`,
+    `ID eq ${normalizedTourId}`,
+  ];
+
+  for (const idFilter of filters) {
+    const filter = groupFilter
+      ? `${idFilter} and groupFilterStampings ne '${escapeODataString(groupFilter)}'`
+      : idFilter;
+
+    try {
+      const rows = await fetchCollection<TourRow>(accessToken, 'Tours', {
+        select: [
+          'ID',
+          'name',
+          'distance',
+          'duration',
+          'stampCount',
+          'idListTravelTimes',
+          'totalElevationGain',
+          'totalElevationLoss',
+          'createdBy',
+          'createdAt',
+          'groupFilterStampings',
+          'AverageGroupStampings',
+        ],
+        top: 1,
+        filter,
+      });
+
+      if (rows.length > 0) {
+        return normalizeTourRow(rows[0]);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  throw new HttpStatusError(404, 'Tour not found');
+}
+
+export async function createTour(
+  accessToken: string,
+  payload: {
+    name: string;
+    idListTravelTimes?: string;
+    groupFilterStampings?: string;
+  }
+) {
+  const response = await mutateOData<unknown>(accessToken, buildUrl('Tours'), {
+    method: 'POST',
+    body: JSON.stringify({
+      name: safeTrim(payload.name) || 'Neue Tour',
+      idListTravelTimes: safeTrim(payload.idListTravelTimes),
+      ...(safeTrim(payload.groupFilterStampings)
+        ? { groupFilterStampings: safeTrim(payload.groupFilterStampings) }
+        : {}),
+    }),
+  });
+
+  const parsed = unwrapODataEnvelope(response);
+  if (!parsed || typeof parsed !== 'object' || !('ID' in parsed)) {
+    throw new Error('Unexpected create tour response payload');
+  }
+
+  return normalizeTourRow(parsed as TourRow);
+}
+
+export async function fetchTourPath(accessToken: string, tourId: string) {
+  const normalizedTourId = safeTrim(tourId);
+  if (!normalizedTourId) {
+    return [] as TourPathEntry[];
+  }
+
+  const filters = [
+    `tour_ID eq guid'${escapeODataString(normalizedTourId)}'`,
+    `tour_ID eq ${normalizedTourId}`,
+  ];
+
+  for (const filter of filters) {
+    try {
+      const rows = await fetchCollection<TourPathRow>(accessToken, 'Tour2TravelTime', [
+        ['$filter', filter],
+        ['$expand', 'travelTime'],
+        ['$orderby', 'rank asc'],
+        ['$top', 600],
+      ]);
+
+      return rows
+        .map((row) => normalizeTourPathEntry(row))
+        .sort((left, right) => left.rank - right.rank);
+    } catch {
+      continue;
+    }
+  }
+
+  return [] as TourPathEntry[];
+}
+
+export async function fetchTransientTourByIdListTravelTimes(
+  accessToken: string,
+  idListTravelTimes: string
+) {
+  const value = safeTrim(idListTravelTimes);
+  const payload = await fetchOData<unknown>(
+    accessToken,
+    buildUrl('getTourByIdListTravelTimes', [
+      ['idListTravelTimes', `'${escapeODataString(value)}'`],
+    ])
+  );
+  const parsed = parseODataFunctionResult<unknown>(payload, 'getTourByIdListTravelTimes');
+  return normalizeTourDetailResponse(parsed);
+}
+
+export async function updateTourByPOIList(
+  accessToken: string,
+  payload: {
+    TourID: string;
+    POIList: string;
+  }
+) {
+  const response = await mutateOData<unknown>(accessToken, buildUrl('updateTourByPOIList'), {
+    method: 'POST',
+    body: JSON.stringify({
+      TourID: safeTrim(payload.TourID),
+      POIList: safeTrim(payload.POIList),
+    }),
+  });
+
+  const parsed = parseODataFunctionResult<unknown>(response, 'updateTourByPOIList');
+  return normalizeTourUpdateResponse(parsed);
+}
+
+export async function fetchAllPointsOfInterest(accessToken: string) {
+  const rows = await fetchCollection<PointOfInterestRow>(accessToken, 'AllPointsOfInterest', {
+    select: [
+      'ID',
+      'name',
+      'poiType',
+      'orderBy',
+      'latitude',
+      'longitude',
+      'heroImageUrl',
+      'imageCaption',
+      'description',
+    ],
+    orderBy: 'orderBy asc',
+    top: 1000,
+  });
+
+  return rows.map((row) => normalizePointOfInterestRow(row));
+}
+
+export async function calculateHikingRoute(
+  accessToken: string,
+  payload: {
+    maxDepth: number;
+    maxDuration: number;
+    maxDistance: number;
+    minStampCount: number;
+    allowDriveInRoute: boolean;
+    latitudeStart: string;
+    longitudeStart: string;
+    groupFilterStampings?: string;
+  }
+) {
+  const response = await fetchOData<unknown>(
+    accessToken,
+    buildUrl('calculateHikingRoute', [
+      ['maxDepth', payload.maxDepth],
+      ['maxDuration', payload.maxDuration],
+      ['maxDistance', payload.maxDistance],
+      ['minStampCount', payload.minStampCount],
+      ['allowDriveInRoute', payload.allowDriveInRoute],
+      ['latitudeStart', payload.latitudeStart],
+      ['longitudeStart', payload.longitudeStart],
+      ['groupFilterStampings', payload.groupFilterStampings],
+    ])
+  );
+
+  const parsed = parseODataFunctionResult<unknown>(response, 'calculateHikingRoute');
+  return normalizeHikingRouteCalculationResponse(parsed);
 }
 
 export async function fetchLatestVisitedStamp(accessToken: string, currentUserId?: string) {
@@ -2111,15 +2659,19 @@ export async function uploadAttachment(
     body: fileBlob,
   });
 
-  if (uploadResponse.status === 401 || uploadResponse.status === 403) {
+  if (uploadResponse.status === 401) {
     const error = new Error('Unauthorized');
     error.name = 'UnauthorizedError';
     throw error;
   }
 
   if (!uploadResponse.ok) {
-    const errorBody = await uploadResponse.text();
-    throw new Error(errorBody || `Request failed with status ${uploadResponse.status}`);
+    const errorBody = await readErrorBody(uploadResponse);
+    throw new HttpStatusError(
+      uploadResponse.status,
+      errorBody || `Request failed with status ${uploadResponse.status}`,
+      errorBody
+    );
   }
 
   return {

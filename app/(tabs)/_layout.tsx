@@ -54,6 +54,15 @@ export default function TabLayout() {
           }}
         />
         <Tabs.Screen
+          name="tours"
+          options={{
+            title: 'Touren',
+            tabBarIcon: ({ color, focused }) => (
+              <FloatingBarIcon color={color} focused={focused} name="tours" size={28} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="friends"
           options={{
             title: 'Freunde',

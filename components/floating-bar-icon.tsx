@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 
-type FloatingBarIconName = 'index' | 'map' | 'friends' | 'profile';
+type FloatingBarIconName = 'index' | 'map' | 'tours' | 'friends' | 'profile';
 
 const ICONS: Record<FloatingBarIconName, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
   index: {
@@ -10,6 +10,10 @@ const ICONS: Record<FloatingBarIconName, { active: keyof typeof Ionicons.glyphMa
   map: {
     active: 'map',
     inactive: 'map-outline',
+  },
+  tours: {
+    active: 'navigate',
+    inactive: 'navigate-outline',
   },
   friends: {
     active: 'people',
