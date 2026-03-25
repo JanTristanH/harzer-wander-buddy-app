@@ -2,7 +2,7 @@ import { Feather } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -109,6 +109,7 @@ export default function FriendsScreen() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const searchInputRef = useRef<TextInput | null>(null);
   const { data, error, isFetching, isPending, refetch } = useFriendsOverviewQuery();
   const isRefreshing = isFetching && !isPending;
   const blockingError = !data ? error : null;
@@ -181,6 +182,12 @@ export default function FriendsScreen() {
     setSearchError(null);
     setIsSearchLoading(false);
     setSubmittingUserId(null);
+  }, []);
+
+  const handleSearchModalShow = useCallback(() => {
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 50);
   }, []);
 
   const handleSearchProfilePress = useCallback(
@@ -520,6 +527,7 @@ export default function FriendsScreen() {
 
         <Modal
           animationType="fade"
+          onShow={handleSearchModalShow}
           transparent
           visible={isSearchModalVisible}
           onRequestClose={closeSearchModal}>
@@ -544,6 +552,7 @@ export default function FriendsScreen() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   autoFocus
+                  ref={searchInputRef}
                   onChangeText={setSearchQuery}
                   placeholder="Name oder Nutzername suchen"
                   placeholderTextColor="#6B7A6B"
@@ -768,8 +777,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginBottom: 12,
+    minHeight: 46,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 11,
   },
   searchInputIconWrap: {
     alignItems: 'center',

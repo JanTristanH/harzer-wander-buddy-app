@@ -29,6 +29,7 @@ import {
   searchUsers,
   updateCurrentUserProfile,
   uploadAttachment,
+  type ProfileOverviewData,
   type SearchUserResult,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
@@ -118,6 +119,7 @@ export default function OnboardingScreen() {
     signup,
     isLoading,
     logout,
+    preloadCurrentUserProfile,
     setCurrentUserProfile,
   } = useAuth();
   const claims = useIdTokenClaims<LoginClaims>();
@@ -389,13 +391,28 @@ export default function OnboardingScreen() {
           picture: nextPicture,
         });
 
-        setCurrentUserProfile({
+        const refreshedProfile = await preloadCurrentUserProfile();
+        const resolvedProfile = refreshedProfile || {
           id: currentUserProfile?.id || claims?.sub || nextName,
           name: nextName,
           picture: nextPicture,
-        });
-        setProfileName(nextName);
-        setProfilePicture(nextPicture || null);
+        };
+
+        setCurrentUserProfile(resolvedProfile);
+        queryClient.setQueryData<ProfileOverviewData>(
+          queryKeys.profileOverview(claims?.sub),
+          (currentProfileOverview) =>
+            currentProfileOverview
+              ? {
+                  ...currentProfileOverview,
+                  name: resolvedProfile.name,
+                  picture: resolvedProfile.picture,
+                }
+              : currentProfileOverview
+        );
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
+        setProfileName(resolvedProfile.name);
+        setProfilePicture(resolvedProfile.picture || null);
         setSelectedProfileImage(null);
         setProfileSaveError(null);
         return true;
@@ -432,8 +449,10 @@ export default function OnboardingScreen() {
     currentUserProfile?.id,
     isAuthenticated,
     logout,
+    preloadCurrentUserProfile,
     profileName,
     profilePicture,
+    queryClient,
     selectedProfileImage,
     setCurrentUserProfile,
   ]);

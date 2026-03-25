@@ -2,8 +2,8 @@ import { Feather } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigation, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -22,6 +22,7 @@ import {
   updateCurrentUserProfile,
   uploadAttachment,
   type CurrentUserProfileData,
+  type ProfileOverviewData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
@@ -41,6 +42,7 @@ type ProfileClaims = {
 
 function ProfileEditContent() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { accessToken, currentUserProfile, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims>();
   const queryClient = useQueryClient();
@@ -50,6 +52,7 @@ function ProfileEditContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const allowLeavingRef = useRef(false);
 
   const loadProfile = useCallback(async () => {
     if (!accessToken) {
@@ -112,6 +115,11 @@ function ProfileEditContent() {
     return 'Du kannst deinen Anzeigenamen aendern und ein neues Profilbild aus deiner Mediathek hochladen.';
   }, [selectedImage]);
 
+  const closeScreen = useCallback(() => {
+    allowLeavingRef.current = true;
+    router.back();
+  }, [router]);
+
   const handlePickImage = useCallback(async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
@@ -153,7 +161,7 @@ function ProfileEditContent() {
     }
 
     if (!hasChanges) {
-      router.back();
+      closeScreen();
       return;
     }
 
@@ -171,14 +179,28 @@ function ProfileEditContent() {
         name: nextName,
         picture: nextPicture,
       });
-      setCurrentUserProfile({
+      const refreshedProfile = await preloadCurrentUserProfile();
+      const resolvedProfile = refreshedProfile || {
         id: profile.id,
         name: nextName,
         picture: nextPicture,
-      });
+      };
+
+      setCurrentUserProfile(resolvedProfile);
+      queryClient.setQueryData<ProfileOverviewData>(
+        queryKeys.profileOverview(claims?.sub),
+        (currentProfileOverview) =>
+          currentProfileOverview
+            ? {
+                ...currentProfileOverview,
+                name: resolvedProfile.name,
+                picture: resolvedProfile.picture,
+              }
+            : currentProfileOverview
+      );
       await queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
 
-      router.back();
+      closeScreen();
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -195,15 +217,78 @@ function ProfileEditContent() {
   }, [
     accessToken,
     claims?.sub,
+    closeScreen,
     hasChanges,
     logout,
     profile,
+    preloadCurrentUserProfile,
     queryClient,
-    router,
     selectedImage,
     setCurrentUserProfile,
     trimmedName,
   ]);
+
+  const showLeaveDialog = useCallback((onDiscard: () => void, onSave: () => void) => {
+    Alert.alert(
+      'Aenderungen speichern?',
+      'Du hast ungespeicherte Aenderungen. Moechtest du speichern oder verwerfen?',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        { text: 'Verwerfen', style: 'destructive', onPress: onDiscard },
+        { text: 'Speichern', onPress: onSave },
+      ]
+    );
+  }, []);
+
+  const handleAttemptLeave = useCallback(() => {
+    if (isSaving) {
+      return;
+    }
+
+    if (!hasChanges) {
+      closeScreen();
+      return;
+    }
+
+    showLeaveDialog(
+      () => {
+        closeScreen();
+      },
+      () => {
+        void handleSave();
+      }
+    );
+  }, [closeScreen, hasChanges, handleSave, isSaving, showLeaveDialog]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (allowLeavingRef.current) {
+        return;
+      }
+
+      if (isSaving) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!hasChanges) {
+        return;
+      }
+
+      event.preventDefault();
+      showLeaveDialog(
+        () => {
+          allowLeavingRef.current = true;
+          navigation.dispatch(event.data.action);
+        },
+        () => {
+          void handleSave();
+        }
+      );
+    });
+
+    return unsubscribe;
+  }, [handleSave, hasChanges, isSaving, navigation, showLeaveDialog]);
 
   if (isLoading) {
     return (
@@ -248,7 +333,7 @@ function ProfileEditContent() {
         showsVerticalScrollIndicator={false}>
         <Pressable
           disabled={isSaving}
-          onPress={() => router.back()}
+          onPress={handleAttemptLeave}
           style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
           <Feather color="#1e2a1e" name="arrow-left" size={18} />
         </Pressable>
