@@ -12,7 +12,13 @@ export default function TourEditRedirectScreen() {
       return;
     }
 
-    router.replace(`/tours/${encodeURIComponent(tourId)}` as never);
+    router.replace({
+      pathname: '/tours/[id]',
+      params: {
+        id: tourId,
+        edit: '1',
+      },
+    } as never);
   }, [router, tourId]);
 
   return null;

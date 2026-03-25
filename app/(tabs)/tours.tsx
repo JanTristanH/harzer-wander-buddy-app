@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -58,6 +58,11 @@ function formatElevation(value: number | null) {
   return `${Math.round(value)} m`;
 }
 
+function normalizeUserId(value?: string | null) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
 function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
@@ -84,6 +89,7 @@ export default function ToursTabScreen() {
   const router = useRouter();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
+  const normalizedCurrentUserId = useMemo(() => normalizeUserId(currentUserId), [currentUserId]);
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterKey>('mine');
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
@@ -94,7 +100,10 @@ export default function ToursTabScreen() {
   const filteredTours = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return tours.filter((tour) => {
-      const matchesFilter = activeFilter === 'all' || !currentUserId || tour.createdBy === currentUserId;
+      const matchesFilter =
+        activeFilter === 'all' ||
+        !normalizedCurrentUserId ||
+        normalizeUserId(tour.createdBy) === normalizedCurrentUserId;
       if (!matchesFilter) {
         return false;
       }
@@ -105,11 +114,17 @@ export default function ToursTabScreen() {
 
       return tour.name.toLowerCase().includes(normalized);
     });
-  }, [activeFilter, currentUserId, query, tours]);
+  }, [activeFilter, normalizedCurrentUserId, query, tours]);
 
   const blockingError = !data ? error : null;
   const isMineFilter = activeFilter === 'mine';
   const isSearching = query.trim().length > 0;
+  const handleOpenTour = useCallback(
+    (tour: Tour) => {
+      router.push(`/tours/${encodeURIComponent(tour.ID)}` as never);
+    },
+    [router]
+  );
 
   const handleQuickstart = async () => {
     try {
@@ -118,7 +133,7 @@ export default function ToursTabScreen() {
         idListTravelTimes: '',
       });
 
-      router.push(`/tours/${encodeURIComponent(created.ID)}` as never);
+      handleOpenTour(created);
     } catch (nextError) {
       Alert.alert(
         'Tour konnte nicht erstellt werden',
@@ -236,7 +251,7 @@ export default function ToursTabScreen() {
         }
         renderItem={({ item }) => (
           <View style={styles.cardRow}>
-            <TourCard item={item} onPress={() => router.push(`/tours/${encodeURIComponent(item.ID)}` as never)} />
+            <TourCard item={item} onPress={() => handleOpenTour(item)} />
           </View>
         )}
         showsVerticalScrollIndicator={false}

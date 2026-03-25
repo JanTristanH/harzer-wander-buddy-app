@@ -11,6 +11,8 @@ const generatedMappingFilePath = path.join(rootDir, 'lib', 'map-marker-images.ge
 
 const STAMP_MIN = 1;
 const STAMP_MAX = 222;
+const TOUR_ORDER_MIN = 1;
+const TOUR_ORDER_MAX = 260;
 const BASE_MARKER_WIDTH = 56;
 const BASE_MARKER_HEIGHT = 60;
 
@@ -35,6 +37,27 @@ const PLACEHOLDERS = {
   badgeRx: '__BADGE_RX__',
 };
 
+function formatAlphabeticOrder(position) {
+  if (!Number.isFinite(position) || position <= 0) {
+    return '--';
+  }
+
+  let value = Math.floor(position);
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+
+  return label;
+}
+
+const tourOrderLabels = Array.from(
+  { length: TOUR_ORDER_MAX - TOUR_ORDER_MIN + 1 },
+  (_, index) => formatAlphabeticOrder(index + TOUR_ORDER_MIN)
+);
+
 const markerVariants = [
   {
     kind: 'visited-stamp',
@@ -53,6 +76,12 @@ const markerVariants = [
     fillColor: '#2f7dd7',
     textColor: '#111111',
     labels: ['P'],
+  },
+  {
+    kind: 'tour-order',
+    fillColor: '#1e2a1e',
+    textColor: '#111111',
+    labels: ['--', ...tourOrderLabels],
   },
 ];
 
@@ -148,7 +177,7 @@ function createMappingFile(entries) {
 
 import { Platform, type ImageRequireSource } from 'react-native';
 
-type MarkerVisualKind = 'visited-stamp' | 'open-stamp' | 'parking';
+type MarkerVisualKind = 'visited-stamp' | 'open-stamp' | 'parking' | 'tour-order';
 
 const MAP_MARKER_IMAGE_SOURCE_BY_KEY_IOS: Record<string, ImageRequireSource> = {
 ${iosRecord}
@@ -174,6 +203,19 @@ function normalizeStampLabel(label: string) {
   return null;
 }
 
+function normalizeTourOrderLabel(label: string) {
+  const trimmed = label.trim().toUpperCase();
+  if (trimmed === '--') {
+    return '--';
+  }
+
+  if (/^[A-Z]{1,3}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return null;
+}
+
 export function getPreGeneratedMapMarkerImageSource(input: {
   kind: MarkerVisualKind;
   label: string;
@@ -185,12 +227,21 @@ export function getPreGeneratedMapMarkerImageSource(input: {
     return sourceMap['parking:P'];
   }
 
-  const normalizedStampLabel = normalizeStampLabel(input.label);
-  if (!normalizedStampLabel) {
-    return undefined;
+  if (input.kind === 'tour-order') {
+    const normalizedTourOrderLabel = normalizeTourOrderLabel(input.label);
+    if (!normalizedTourOrderLabel) {
+      return sourceMap['tour-order:--'];
+    }
+
+    return sourceMap[\`tour-order:${'${normalizedTourOrderLabel}'}\`] ?? sourceMap['tour-order:--'];
   }
 
-  return sourceMap[\`${'${input.kind}'}:${'${normalizedStampLabel}'}\`];
+  const normalizedStampLabel = normalizeStampLabel(input.label);
+  if (!normalizedStampLabel) {
+    return sourceMap[\`${'${input.kind}'}:--\`];
+  }
+
+  return sourceMap[\`${'${input.kind}'}:${'${normalizedStampLabel}'}\`] ?? sourceMap[\`${'${input.kind}'}:--\`];
 }
 `;
 }

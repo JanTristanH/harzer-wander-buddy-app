@@ -1,5 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
@@ -11,6 +12,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -50,7 +52,6 @@ const MAP_EDGE_PADDING = {
 
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
-const MAP_MARKER_LIMIT = 260;
 const SEARCH_RESULT_LIMIT = 5;
 const PREVIEW_DEBOUNCE_MS = 700;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
@@ -156,6 +157,18 @@ function formatAlphabeticOrder(position: number) {
   return label;
 }
 
+function resolvePrimaryRouteOrderLabel(positions: number[]) {
+  const sortedPositions = [...positions]
+    .filter((position) => Number.isFinite(position) && position > 0)
+    .sort((left, right) => left - right);
+
+  if (sortedPositions.length === 0) {
+    return '--';
+  }
+
+  return formatAlphabeticOrder(sortedPositions[0]);
+}
+
 function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
   return typeof value?.latitude === 'number' && typeof value?.longitude === 'number';
 }
@@ -163,6 +176,11 @@ function hasCoordinate(value?: { latitude?: number; longitude?: number }): value
 function cleanText(value?: string | null) {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeUserId(value?: string | null) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : null;
 }
 
 function derivePoiSequence(
@@ -413,9 +431,12 @@ export default function TourDetailScreen() {
   const { accessToken } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
+  const normalizedCurrentUserId = normalizeUserId(currentUserId);
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const params = useLocalSearchParams<{ id?: string | string[]; edit?: string | string[] }>();
   const tourId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const editParam = Array.isArray(params.edit) ? params.edit[0] : params.edit;
+  const shouldStartInEditMode = editParam === '1' || editParam === 'true';
   const { data, error, isPending, isFetching, refetch } = useTourDetailQuery(tourId);
   const { data: poiData = [], isPending: isPoiPending } = usePointsOfInterestQuery();
   const { data: mapData, isPending: isMapDataPending } = useMapDataQuery();
@@ -441,11 +462,11 @@ export default function TourDetailScreen() {
   const [blockingErrorCode, setBlockingErrorCode] = useState<403 | 404 | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
-  const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [tourNameDraft, setTourNameDraft] = useState('');
 
   const mapRef = useRef<MapView | null>(null);
+  const hasAppliedAutoStartEditModeRef = useRef(false);
   const regionRef = useRef<Region>(HARZ_REGION);
   const lastMarkerPressAtRef = useRef(0);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -487,12 +508,12 @@ export default function TourDetailScreen() {
       return;
     }
 
+    hasAppliedAutoStartEditModeRef.current = false;
     setHasInitialized(false);
     setBlockingErrorCode(null);
     setLastSaveErrorCode(null);
     setStatusMessage(null);
     setSaveStatus('idle');
-    setIsRenameModalVisible(false);
     setIsEditMode(false);
   }, [tourId]);
 
@@ -534,12 +555,12 @@ export default function TourDetailScreen() {
   }, [data, hasInitialized, isFetching, originalPoiIds]);
 
   useEffect(() => {
-    if (!data || isRenameModalVisible) {
+    if (!data || isEditMode) {
       return;
     }
 
     setTourNameDraft(data.tour.name);
-  }, [data, isRenameModalVisible]);
+  }, [data, isEditMode]);
 
   const allMapItems = useMemo<TourMapItem[]>(() => {
     const itemsById = new Map<string, TourMapItem>();
@@ -670,17 +691,8 @@ export default function TourDetailScreen() {
       visible.push(stampItem);
     }
 
-    // Optional markers: only add generic POIs up to the remaining limit.
-    const remainingPoiSlots = Math.max(0, MAP_MARKER_LIMIT - visible.length);
-    if (remainingPoiSlots <= 0) {
-      return visible;
-    }
-
+    // Generic POIs are always shown as regular markers (no clustering/limiting).
     for (const poiItem of poiItems) {
-      if (visible.length >= MAP_MARKER_LIMIT) {
-        break;
-      }
-
       if (pinnedById.has(poiItem.ID.toLowerCase())) {
         continue;
       }
@@ -720,11 +732,9 @@ export default function TourDetailScreen() {
     }
   }, [data, hasInitialized, hasPendingChanges, lastPersistedPoiIds, originalPoiIds, saveStatus]);
 
-  const canEnterEditMode = Boolean(
-    currentUserId &&
-      data?.tour.createdBy &&
-      data.tour.createdBy === currentUserId
-  );
+  const normalizedTourOwnerId = normalizeUserId(data?.tour.createdBy);
+  const ownershipResolved = Boolean(normalizedCurrentUserId && normalizedTourOwnerId);
+  const canEnterEditMode = ownershipResolved && normalizedTourOwnerId === normalizedCurrentUserId;
   const editingBlocked = !isEditMode || blockingErrorCode === 403 || blockingErrorCode === 404;
   const selectedItemInTourCount = selectedMapItem
     ? (draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? []).length
@@ -751,58 +761,118 @@ export default function TourDetailScreen() {
     }
 
     setDraftPoiIds(lastPersistedPoiIds);
+    setTourNameDraft(data?.tour.name ?? '');
     setLastSaveErrorCode(null);
     setSaveStatus('idle');
     setStatusMessage(null);
     setIsEditMode(true);
-  }, [canEnterEditMode, isEditMode, lastPersistedPoiIds]);
-  const handleExitEditMode = useCallback(() => {
+  }, [canEnterEditMode, data?.tour.name, isEditMode, lastPersistedPoiIds]);
+  useEffect(() => {
+    if (hasAppliedAutoStartEditModeRef.current) {
+      return;
+    }
+
+    if (!shouldStartInEditMode) {
+      hasAppliedAutoStartEditModeRef.current = true;
+      return;
+    }
+
+    if (!hasInitialized) {
+      return;
+    }
+
+    if (!canEnterEditMode) {
+      if (ownershipResolved) {
+        hasAppliedAutoStartEditModeRef.current = true;
+      }
+      return;
+    }
+
+    handleEnterEditMode();
+    hasAppliedAutoStartEditModeRef.current = true;
+  }, [canEnterEditMode, handleEnterEditMode, hasInitialized, ownershipResolved, shouldStartInEditMode]);
+  const exitEditMode = useCallback(() => {
+    setTourNameDraft(data?.tour.name ?? '');
+    setIsEditMode(false);
+  }, [data?.tour.name]);
+  function handleExitEditMode() {
     if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
       return;
     }
 
-    const exitMode = () => {
-      setIsRenameModalVisible(false);
-      setIsEditMode(false);
-    };
-
     if (!hasPendingChanges) {
-      exitMode();
+      exitEditMode();
       return;
     }
 
     Alert.alert(
-      'Aenderungen verwerfen?',
-      'Ungespeicherte Aenderungen gehen verloren. Bearbeitungsmodus trotzdem verlassen?',
+      'Aenderungen speichern?',
+      'Moechtest du die Aenderungen speichern, bevor du den Bearbeitungsmodus verlaesst?',
       [
         {
           text: 'Weiter bearbeiten',
           style: 'cancel',
         },
         {
-          text: 'Verwerfen',
+          text: 'Ohne Speichern',
           style: 'destructive',
           onPress: () => {
             resetDraftToPersistedState();
-            exitMode();
+            exitEditMode();
+          },
+        },
+        {
+          text: 'Speichern',
+          onPress: () => {
+            void (async () => {
+              const didSave = await performSave(draftPoiIds, { manual: true });
+              if (didSave) {
+                exitEditMode();
+              }
+            })();
           },
         },
       ]
     );
+  }
+  const handleCancelPendingChangesAndExit = useCallback(() => {
+    if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
+      return;
+    }
+
+    resetDraftToPersistedState();
+    exitEditMode();
   }, [
-    hasPendingChanges,
+    exitEditMode,
     isEditMode,
     resetDraftToPersistedState,
     updateTourMutation.isPending,
     updateTourNameMutation.isPending,
   ]);
+  const handleShareTour = useCallback(async () => {
+    if (!data?.tour?.ID) {
+      return;
+    }
+
+    const deepLink = ExpoLinking.createURL(`/tours/${encodeURIComponent(data.tour.ID)}`);
+    const tourName = data.tour.name?.trim() || 'Tour';
+
+    try {
+      await Share.share({
+        message: `${tourName}\n${deepLink}`,
+        title: tourName,
+        url: deepLink,
+      });
+    } catch (nextError) {
+      Alert.alert('Teilen nicht moeglich', nextError instanceof Error ? nextError.message : 'Unknown error');
+    }
+  }, [data?.tour?.ID, data?.tour?.name]);
   useEffect(() => {
     if (!isEditMode || canEnterEditMode) {
       return;
     }
 
     resetDraftToPersistedState();
-    setIsRenameModalVisible(false);
     setIsEditMode(false);
   }, [canEnterEditMode, isEditMode, resetDraftToPersistedState]);
   const skipNextPreventRemoveRef = useRef(false);
@@ -975,7 +1045,7 @@ export default function TourDetailScreen() {
   const performSave = useCallback(
     async function saveDraft(poiIds: string[], options?: { manual?: boolean }) {
       if (editingBlocked) {
-        return;
+        return false;
       }
 
       if (poiIds.length < 2) {
@@ -985,7 +1055,7 @@ export default function TourDetailScreen() {
             'Mindestens zwei Punkte benoetigt (Start und Ziel), bevor gespeichert werden kann.'
           );
         }
-        return;
+        return false;
       }
 
       cancelPendingPreview();
@@ -1013,6 +1083,7 @@ export default function TourDetailScreen() {
           setDraftPoiIds(refreshedPoiIds);
           setLastPersistedPoiIds(refreshedPoiIds);
         }
+        return true;
       } catch (nextError) {
         setSaveStatus('error');
 
@@ -1021,29 +1092,29 @@ export default function TourDetailScreen() {
             setBlockingErrorCode(403);
             setLastSaveErrorCode(403);
             setStatusMessage('Bearbeitung gesperrt');
-            return;
+            return false;
           }
 
           if (nextError.status === 404) {
             setBlockingErrorCode(404);
             setLastSaveErrorCode(404);
             setStatusMessage('Tour nicht mehr vorhanden');
-            return;
+            return false;
           }
 
           if (nextError.status === 422) {
             setLastSaveErrorCode(422);
             setStatusMessage('Route unvollstaendig berechenbar');
-            return;
+            return false;
           }
         }
 
         setStatusMessage('Speichern fehlgeschlagen');
+        return false;
       }
     },
     [cancelPendingPreview, editingBlocked, refetch, updateTourMutation]
   );
-
   useEffect(() => {
     if (previewTimerRef.current) {
       clearTimeout(previewTimerRef.current);
@@ -1267,51 +1338,41 @@ export default function TourDetailScreen() {
     ]);
   }, [deleteTourMutation, editingBlocked, router]);
 
-  const closeRenameModal = useCallback(() => {
-    if (updateTourNameMutation.isPending) {
-      return;
-    }
-
-    setIsRenameModalVisible(false);
-    setTourNameDraft(data?.tour.name ?? '');
-  }, [data?.tour.name, updateTourNameMutation.isPending]);
-
-  const handleSubmitRename = useCallback(async () => {
+  const handleSubmitRename = useCallback(async (options?: { silent?: boolean }) => {
     if (editingBlocked || updateTourNameMutation.isPending || !data) {
       return;
     }
 
     const normalizedName = tourNameDraft.trim();
     if (!normalizedName) {
+      if (options?.silent) {
+        setTourNameDraft(data.tour.name);
+        return;
+      }
       Alert.alert('Name fehlt', 'Bitte gib einen Namen fuer die Tour ein.');
       return;
     }
 
     if (normalizedName === data.tour.name) {
-      closeRenameModal();
+      if (tourNameDraft !== normalizedName) {
+        setTourNameDraft(normalizedName);
+      }
       return;
     }
 
     try {
+      setTourNameDraft(normalizedName);
       await updateTourNameMutation.mutateAsync({ name: normalizedName });
       setStatusMessage('Tourname aktualisiert');
       setSaveStatus((current) => (current === 'saving' ? current : 'saved'));
       await refetch();
-      setIsRenameModalVisible(false);
     } catch (nextError) {
       Alert.alert(
         'Name konnte nicht gespeichert werden',
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
       );
     }
-  }, [
-    closeRenameModal,
-    data,
-    editingBlocked,
-    refetch,
-    tourNameDraft,
-    updateTourNameMutation,
-  ]);
+  }, [data, editingBlocked, refetch, tourNameDraft, updateTourNameMutation]);
 
   if (!tourId) {
     return (
@@ -1401,53 +1462,47 @@ export default function TourDetailScreen() {
           const normalizedItemId = item.ID.toLowerCase();
           const routePositions = draftPoiStats.positionsById.get(normalizedItemId) ?? [];
           const isInTour = routePositions.length > 0;
-          const routePositionsLabel = routePositions.map((position) => formatAlphabeticOrder(position)).join(',');
+          const routeOrderLabel = resolvePrimaryRouteOrderLabel(routePositions);
           const isSelected = selectedMapItemId === item.ID;
+          const markerRenderKey = `${item.ID}:${isInTour ? `tour:${routeOrderLabel}` : 'base'}:${isSelected ? 'selected' : 'default'}`;
 
           const markerImage =
-            item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
+            isInTour
               ? getPreGeneratedMapMarkerImageSource({
-                  kind: item.kind,
-                  label: item.kind === 'parking' ? 'P' : item.markerLabel,
+                  kind: 'tour-order',
+                  label: routeOrderLabel,
                 })
-              : null;
+              : item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
+                ? getPreGeneratedMapMarkerImageSource({
+                    kind: item.kind,
+                    label: item.kind === 'parking' ? 'P' : item.markerLabel,
+                  })
+                : null;
 
           if (markerImage) {
             return (
               <Marker
                 anchor={{ x: 0.5, y: 1 }}
                 coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-                key={item.ID}
-                onPress={() => focusMapItemOnMap(item)}>
-                <View collapsable={false} style={styles.imageMarkerWrap}>
-                  {isSelected ? <View style={styles.selectedImageMarkerHalo} /> : null}
-                  <Image source={markerImage} style={styles.imageMarkerAsset} />
-                  {isInTour ? (
-                    <View style={styles.routeOrderBadge}>
-                      <Text style={styles.routeOrderBadgeLabel}>{routePositionsLabel}</Text>
-                    </View>
-                  ) : null}
-                </View>
-              </Marker>
+                image={markerImage}
+                key={markerRenderKey}
+                onPress={() => focusMapItemOnMap(item)}
+                pinColor={undefined}
+                tracksViewChanges={false}
+                zIndex={isSelected ? 20 : isInTour ? 10 : 0}
+              />
             );
           }
 
           return (
             <Marker
               coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-              key={item.ID}
-              onPress={() => focusMapItemOnMap(item)}>
-              <View
-                style={[
-                  styles.markerFallback,
-                  isInTour && styles.markerFallbackInTour,
-                  isSelected && styles.markerFallbackSelected,
-                ]}>
-                <Text style={[styles.markerFallbackLabel, isInTour && styles.markerFallbackLabelInTour]}>
-                  {isInTour ? routePositionsLabel : item.markerLabel}
-                </Text>
-              </View>
-            </Marker>
+              key={markerRenderKey}
+              onPress={() => focusMapItemOnMap(item)}
+              pinColor={isSelected ? '#2e6b4b' : '#bf7f3f'}
+              tracksViewChanges={false}
+              zIndex={isSelected ? 20 : 0}
+            />
           );
         })}
       </MapView>
@@ -1573,64 +1628,114 @@ export default function TourDetailScreen() {
             </Pressable>
 
             <View style={styles.headerActions}>
-              {canEnterEditMode ? (
+              {!isEditMode ? (
                 <Pressable
-                  disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
-                  onPress={isEditMode ? handleExitEditMode : handleEnterEditMode}
-                  style={({ pressed }) => [
-                    styles.modeHeaderButton,
-                    (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                      styles.modeHeaderButtonDisabled,
-                    pressed &&
-                      !(updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                      styles.pressed,
-                  ]}>
-                  <Feather
-                    color={
-                      updateTourMutation.isPending || updateTourNameMutation.isPending
-                        ? '#9ba59a'
-                        : '#2e6b4b'
-                    }
-                    name={isEditMode ? 'check' : 'edit-2'}
-                    size={14}
-                  />
-                  <Text
-                    style={[
-                      styles.modeHeaderButtonLabel,
-                      (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                        styles.modeHeaderButtonLabelDisabled,
-                    ]}>
-                    {isEditMode ? 'Fertig' : 'Bearbeiten'}
-                  </Text>
+                  onPress={() => void handleShareTour()}
+                  style={({ pressed }) => [styles.shareHeaderButton, pressed && styles.pressed]}>
+                  <Feather color="#3a4f84" name="share-2" size={14} />
+                  <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
                 </Pressable>
               ) : null}
 
-              {isEditMode ? (
-                <Pressable
-                  disabled={editingBlocked || updateTourNameMutation.isPending}
-                  onPress={() => {
-                    setTourNameDraft(data.tour.name);
-                    setIsRenameModalVisible(true);
-                  }}
-                  style={({ pressed }) => [
-                    styles.renameHeaderButton,
-                    (editingBlocked || updateTourNameMutation.isPending) && styles.renameHeaderButtonDisabled,
-                    pressed && !editingBlocked && !updateTourNameMutation.isPending && styles.pressed,
-                  ]}>
-                  <Feather
-                    color={editingBlocked || updateTourNameMutation.isPending ? '#9ba59a' : '#2e6b4b'}
-                    name="edit-2"
-                    size={14}
-                  />
-                  <Text
-                    style={[
-                      styles.renameHeaderButtonLabel,
-                      (editingBlocked || updateTourNameMutation.isPending) &&
-                        styles.renameHeaderButtonLabelDisabled,
+              {canEnterEditMode ? (
+                isEditMode && hasPendingChanges ? (
+                  <>
+                    <Pressable
+                      disabled={
+                        updateTourMutation.isPending ||
+                        updateTourNameMutation.isPending
+                      }
+                      onPress={handleExitEditMode}
+                      style={({ pressed }) => [
+                        styles.modeHeaderButton,
+                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                          styles.modeHeaderButtonDisabled,
+                        pressed &&
+                          !updateTourMutation.isPending &&
+                          !updateTourNameMutation.isPending &&
+                          styles.pressed,
+                      ]}>
+                      <Feather
+                        color={
+                          updateTourMutation.isPending || updateTourNameMutation.isPending
+                            ? '#9ba59a'
+                            : '#2e6b4b'
+                        }
+                        name="check"
+                        size={14}
+                      />
+                      <Text
+                        style={[
+                          styles.modeHeaderButtonLabel,
+                          (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                            styles.modeHeaderButtonLabelDisabled,
+                        ]}>
+                        Fertig
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
+                      onPress={handleCancelPendingChangesAndExit}
+                      style={({ pressed }) => [
+                        styles.cancelHeaderButton,
+                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                          styles.cancelHeaderButtonDisabled,
+                        pressed &&
+                          !updateTourMutation.isPending &&
+                          !updateTourNameMutation.isPending &&
+                          styles.pressed,
+                      ]}>
+                      <Feather
+                        color={
+                          updateTourMutation.isPending || updateTourNameMutation.isPending
+                            ? '#b8a8a8'
+                            : '#8a5a3a'
+                        }
+                        name="x"
+                        size={14}
+                      />
+                      <Text
+                        style={[
+                          styles.cancelHeaderButtonLabel,
+                          (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                            styles.cancelHeaderButtonLabelDisabled,
+                        ]}>
+                        Abbrechen
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <Pressable
+                    disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
+                    onPress={isEditMode ? handleExitEditMode : handleEnterEditMode}
+                    style={({ pressed }) => [
+                      styles.modeHeaderButton,
+                      (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                        styles.modeHeaderButtonDisabled,
+                      pressed &&
+                        !(updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                        styles.pressed,
                     ]}>
-                    Name
-                  </Text>
-                </Pressable>
+                    <Feather
+                      color={
+                        updateTourMutation.isPending || updateTourNameMutation.isPending
+                          ? '#9ba59a'
+                          : '#2e6b4b'
+                      }
+                      name={isEditMode ? 'check' : 'edit-2'}
+                      size={14}
+                    />
+                    <Text
+                      style={[
+                        styles.modeHeaderButtonLabel,
+                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
+                          styles.modeHeaderButtonLabelDisabled,
+                      ]}>
+                      {isEditMode ? 'Fertig' : 'Bearbeiten'}
+                    </Text>
+                  </Pressable>
+                )
               ) : null}
 
               {isEditMode ? (
@@ -1659,7 +1764,27 @@ export default function TourDetailScreen() {
             </View>
           </View>
 
-          <Text style={styles.title}>{data.tour.name}</Text>
+          {isEditMode ? (
+            <View style={styles.titleInputShell}>
+              <TextInput
+                editable={!editingBlocked && !updateTourNameMutation.isPending}
+                maxLength={120}
+                onBlur={() => void handleSubmitRename({ silent: true })}
+                onChangeText={setTourNameDraft}
+                onSubmitEditing={() => void handleSubmitRename()}
+                placeholder="Tourname"
+                placeholderTextColor="#7b8776"
+                returnKeyType="done"
+                style={[
+                  styles.titleInput,
+                  (editingBlocked || updateTourNameMutation.isPending) && styles.titleInputDisabled,
+                ]}
+                value={tourNameDraft}
+              />
+            </View>
+          ) : (
+            <Text style={styles.title}>{data.tour.name}</Text>
+          )}
           <Text style={styles.subtitle}>{`${formatDistance(liveTourMetrics.distance)} • ${formatDuration(liveTourMetrics.duration)} • ${liveTourMetrics.stampCount ?? 0} Stempel`}</Text>
         </View>
 
@@ -1713,7 +1838,13 @@ export default function TourDetailScreen() {
                 <View key={`${poiId}-${index}`} style={styles.pathRow}>
                   <Pressable
                     disabled={!item}
-                    onPress={() => openListItemDetailPage(item)}
+                    onPress={() => {
+                      if (!item) {
+                        return;
+                      }
+
+                      focusMapItemOnMap(item);
+                    }}
                     style={({ pressed }) => [
                       styles.pathOpenable,
                       pressed && item && styles.pressed,
@@ -1741,7 +1872,6 @@ export default function TourDetailScreen() {
                           : item?.typeLabel || 'Unbekannt'}
                       </Text>
                     </View>
-                    {item ? <Feather color="#4d5b4d" name="chevron-right" size={16} /> : null}
                   </Pressable>
                   {isEditMode ? (
                     <View style={styles.pathActions}>
@@ -1786,6 +1916,14 @@ export default function TourDetailScreen() {
                         <Feather color={editingBlocked ? '#9ba59a' : '#a34e4e'} name="trash-2" size={14} />
                       </Pressable>
                     </View>
+                  ) : item ? (
+                    <View style={styles.pathActions}>
+                      <Pressable
+                        onPress={() => openListItemDetailPage(item)}
+                        style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
+                        <Text style={styles.pathNavButtonLabel}>{'>'}</Text>
+                      </Pressable>
+                    </View>
                   ) : null}
                 </View>
               );
@@ -1826,54 +1964,6 @@ export default function TourDetailScreen() {
           </Animated.View>
         </View>
       </Modal>
-
-      <Modal
-        animationType="fade"
-        transparent
-        visible={isEditMode && isRenameModalVisible}
-        onRequestClose={closeRenameModal}>
-        <View style={styles.renameModalOverlay}>
-          <Pressable style={styles.renameModalBackdrop} onPress={closeRenameModal} />
-          <View style={styles.renameModalCard}>
-            <View style={styles.renameModalHeader}>
-              <Text style={styles.renameModalTitle}>Tourname bearbeiten</Text>
-              <Pressable
-                accessibilityLabel="Umbenennen schliessen"
-                disabled={updateTourNameMutation.isPending}
-                onPress={closeRenameModal}
-                style={({ pressed }) => [styles.renameModalCloseButton, pressed && styles.pressed]}>
-                <Feather color="#1E2A1E" name="x" size={16} />
-              </Pressable>
-            </View>
-
-            <View style={styles.renameInputShell}>
-              <TextInput
-                autoFocus
-                maxLength={120}
-                onChangeText={setTourNameDraft}
-                onSubmitEditing={() => void handleSubmitRename()}
-                placeholder="Tourname"
-                placeholderTextColor="#7b8776"
-                style={styles.renameInput}
-                value={tourNameDraft}
-              />
-            </View>
-
-            <Pressable
-              disabled={updateTourNameMutation.isPending}
-              onPress={() => void handleSubmitRename()}
-              style={({ pressed }) => [
-                styles.renameSaveButton,
-                updateTourNameMutation.isPending && styles.renameSaveButtonDisabled,
-                pressed && !updateTourNameMutation.isPending && styles.pressed,
-              ]}>
-              <Text style={styles.renameSaveButtonLabel}>
-                {updateTourNameMutation.isPending ? 'Speichere...' : 'Name speichern'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -1903,6 +1993,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  shareHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#edf2fc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  shareHeaderButtonLabel: {
+    color: '#3a4f84',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   modeHeaderButton: {
     minHeight: 32,
     borderRadius: 10,
@@ -1930,6 +2041,33 @@ const styles = StyleSheet.create({
   modeHeaderButtonLabelDisabled: {
     color: '#9ba59a',
   },
+  cancelHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#fff4ec',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  cancelHeaderButtonDisabled: {
+    opacity: 0.7,
+  },
+  cancelHeaderButtonLabel: {
+    color: '#8a5a3a',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  cancelHeaderButtonLabelDisabled: {
+    color: '#b8a8a8',
+  },
   backButton: {
     width: 32,
     height: 32,
@@ -1942,33 +2080,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
-  },
-  renameHeaderButton: {
-    minHeight: 32,
-    borderRadius: 10,
-    backgroundColor: '#eef4ee',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 10,
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  renameHeaderButtonDisabled: {
-    opacity: 0.7,
-  },
-  renameHeaderButtonLabel: {
-    color: '#2e6b4b',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  renameHeaderButtonLabelDisabled: {
-    color: '#9ba59a',
   },
   deleteHeaderButton: {
     minHeight: 32,
@@ -1997,48 +2108,7 @@ const styles = StyleSheet.create({
   deleteHeaderButtonLabelDisabled: {
     color: '#b8a8a8',
   },
-  renameModalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-start',
-  },
-  renameModalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(46,58,46,0.35)',
-  },
-  renameModalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    marginHorizontal: 20,
-    marginTop: 120,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    shadowColor: '#141E14',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.2,
-    shadowRadius: 28,
-    elevation: 10,
-    gap: 12,
-  },
-  renameModalHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  renameModalTitle: {
-    color: '#1E2A1E',
-    fontSize: 20,
-    lineHeight: 24,
-    fontFamily: 'serif',
-  },
-  renameModalCloseButton: {
-    alignItems: 'center',
-    backgroundColor: '#F0E9DD',
-    borderRadius: 8,
-    height: 28,
-    justifyContent: 'center',
-    width: 28,
-  },
-  renameInputShell: {
+  titleInputShell: {
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#d9ddcf',
@@ -2046,27 +2116,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
-  renameInput: {
+  titleInput: {
     color: '#2e3a2e',
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 23,
+    lineHeight: 30,
+    fontFamily: 'serif',
     paddingVertical: 0,
   },
-  renameSaveButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#2E6B4B',
-    paddingVertical: 10,
-  },
-  renameSaveButtonDisabled: {
-    opacity: 0.7,
-  },
-  renameSaveButtonLabel: {
-    color: '#F5F3EE',
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '700',
+  titleInputDisabled: {
+    color: '#7f8a7f',
   },
   title: {
     color: '#1e2a1e',
@@ -2258,43 +2316,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 22,
   },
-  imageMarkerWrap: {
-    width: 44,
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  selectedImageMarkerHalo: {
-    position: 'absolute',
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(46,107,75,0.18)',
-    top: 1,
-  },
-  imageMarkerAsset: {
-    width: 34,
-    height: 40,
-    resizeMode: 'contain',
-  },
-  routeOrderBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    backgroundColor: '#1e2a1e',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  routeOrderBadgeLabel: {
-    color: '#f5f3ee',
-    fontSize: 10,
-    lineHeight: 12,
-    fontWeight: '700',
-  },
   markerFallback: {
     minWidth: 34,
     height: 34,
@@ -2452,6 +2473,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  pathNavButtonLabel: {
+    color: '#2e3a2e',
+    fontSize: 14,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   iconButton: {
     width: 28,
