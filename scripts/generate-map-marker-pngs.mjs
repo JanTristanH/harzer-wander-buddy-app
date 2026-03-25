@@ -11,8 +11,6 @@ const generatedMappingFilePath = path.join(rootDir, 'lib', 'map-marker-images.ge
 
 const STAMP_MIN = 1;
 const STAMP_MAX = 222;
-const TOUR_ORDER_MIN = 1;
-const TOUR_ORDER_MAX = 260;
 const BASE_MARKER_WIDTH = 56;
 const BASE_MARKER_HEIGHT = 60;
 
@@ -37,39 +35,45 @@ const PLACEHOLDERS = {
   badgeRx: '__BADGE_RX__',
 };
 
-function formatAlphabeticOrder(position) {
-  if (!Number.isFinite(position) || position <= 0) {
-    return '--';
-  }
-
-  let value = Math.floor(position);
-  let label = '';
-  while (value > 0) {
-    value -= 1;
-    label = String.fromCharCode(65 + (value % 26)) + label;
-    value = Math.floor(value / 26);
-  }
-
-  return label;
-}
-
-const tourOrderLabels = Array.from(
-  { length: TOUR_ORDER_MAX - TOUR_ORDER_MIN + 1 },
-  (_, index) => formatAlphabeticOrder(index + TOUR_ORDER_MIN)
+const BASE_ALPHA_LABELS = Array.from({ length: 16 }, (_, index) =>
+  String.fromCharCode(65 + index)
 );
+
+const ascendingDoubleAlphaLabels = (() => {
+  const labels = [];
+  for (let leftIndex = 0; leftIndex < BASE_ALPHA_LABELS.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < BASE_ALPHA_LABELS.length; rightIndex += 1) {
+      labels.push(`${BASE_ALPHA_LABELS[leftIndex]}${BASE_ALPHA_LABELS[rightIndex]}`);
+    }
+  }
+
+  return labels;
+})();
+
+const allowedAlphabeticLabels = [...BASE_ALPHA_LABELS, ...ascendingDoubleAlphaLabels];
+const tourOrderLabels = [...allowedAlphabeticLabels];
+const stampAlphabeticLabels = [...allowedAlphabeticLabels];
 
 const markerVariants = [
   {
     kind: 'visited-stamp',
     fillColor: '#2e6b4b',
     textColor: '#111111',
-    labels: ['--', ...Array.from({ length: STAMP_MAX - STAMP_MIN + 1 }, (_, index) => String(index + STAMP_MIN))],
+    labels: [
+      '--',
+      ...Array.from({ length: STAMP_MAX - STAMP_MIN + 1 }, (_, index) => String(index + STAMP_MIN)),
+      ...stampAlphabeticLabels,
+    ],
   },
   {
     kind: 'open-stamp',
     fillColor: '#c1a093',
     textColor: '#111111',
-    labels: ['--', ...Array.from({ length: STAMP_MAX - STAMP_MIN + 1 }, (_, index) => String(index + STAMP_MIN))],
+    labels: [
+      '--',
+      ...Array.from({ length: STAMP_MAX - STAMP_MIN + 1 }, (_, index) => String(index + STAMP_MIN)),
+      ...stampAlphabeticLabels,
+    ],
   },
   {
     kind: 'parking',
@@ -188,7 +192,7 @@ ${androidRecord}
 };
 
 function normalizeStampLabel(label: string) {
-  const trimmed = label.trim();
+  const trimmed = label.trim().toUpperCase();
   if (trimmed === '--') {
     return '--';
   }
@@ -198,6 +202,14 @@ function normalizeStampLabel(label: string) {
     if (parsed >= ${STAMP_MIN} && parsed <= ${STAMP_MAX}) {
       return String(parsed);
     }
+  }
+
+  if (
+    /^[A-Z]{1,3}$/.test(trimmed) ||
+    /^[A-Z]{1,3}\\d{1,4}$/.test(trimmed) ||
+    /^\\d{1,4}[A-Z]{1,3}$/.test(trimmed)
+  ) {
+    return trimmed;
   }
 
   return null;
@@ -230,18 +242,19 @@ export function getPreGeneratedMapMarkerImageSource(input: {
   if (input.kind === 'tour-order') {
     const normalizedTourOrderLabel = normalizeTourOrderLabel(input.label);
     if (!normalizedTourOrderLabel) {
-      return sourceMap['tour-order:--'];
+      return undefined;
     }
 
-    return sourceMap[\`tour-order:${'${normalizedTourOrderLabel}'}\`] ?? sourceMap['tour-order:--'];
+    return sourceMap[\`tour-order:${'${normalizedTourOrderLabel}'}\`];
   }
 
   const normalizedStampLabel = normalizeStampLabel(input.label);
   if (!normalizedStampLabel) {
-    return sourceMap[\`${'${input.kind}'}:--\`];
+    // Unknown labels should use the runtime text marker fallback.
+    return undefined;
   }
 
-  return sourceMap[\`${'${input.kind}'}:${'${normalizedStampLabel}'}\`] ?? sourceMap[\`${'${input.kind}'}:--\`];
+  return sourceMap[\`${'${input.kind}'}:${'${normalizedStampLabel}'}\`];
 }
 `;
 }

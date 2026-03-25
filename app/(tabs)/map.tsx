@@ -119,6 +119,7 @@ const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
 const MARKER_ANCHOR = { x: 0.5, y: 1 };
 const DIGITS_ONLY_PATTERN = /^\d+$/;
+const STAMP_MARKER_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 
 let lastMapRegion: Region | null = null;
 
@@ -321,6 +322,45 @@ function zoomRegion(region: Region, factor: number) {
 
 function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
+}
+
+function normalizeStampMarkerToken(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (upper === '--' || upper === 'P' || upper === 'POI') {
+    return null;
+  }
+
+  if (/^\d{1,4}$/.test(upper)) {
+    const parsed = Number.parseInt(upper, 10);
+    return Number.isFinite(parsed) ? String(parsed) : null;
+  }
+
+  if (/^[A-Z]{1,3}$/.test(upper)) {
+    return upper;
+  }
+
+  if (/^[A-Z]{1,3}\d{1,4}$/.test(upper) || /^\d{1,4}[A-Z]{1,3}$/.test(upper)) {
+    return upper;
+  }
+
+  const matches = upper.match(STAMP_MARKER_TOKEN_PATTERN);
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+
+  for (const token of matches) {
+    const normalized = normalizeStampMarkerToken(token);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
 
 type SearchResultRank = {
@@ -1372,7 +1412,7 @@ export default function MapScreen() {
 
           const stampItem = item as StampMarkerItem;
           const colors = markerColors(stampItem.kind);
-          const markerLabel = stampItem.number || '--';
+          const markerLabel = normalizeStampMarkerToken(stampItem.number) || '--';
           const markerImage = getPreGeneratedMapMarkerImageSource({
             kind: stampItem.kind,
             label: markerLabel,

@@ -125,13 +125,30 @@ export default function ToursTabScreen() {
     },
     [router]
   );
+  const handleOpenTourInEditMode = useCallback(
+    (tour: Tour) => {
+      router.push({
+        pathname: '/tours/[id]',
+        params: {
+          id: tour.ID,
+          edit: '1',
+        },
+      } as never);
+    },
+    [router]
+  );
 
-  const handleQuickstart = async () => {
+  const handleQuickstart = async (options?: { startInEditMode?: boolean }) => {
     try {
       const created = await createTourMutation.mutateAsync({
         name: 'Neue Tour',
         idListTravelTimes: '',
       });
+
+      if (options?.startInEditMode) {
+        handleOpenTourInEditMode(created);
+        return;
+      }
 
       handleOpenTour(created);
     } catch (nextError) {
@@ -260,7 +277,7 @@ export default function ToursTabScreen() {
       <Pressable
         accessibilityLabel="Neue Tour erstellen"
         disabled={createTourMutation.isPending}
-        onPress={() => void handleQuickstart()}
+        onPress={() => void handleQuickstart({ startInEditMode: true })}
         style={({ pressed }) => [
           styles.floatingAddButton,
           createTourMutation.isPending && styles.floatingAddButtonDisabled,

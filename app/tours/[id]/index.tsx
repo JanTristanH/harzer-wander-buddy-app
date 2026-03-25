@@ -55,6 +55,8 @@ const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
 const PREVIEW_DEBOUNCE_MS = 700;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
+const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
+const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
 
 type Coordinate = {
   latitude: number;
@@ -157,16 +159,39 @@ function formatAlphabeticOrder(position: number) {
   return label;
 }
 
-function resolvePrimaryRouteOrderLabel(positions: number[]) {
-  const sortedPositions = [...positions]
-    .filter((position) => Number.isFinite(position) && position > 0)
-    .sort((left, right) => left - right);
+function resolveRouteOrderLabel(positions: number[]) {
+  const labels = Array.from(
+    new Set(
+      [...positions]
+        .filter((position) => Number.isFinite(position) && position > 0)
+        .sort((left, right) => left - right)
+        .map((position) => formatAlphabeticOrder(position))
+    )
+  );
 
-  if (sortedPositions.length === 0) {
+  if (labels.length === 0) {
     return '--';
   }
 
-  return formatAlphabeticOrder(sortedPositions[0]);
+  if (labels.length === 1) {
+    return labels[0];
+  }
+
+  return labels.join('/');
+}
+
+function resolveRouteOrderImageLabel(routeOrderLabel: string) {
+  const trimmed = routeOrderLabel.trim().toUpperCase();
+  if (!trimmed || trimmed === '--') {
+    return '--';
+  }
+
+  const compact = trimmed.replaceAll('/', '');
+  if (/^[A-Z]{1,3}$/.test(compact)) {
+    return compact;
+  }
+
+  return '--';
 }
 
 function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
@@ -220,19 +245,59 @@ function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
 }
 
-function extractNumericToken(value?: string | null) {
+function normalizeStampToken(value?: string | null) {
   const normalized = cleanText(value);
   if (!normalized) {
     return null;
   }
 
-  const match = normalized.match(/\d{1,4}/);
-  if (!match) {
+  const upper = normalized.toUpperCase();
+  if (upper === '--' || STAMP_TOKEN_IGNORED.has(upper)) {
     return null;
   }
 
-  const parsed = Number.parseInt(match[0], 10);
-  return Number.isFinite(parsed) ? String(parsed) : null;
+  if (/^\d{1,4}$/.test(upper)) {
+    const parsed = Number.parseInt(upper, 10);
+    return Number.isFinite(parsed) ? String(parsed) : null;
+  }
+
+  if (/^[A-Z]{1,3}$/.test(upper)) {
+    return upper;
+  }
+
+  if (/^[A-Z]{1,3}\d{1,4}$/.test(upper) || /^\d{1,4}[A-Z]{1,3}$/.test(upper)) {
+    return upper;
+  }
+
+  return null;
+}
+
+function extractStampToken(value?: string | null) {
+  const direct = normalizeStampToken(value);
+  if (direct) {
+    return direct;
+  }
+
+  const normalized = cleanText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const matches = normalized.match(STAMP_TOKEN_PATTERN);
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+
+  const tokens = matches
+    .map((token) => normalizeStampToken(token))
+    .filter((token): token is string => Boolean(token));
+
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const tokenWithDigits = tokens.find((token) => /\d/.test(token));
+  return tokenWithDigits ?? tokens[0];
 }
 
 function inferStampNumberFromPoi(poi: {
@@ -241,12 +306,12 @@ function inferStampNumberFromPoi(poi: {
   name?: string;
   orderBy?: string;
 }) {
-  const explicit = extractNumericToken(poi.stampNumber);
+  const explicit = extractStampToken(poi.stampNumber);
   if (explicit) {
     return explicit;
   }
 
-  const byOrder = extractNumericToken(poi.orderBy);
+  const byOrder = extractStampToken(poi.orderBy);
   if (byOrder) {
     return byOrder;
   }
@@ -263,7 +328,7 @@ function inferStampNumberFromPoi(poi: {
     return null;
   }
 
-  return extractNumericToken(poi.name);
+  return extractStampToken(poi.name);
 }
 
 function haversineDistanceKm(from: Coordinate, to: Coordinate) {
@@ -331,7 +396,7 @@ function rankSearchItem(item: TourMapItem, normalizedQuery: string): SearchResul
 
   const normalizedStampNumber = normalizeSearchValue(item.stampNumber || '');
   const normalizedMarkerNumber =
-    item.kind === 'parking' ? '' : normalizeSearchValue(extractNumericToken(item.markerLabel) || '');
+    item.kind === 'parking' ? '' : normalizeSearchValue(extractStampToken(item.markerLabel) || '');
   const normalizedNumber = normalizedStampNumber || normalizedMarkerNumber;
 
   const hasNumericQuery = DIGITS_ONLY_PATTERN.test(normalizedQuery);
@@ -372,7 +437,7 @@ function getStampNumber(item?: TourMapItem | null) {
     return null;
   }
 
-  const explicitStampNumber = extractNumericToken(item.stampNumber);
+  const explicitStampNumber = extractStampToken(item.stampNumber);
   if (explicitStampNumber) {
     return explicitStampNumber;
   }
@@ -385,7 +450,7 @@ function getStampNumber(item?: TourMapItem | null) {
     return null;
   }
 
-  const markerLabel = extractNumericToken(item.markerLabel);
+  const markerLabel = extractStampToken(item.markerLabel);
   if (!markerLabel || markerLabel === '--') {
     return null;
   }
@@ -596,7 +661,7 @@ export default function TourDetailScreen() {
         name: cleanText(stamp.name) || stamp.ID,
         typeLabel: stamp.kind === 'visited-stamp' ? 'Besucht' : 'Unbesucht',
         markerLabel,
-        stampNumber: extractNumericToken(markerLabel) || undefined,
+        stampNumber: extractStampToken(markerLabel) || undefined,
         kind: stamp.kind,
         latitude: stamp.latitude,
         longitude: stamp.longitude,
@@ -1462,20 +1527,28 @@ export default function TourDetailScreen() {
           const normalizedItemId = item.ID.toLowerCase();
           const routePositions = draftPoiStats.positionsById.get(normalizedItemId) ?? [];
           const isInTour = routePositions.length > 0;
-          const routeOrderLabel = resolvePrimaryRouteOrderLabel(routePositions);
+          const routeOrderLabel = resolveRouteOrderLabel(routePositions);
+          const routeOrderImageLabel = resolveRouteOrderImageLabel(routeOrderLabel);
           const isSelected = selectedMapItemId === item.ID;
           const markerRenderKey = `${item.ID}:${isInTour ? `tour:${routeOrderLabel}` : 'base'}:${isSelected ? 'selected' : 'default'}`;
 
+          const tourOrderMarkerImage =
+            getPreGeneratedMapMarkerImageSource({
+              kind: 'tour-order',
+              label: routeOrderImageLabel,
+            }) ||
+            getPreGeneratedMapMarkerImageSource({
+              kind: 'tour-order',
+              label: '--',
+            });
+
           const markerImage =
             isInTour
-              ? getPreGeneratedMapMarkerImageSource({
-                  kind: 'tour-order',
-                  label: routeOrderLabel,
-                })
+              ? tourOrderMarkerImage
               : item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
                 ? getPreGeneratedMapMarkerImageSource({
                     kind: item.kind,
-                    label: item.kind === 'parking' ? 'P' : item.markerLabel,
+                    label: item.kind === 'parking' ? 'P' : extractStampToken(item.markerLabel) || item.markerLabel,
                   })
                 : null;
 
@@ -1491,6 +1564,40 @@ export default function TourDetailScreen() {
                 tracksViewChanges={false}
                 zIndex={isSelected ? 20 : isInTour ? 10 : 0}
               />
+            );
+          }
+
+          if (isInTour || item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking') {
+            const fallbackLabel =
+              isInTour
+                ? routeOrderLabel
+                : item.kind === 'parking'
+                  ? 'P'
+                  : extractStampToken(item.markerLabel) || '--';
+
+            return (
+              <Marker
+                anchor={{ x: 0.5, y: 0.5 }}
+                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+                key={markerRenderKey}
+                onPress={() => focusMapItemOnMap(item)}
+                zIndex={isSelected ? 20 : isInTour ? 10 : 0}>
+                <View
+                  collapsable={false}
+                  style={[
+                    styles.markerFallback,
+                    isInTour && styles.markerFallbackInTour,
+                    isSelected && styles.markerFallbackSelected,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.markerFallbackLabel,
+                      isInTour && styles.markerFallbackLabelInTour,
+                    ]}>
+                    {fallbackLabel}
+                  </Text>
+                </View>
+              </Marker>
             );
           }
 
