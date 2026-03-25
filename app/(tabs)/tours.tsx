@@ -6,24 +6,34 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Tour } from '@/lib/api';
 import { useIdTokenClaims } from '@/lib/auth';
 import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
 
 type FilterKey = 'mine' | 'all';
+type SortKey = 'newest' | 'oldest' | 'nameAsc' | 'nameDesc';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'mine', label: 'Meine' },
   { key: 'all', label: 'Alle' },
+];
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'newest', label: 'Neueste' },
+  { key: 'oldest', label: 'Aelteste' },
+  { key: 'nameAsc', label: 'Name A-Z' },
+  { key: 'nameDesc', label: 'Name Z-A' },
 ];
 
 function formatDistance(distanceMeters: number | null) {
@@ -63,7 +73,50 @@ function normalizeUserId(value?: string | null) {
   return normalized && normalized.length > 0 ? normalized : null;
 }
 
-function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
+function resolveCreatedBy(item: Tour, normalizedCurrentUserId: string | null) {
+  const createdBy = item.createdBy?.trim();
+  const displayName = item.createdByName?.trim();
+  const isOwnTour = Boolean(createdBy && normalizeUserId(createdBy) === normalizedCurrentUserId);
+
+  if (isOwnTour) {
+    return {
+      label: displayName || 'Du',
+      isOwnTour: true,
+    };
+  }
+
+  if (displayName) {
+    return {
+      label: displayName,
+      isOwnTour: false,
+    };
+  }
+
+  if (!createdBy) {
+    return {
+      label: 'Unbekannt',
+      isOwnTour: false,
+    };
+  }
+
+  return {
+    label: 'Unbekannt',
+    isOwnTour: false,
+  };
+}
+
+function TourCard({
+  item,
+  onPress,
+  normalizedCurrentUserId,
+}: {
+  item: Tour;
+  onPress: () => void;
+  normalizedCurrentUserId: string | null;
+}) {
+  const createdBy = resolveCreatedBy(item, normalizedCurrentUserId);
+  const showOwnBadge = createdBy.isOwnTour && createdBy.label !== 'Du';
+
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
       <View style={styles.cardHeaderRow}>
@@ -74,8 +127,20 @@ function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
       </View>
 
       <Text style={styles.cardMeta}>
-        {`${formatDistance(item.distance)} • ${formatDuration(item.duration)} • ${item.stampCount ?? 0} Stempel`}
+        {`${formatDistance(item.distance)} • ${formatDuration(item.duration)}`}
       </Text>
+      <Text style={styles.cardMeta}>
+        {`Stempel gesamt: ${item.stampCount ?? 0} • Neue Stempel fuer mich: ${item.newStampCountForUser ?? 0}`}
+      </Text>
+
+      <View style={styles.cardCreatorRow}>
+        <Text numberOfLines={1} style={styles.cardCreatorText}>{`Von: ${createdBy.label}`}</Text>
+        {showOwnBadge ? (
+          <View style={styles.creatorBadge}>
+            <Text style={styles.creatorBadgeLabel}>Du</Text>
+          </View>
+        ) : null}
+      </View>
 
       <View style={styles.cardFooterRow}>
         <Text style={styles.cardFooterText}>{`↑${formatElevation(item.totalElevationGain)} • ↓${formatElevation(item.totalElevationLoss)}`}</Text>
@@ -87,15 +152,20 @@ function TourCard({ item, onPress }: { item: Tour; onPress: () => void }) {
 
 export default function ToursTabScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
   const normalizedCurrentUserId = useMemo(() => normalizeUserId(currentUserId), [currentUserId]);
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterKey>('mine');
+  const [activeSort, setActiveSort] = useState<SortKey>('newest');
+  const [isSortOpen, setIsSortOpen] = useState(false);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const { data, error, isPending, isFetching, refetch } = useToursOverviewQuery();
   const createTourMutation = useCreateTourMutation();
   const tours = useMemo(() => data ?? [], [data]);
+  const sortPopoverWidth = useMemo(() => Math.min(300, Math.max(windowWidth - 32, 0)), [windowWidth]);
 
   const filteredTours = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -115,6 +185,51 @@ export default function ToursTabScreen() {
       return tour.name.toLowerCase().includes(normalized);
     });
   }, [activeFilter, normalizedCurrentUserId, query, tours]);
+
+  const sortedTours = useMemo(() => {
+    const byCreatedAtDesc = (left: Tour, right: Tour) => {
+      const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+      const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+      const leftHasTime = Number.isFinite(leftTime);
+      const rightHasTime = Number.isFinite(rightTime);
+
+      if (leftHasTime && rightHasTime) {
+        return rightTime - leftTime;
+      }
+
+      if (leftHasTime) {
+        return -1;
+      }
+
+      if (rightHasTime) {
+        return 1;
+      }
+
+      return left.name.localeCompare(right.name, 'de-DE');
+    };
+
+    const byNameAsc = (left: Tour, right: Tour) => left.name.localeCompare(right.name, 'de-DE');
+
+    const sorted = [...filteredTours];
+
+    sorted.sort((left, right) => {
+      if (activeSort === 'oldest') {
+        return byCreatedAtDesc(right, left);
+      }
+
+      if (activeSort === 'nameAsc') {
+        return byNameAsc(left, right);
+      }
+
+      if (activeSort === 'nameDesc') {
+        return byNameAsc(right, left);
+      }
+
+      return byCreatedAtDesc(left, right);
+    });
+
+    return sorted;
+  }, [activeSort, filteredTours]);
 
   const blockingError = !data ? error : null;
   const isMineFilter = activeFilter === 'mine';
@@ -185,7 +300,7 @@ export default function ToursTabScreen() {
     <SafeAreaView style={styles.safeArea}>
       <FlatList
         contentContainerStyle={styles.listContent}
-        data={filteredTours}
+        data={sortedTours}
         keyExtractor={(item) => item.ID}
         ListEmptyComponent={
           <View style={styles.emptyStateWrap}>
@@ -227,24 +342,33 @@ export default function ToursTabScreen() {
               />
             </View>
 
-            <View style={styles.filterRow}>
-              {FILTERS.map((filter) => {
-                const isActive = activeFilter === filter.key;
-                return (
-                  <Pressable
-                    key={filter.key}
-                    onPress={() => setActiveFilter(filter.key)}
-                    style={({ pressed }) => [
-                      styles.filterPill,
-                      isActive && styles.filterPillActive,
-                      pressed && styles.filterPillPressed,
-                    ]}>
-                    <Text style={[styles.filterPillLabel, isActive && styles.filterPillLabelActive]}>
-                      {filter.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+            <View style={styles.controlsRow}>
+              <View style={styles.filterRow}>
+                {FILTERS.map((filter) => {
+                  const isActive = activeFilter === filter.key;
+                  return (
+                    <Pressable
+                      key={filter.key}
+                      onPress={() => setActiveFilter(filter.key)}
+                      style={({ pressed }) => [
+                        styles.filterPill,
+                        isActive && styles.filterPillActive,
+                        pressed && styles.filterPillPressed,
+                      ]}>
+                      <Text style={[styles.filterPillLabel, isActive && styles.filterPillLabelActive]}>
+                        {filter.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Pressable
+                onPress={() => setIsSortOpen(true)}
+                style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
+                <Feather color="#1e2a1e" name="menu" size={14} />
+                <Text style={styles.sortButtonLabel}>Sortieren</Text>
+              </Pressable>
             </View>
 
             {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
@@ -268,7 +392,11 @@ export default function ToursTabScreen() {
         }
         renderItem={({ item }) => (
           <View style={styles.cardRow}>
-            <TourCard item={item} onPress={() => handleOpenTour(item)} />
+            <TourCard
+              item={item}
+              normalizedCurrentUserId={normalizedCurrentUserId}
+              onPress={() => handleOpenTour(item)}
+            />
           </View>
         )}
         showsVerticalScrollIndicator={false}
@@ -285,6 +413,39 @@ export default function ToursTabScreen() {
         ]}>
         <Feather color="#F5F3EE" name="plus" size={24} />
       </Pressable>
+
+      <Modal animationType="fade" onRequestClose={() => setIsSortOpen(false)} transparent visible={isSortOpen}>
+        <View style={styles.modalBackdrop}>
+          <Pressable onPress={() => setIsSortOpen(false)} style={StyleSheet.absoluteFill} />
+          <View style={[styles.sortPopover, { top: insets.top + 72, width: sortPopoverWidth }]}>
+            <Text style={styles.sortTitle}>Sortieren</Text>
+            <Text style={styles.sortSectionLabel}>Reihenfolge</Text>
+            <View style={styles.sortChipRow}>
+              {SORT_OPTIONS.map((sort) => {
+                const isActive = activeSort === sort.key;
+
+                return (
+                  <Pressable
+                    key={sort.key}
+                    onPress={() => {
+                      setActiveSort(sort.key);
+                      setIsSortOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.sortChip,
+                      isActive && styles.sortChipActive,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Text style={[styles.sortChipLabel, isActive && styles.sortChipLabelActive]}>
+                      {sort.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -374,6 +535,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    flex: 1,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   filterPill: {
     borderRadius: 999,
@@ -395,6 +562,86 @@ const styles = StyleSheet.create({
   filterPillLabelActive: {
     color: '#f5f3ee',
     fontWeight: '700',
+  },
+  sortButton: {
+    width: 108,
+    flexShrink: 0,
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 4,
+  },
+  sortButtonLabel: {
+    color: '#1e2a1e',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20,30,20,0.16)',
+  },
+  sortPopover: {
+    position: 'absolute',
+    right: 16,
+    width: 300,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 12,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 6,
+  },
+  sortTitle: {
+    color: '#1e2a1e',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  sortSectionLabel: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  sortChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sortChip: {
+    borderRadius: 999,
+    backgroundColor: '#f2f0ea',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  sortChipActive: {
+    backgroundColor: '#2e6b4b',
+  },
+  sortChipLabel: {
+    color: '#4a574a',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  sortChipLabelActive: {
+    color: '#f5f3ee',
   },
   floatingAddButton: {
     alignItems: 'center',
@@ -447,6 +694,29 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
+  },
+  cardCreatorText: {
+    color: '#5d6f5d',
+    fontSize: 12,
+    lineHeight: 16,
+    flex: 1,
+  },
+  cardCreatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  creatorBadge: {
+    backgroundColor: '#2e6b4b',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  creatorBadgeLabel: {
+    color: '#f5f3ee',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
   },
   cardFooterRow: {
     flexDirection: 'row',

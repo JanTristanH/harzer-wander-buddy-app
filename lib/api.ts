@@ -65,10 +65,16 @@ type TourRow = {
   distance?: number | string;
   duration?: number | string;
   stampCount?: number | string;
+  newStampCountForUser?: number | string;
   idListTravelTimes?: string;
   totalElevationGain?: number | string;
   totalElevationLoss?: number | string;
   createdBy?: string;
+  creator?: {
+    ID?: string;
+    name?: string;
+    picture?: string;
+  };
   createdAt?: string;
   groupFilterStampings?: string;
   AverageGroupStampings?: number | string;
@@ -383,10 +389,12 @@ export type Tour = {
   distance: number | null;
   duration: number | null;
   stampCount: number | null;
+  newStampCountForUser: number | null;
   idListTravelTimes: string;
   totalElevationGain: number | null;
   totalElevationLoss: number | null;
   createdBy?: string;
+  createdByName?: string;
   createdAt?: string;
   groupFilterStampings?: string;
   averageGroupStampings: number | null;
@@ -410,6 +418,7 @@ export type TourPathEntry = {
 
 export type TourDetailResponse = {
   stampCount: number | null;
+  newStampCountForUser: number | null;
   distance: number | null;
   duration: number | null;
   id: string;
@@ -423,6 +432,7 @@ export type TourUpdateResponse = {
   distance: number | null;
   duration: number | null;
   stampCount: number | null;
+  newStampCountForUser: number | null;
   idListTravelTimes: string;
   totalElevationGain: number | null;
   totalElevationLoss: number | null;
@@ -785,6 +795,52 @@ function normalizeTourPathEntry(value: TourPathRow) {
   } satisfies TourPathEntry;
 }
 
+function isDriveTravelMode(travelMode?: string) {
+  const normalizedMode = safeNormalizedText(travelMode);
+  if (!normalizedMode) {
+    return false;
+  }
+
+  return (
+    normalizedMode.includes('drive') ||
+    normalizedMode.includes('car') ||
+    normalizedMode.includes('motor') ||
+    normalizedMode.includes('vehicle') ||
+    normalizedMode.includes('auto')
+  );
+}
+
+function aggregateTourMetricsFromPath(path: TourPathEntry[]) {
+  let totalDistanceMeters = 0;
+  let totalDurationSeconds = 0;
+  let hasDistanceData = false;
+  let hasDurationData = false;
+
+  for (const entry of path) {
+    const travelTime = entry.travelTime;
+    if (!travelTime) {
+      continue;
+    }
+
+    if (typeof travelTime.distanceMeters === 'number' && Number.isFinite(travelTime.distanceMeters)) {
+      hasDistanceData = true;
+      if (!isDriveTravelMode(travelTime.travelMode)) {
+        totalDistanceMeters += travelTime.distanceMeters;
+      }
+    }
+
+    if (typeof travelTime.durationSeconds === 'number' && Number.isFinite(travelTime.durationSeconds)) {
+      hasDurationData = true;
+      totalDurationSeconds += travelTime.durationSeconds;
+    }
+  }
+
+  return {
+    distance: hasDistanceData ? Math.max(0, Math.round(totalDistanceMeters)) : null,
+    duration: hasDurationData ? Math.max(0, Math.round(totalDurationSeconds)) : null,
+  };
+}
+
 function normalizeTourRow(value: TourRow) {
   return {
     ID: value.ID,
@@ -792,10 +848,12 @@ function normalizeTourRow(value: TourRow) {
     distance: toFiniteNumber(value.distance),
     duration: toFiniteNumber(value.duration),
     stampCount: toRoundedNumberOrNull(value.stampCount),
+    newStampCountForUser: toRoundedNumberOrNull(value.newStampCountForUser),
     idListTravelTimes: safeTrim(value.idListTravelTimes),
     totalElevationGain: toFiniteNumber(value.totalElevationGain),
     totalElevationLoss: toFiniteNumber(value.totalElevationLoss),
     createdBy: safeTrim(value.createdBy) || undefined,
+    createdByName: safeTrim(value.creator?.name) || undefined,
     createdAt: safeTrim(value.createdAt) || undefined,
     groupFilterStampings: safeTrim(value.groupFilterStampings) || undefined,
     averageGroupStampings: toRoundedNumberOrNull(value.AverageGroupStampings),
@@ -1542,35 +1600,41 @@ export async function fetchMapData(
 function normalizeTourDetailResponse(rawValue: unknown) {
   const value = (rawValue && typeof rawValue === 'object' ? rawValue : {}) as Record<string, unknown>;
   const path = Array.isArray(value.path) ? value.path : [];
+  const normalizedPath = path
+    .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+    .filter((entry) => entry.tour_ID || entry.travelTime_ID);
+  const aggregatedMetrics = aggregateTourMetricsFromPath(normalizedPath);
 
   return {
     stampCount: toRoundedNumberOrNull(value.stampCount),
-    distance: toFiniteNumber(value.distance),
-    duration: toFiniteNumber(value.duration),
+    newStampCountForUser: toRoundedNumberOrNull(value.newStampCountForUser),
+    distance: aggregatedMetrics.distance ?? toFiniteNumber(value.distance),
+    duration: aggregatedMetrics.duration ?? toFiniteNumber(value.duration),
     id: safeTrim(value.id),
     groupSize: toRoundedNumberOrNull(value.groupSize),
     averageGroupStampings: toRoundedNumberOrNull(value.averageGroupStampings ?? value.AverageGroupStampings),
-    path: path
-      .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
-      .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+    path: normalizedPath,
   } satisfies TourDetailResponse;
 }
 
 function normalizeTourUpdateResponse(rawValue: unknown) {
   const value = (rawValue && typeof rawValue === 'object' ? rawValue : {}) as Record<string, unknown>;
   const path = Array.isArray(value.path) ? value.path : [];
+  const normalizedPath = path
+    .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+    .filter((entry) => entry.tour_ID || entry.travelTime_ID);
+  const aggregatedMetrics = aggregateTourMetricsFromPath(normalizedPath);
 
   return {
     ID: safeTrim(value.ID),
-    distance: toFiniteNumber(value.distance),
-    duration: toFiniteNumber(value.duration),
+    distance: aggregatedMetrics.distance ?? toFiniteNumber(value.distance),
+    duration: aggregatedMetrics.duration ?? toFiniteNumber(value.duration),
     stampCount: toRoundedNumberOrNull(value.stampCount),
+    newStampCountForUser: toRoundedNumberOrNull(value.newStampCountForUser),
     idListTravelTimes: safeTrim(value.idListTravelTimes),
     totalElevationGain: toFiniteNumber(value.totalElevationGain),
     totalElevationLoss: toFiniteNumber(value.totalElevationLoss),
-    path: path
-      .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
-      .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+    path: normalizedPath,
   } satisfies TourUpdateResponse;
 }
 
@@ -1584,15 +1648,17 @@ function normalizeHikingRouteCalculationResponse(rawValue: unknown) {
         const result =
           rawResult && typeof rawResult === 'object' ? (rawResult as Record<string, unknown>) : {};
         const rawPath = Array.isArray(result.path) ? result.path : [];
+        const normalizedPath = rawPath
+          .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
+          .filter((entry) => entry.tour_ID || entry.travelTime_ID);
+        const aggregatedMetrics = aggregateTourMetricsFromPath(normalizedPath);
 
         return {
           id: safeTrim(result.id),
           stampCount: toRoundedNumberOrNull(result.stampCount),
-          distance: toFiniteNumber(result.distance),
-          duration: toFiniteNumber(result.duration),
-          path: rawPath
-            .map((entry) => normalizeTourPathEntry(entry as TourPathRow))
-            .filter((entry) => entry.tour_ID || entry.travelTime_ID),
+          distance: aggregatedMetrics.distance ?? toFiniteNumber(result.distance),
+          duration: aggregatedMetrics.duration ?? toFiniteNumber(result.duration),
+          path: normalizedPath,
         } satisfies HikingRouteResult;
       })
       .filter((result) => Boolean(result.id)),
@@ -1608,6 +1674,7 @@ export async function fetchTours(accessToken: string, groupUserIds: string[] = [
       'distance',
       'duration',
       'stampCount',
+      'newStampCountForUser',
       'idListTravelTimes',
       'totalElevationGain',
       'totalElevationLoss',
@@ -1616,6 +1683,11 @@ export async function fetchTours(accessToken: string, groupUserIds: string[] = [
       'groupFilterStampings',
       'AverageGroupStampings',
     ],
+    expand: {
+      creator: {
+        select: ['ID', 'name', 'picture'],
+      },
+    },
     orderBy: 'createdAt desc',
     top: 250,
     ...(groupFilter ? { filter: { groupFilterStampings: { ne: groupFilter } } } : {}),
@@ -1646,6 +1718,7 @@ export async function fetchTourById(accessToken: string, tourId: string, groupUs
           'distance',
           'duration',
           'stampCount',
+          'newStampCountForUser',
           'idListTravelTimes',
           'totalElevationGain',
           'totalElevationLoss',
@@ -1654,6 +1727,11 @@ export async function fetchTourById(accessToken: string, tourId: string, groupUs
           'groupFilterStampings',
           'AverageGroupStampings',
         ],
+        expand: {
+          creator: {
+            select: ['ID', 'name', 'picture'],
+          },
+        },
         top: 1,
         filter,
       });

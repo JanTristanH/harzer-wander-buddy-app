@@ -82,6 +82,12 @@ const markerVariants = [
     labels: ['P'],
   },
   {
+    kind: 'parking-order',
+    fillColor: '#2f7dd7',
+    textColor: '#111111',
+    labels: ['--', ...tourOrderLabels],
+  },
+  {
     kind: 'tour-order',
     fillColor: '#1e2a1e',
     textColor: '#111111',
@@ -181,7 +187,7 @@ function createMappingFile(entries) {
 
 import { Platform, type ImageRequireSource } from 'react-native';
 
-type MarkerVisualKind = 'visited-stamp' | 'open-stamp' | 'parking' | 'tour-order';
+type MarkerVisualKind = 'visited-stamp' | 'open-stamp' | 'parking' | 'parking-order' | 'tour-order';
 
 const MAP_MARKER_IMAGE_SOURCE_BY_KEY_IOS: Record<string, ImageRequireSource> = {
 ${iosRecord}
@@ -239,13 +245,13 @@ export function getPreGeneratedMapMarkerImageSource(input: {
     return sourceMap['parking:P'];
   }
 
-  if (input.kind === 'tour-order') {
+  if (input.kind === 'tour-order' || input.kind === 'parking-order') {
     const normalizedTourOrderLabel = normalizeTourOrderLabel(input.label);
     if (!normalizedTourOrderLabel) {
       return undefined;
     }
 
-    return sourceMap[\`tour-order:${'${normalizedTourOrderLabel}'}\`];
+    return sourceMap[\`${'${input.kind}'}:${'${normalizedTourOrderLabel}'}\`];
   }
 
   const normalizedStampLabel = normalizeStampLabel(input.label);

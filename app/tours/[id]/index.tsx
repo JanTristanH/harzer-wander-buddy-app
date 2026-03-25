@@ -804,6 +804,18 @@ export default function TourDetailScreen() {
   const selectedItemInTourCount = selectedMapItem
     ? (draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? []).length
     : 0;
+  const selectedRouteOrderLabel = useMemo(() => {
+    if (!selectedMapItem) {
+      return null;
+    }
+
+    const positions = draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? [];
+    if (positions.length === 0) {
+      return null;
+    }
+
+    return resolveRouteOrderLabel(positions);
+  }, [draftPoiStats.positionsById, selectedMapItem]);
   const selectedStampNumber = getStampNumber(selectedMapItem);
   const selectedMapItemImageSource = useMemo<ImageSourcePropType | null>(
     () => resolveMapItemImageSource(selectedMapItem?.imageUrl, accessToken),
@@ -1495,6 +1507,8 @@ export default function TourDetailScreen() {
     }
     return statusMessage || 'Bereit';
   })();
+  const isSaveDisabled = editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2;
+  const saveButtonLabel = updateTourMutation.isPending ? 'Speichere...' : 'Jetzt speichern';
 
   const renderTourMap = (isFullscreen: boolean) => (
     <View style={[styles.mapCard, isFullscreen && styles.mapCardFullscreen]}>
@@ -1529,16 +1543,22 @@ export default function TourDetailScreen() {
           const isInTour = routePositions.length > 0;
           const routeOrderLabel = resolveRouteOrderLabel(routePositions);
           const routeOrderImageLabel = resolveRouteOrderImageLabel(routeOrderLabel);
+          const inTourMarkerKind =
+            item.kind === 'visited-stamp' || item.kind === 'open-stamp'
+              ? item.kind
+              : item.kind === 'parking'
+                ? 'parking-order'
+              : 'tour-order';
           const isSelected = selectedMapItemId === item.ID;
           const markerRenderKey = `${item.ID}:${isInTour ? `tour:${routeOrderLabel}` : 'base'}:${isSelected ? 'selected' : 'default'}`;
 
           const tourOrderMarkerImage =
             getPreGeneratedMapMarkerImageSource({
-              kind: 'tour-order',
+              kind: inTourMarkerKind,
               label: routeOrderImageLabel,
             }) ||
             getPreGeneratedMapMarkerImageSource({
-              kind: 'tour-order',
+              kind: inTourMarkerKind,
               label: '--',
             });
 
@@ -1574,6 +1594,10 @@ export default function TourDetailScreen() {
                 : item.kind === 'parking'
                   ? 'P'
                   : extractStampToken(item.markerLabel) || '--';
+            const useTourFallbackColor =
+              isInTour && inTourMarkerKind !== 'open-stamp' && inTourMarkerKind !== 'parking-order';
+            const useParkingFallbackColor =
+              inTourMarkerKind === 'parking-order' || (!isInTour && item.kind === 'parking');
 
             return (
               <Marker
@@ -1586,13 +1610,14 @@ export default function TourDetailScreen() {
                   collapsable={false}
                   style={[
                     styles.markerFallback,
-                    isInTour && styles.markerFallbackInTour,
+                    useTourFallbackColor && styles.markerFallbackInTour,
+                    useParkingFallbackColor && styles.markerFallbackParking,
                     isSelected && styles.markerFallbackSelected,
                   ]}>
                   <Text
                     style={[
                       styles.markerFallbackLabel,
-                      isInTour && styles.markerFallbackLabelInTour,
+                      useTourFallbackColor && styles.markerFallbackLabelInTour,
                     ]}>
                     {fallbackLabel}
                   </Text>
@@ -1686,7 +1711,7 @@ export default function TourDetailScreen() {
                   {`${selectedStampNumber ? `#${selectedStampNumber} · ` : ''}${selectedMapItem.name}`}
                 </Text>
                 <Text numberOfLines={1} style={styles.mapBottomMeta}>
-                  {`${selectedStampNumber ? `Stempel ${selectedStampNumber} • ` : ''}${selectedMapItem.typeLabel}`}
+                  {`${selectedRouteOrderLabel ? `Besuch ${selectedRouteOrderLabel} • ` : ''}${selectedStampNumber ? `Stempel ${selectedStampNumber} • ` : ''}${selectedMapItem.typeLabel}`}
                 </Text>
               </View>
               <View style={styles.mapBottomOpenHint}>
@@ -1741,6 +1766,19 @@ export default function TourDetailScreen() {
                   style={({ pressed }) => [styles.shareHeaderButton, pressed && styles.pressed]}>
                   <Feather color="#3a4f84" name="share-2" size={14} />
                   <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
+                </Pressable>
+              ) : null}
+              {isEditMode ? (
+                <Pressable
+                  disabled={isSaveDisabled}
+                  onPress={() => void performSave(draftPoiIds, { manual: true })}
+                  style={({ pressed }) => [
+                    styles.saveHeaderButton,
+                    isSaveDisabled && styles.saveHeaderButtonDisabled,
+                    pressed && !isSaveDisabled && styles.pressed,
+                  ]}>
+                  <Feather color="#f5f3ee" name="save" size={14} />
+                  <Text style={styles.saveHeaderButtonLabel}>{saveButtonLabel}</Text>
                 </Pressable>
               ) : null}
 
@@ -2040,21 +2078,14 @@ export default function TourDetailScreen() {
 
         {isEditMode ? (
           <Pressable
-            disabled={editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2}
+            disabled={isSaveDisabled}
             onPress={() => void performSave(draftPoiIds, { manual: true })}
             style={({ pressed }) => [
               styles.primaryButton,
-              (editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2) &&
-                styles.primaryButtonDisabled,
-              pressed &&
-                !editingBlocked &&
-                !updateTourMutation.isPending &&
-                draftPoiIds.length >= 2 &&
-                styles.pressed,
+              isSaveDisabled && styles.primaryButtonDisabled,
+              pressed && !isSaveDisabled && styles.pressed,
             ]}>
-            <Text style={styles.primaryButtonLabel}>
-              {updateTourMutation.isPending ? 'Speichere...' : 'Jetzt speichern'}
-            </Text>
+            <Text style={styles.primaryButtonLabel}>{saveButtonLabel}</Text>
           </Pressable>
         ) : null}
 
@@ -2117,6 +2148,30 @@ const styles = StyleSheet.create({
   },
   shareHeaderButtonLabel: {
     color: '#3a4f84',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  saveHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#2e6b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  saveHeaderButtonDisabled: {
+    backgroundColor: '#b8c7bb',
+  },
+  saveHeaderButtonLabel: {
+    color: '#f5f3ee',
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '700',
@@ -2436,6 +2491,9 @@ const styles = StyleSheet.create({
   },
   markerFallbackInTour: {
     backgroundColor: '#2e6b4b',
+  },
+  markerFallbackParking: {
+    backgroundColor: '#2f7dd7',
   },
   markerFallbackSelected: {
     borderColor: '#1e2a1e',
