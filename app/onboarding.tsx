@@ -71,6 +71,17 @@ type ActionButtonProps = PressableProps & {
 
 type LocationPermissionState = 'unknown' | 'checking' | 'granted' | 'denied';
 
+function getInitialProfileName(rawValue?: string | null) {
+  const trimmedValue = (rawValue || '').trim();
+  if (!trimmedValue) {
+    return '';
+  }
+
+  const [valueBeforeAt] = trimmedValue.split('@');
+  const normalizedValue = valueBeforeAt.trim();
+  return normalizedValue || trimmedValue;
+}
+
 function ActionButton({
   label,
   variant = 'secondary',
@@ -140,12 +151,14 @@ export default function OnboardingScreen() {
   const hasPrefetchedListRef = useRef(false);
   const lastAutoSaveAttemptRef = useRef<string | null>(null);
   const profileSavePromiseRef = useRef<Promise<boolean> | null>(null);
+  const normalizedInitialSaveKeyRef = useRef<string | null>(null);
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
-  const fallbackProfileName = (
+  const fallbackProfileName = getInitialProfileName(
     currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
-  ).trim();
+  );
+  const claimsNameHasAt = Boolean((claims?.name || '').includes('@'));
   const effectiveProfileName = profileName.trim() || displayName;
   const effectiveProfilePicture = selectedProfileImage?.uri || profilePicture || claims?.picture || null;
   const footerNote = isAuthenticated
@@ -189,7 +202,9 @@ export default function OnboardingScreen() {
     }
 
     setProfileName(
-      currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+      getInitialProfileName(
+        currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+      )
     );
     setProfilePicture(currentUserProfile?.picture || claims?.picture || null);
     setProfileSaveError(null);
@@ -455,6 +470,35 @@ export default function OnboardingScreen() {
     queryClient,
     selectedProfileImage,
     setCurrentUserProfile,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !accessToken ||
+      isProfileSaving ||
+      !claimsNameHasAt ||
+      Boolean(currentUserProfile?.name)
+    ) {
+      return;
+    }
+
+    const saveKey = `${claims?.sub || 'unknown'}::${fallbackProfileName}`;
+    if (normalizedInitialSaveKeyRef.current === saveKey) {
+      return;
+    }
+
+    normalizedInitialSaveKeyRef.current = saveKey;
+    void handleSaveProfile({ showValidationAlert: false, showErrorAlert: false });
+  }, [
+    accessToken,
+    claims?.sub,
+    claimsNameHasAt,
+    currentUserProfile?.name,
+    fallbackProfileName,
+    handleSaveProfile,
+    isAuthenticated,
+    isProfileSaving,
   ]);
 
   const hasPendingProfileNameChange = profileName.trim().length > 0 && profileName.trim() !== fallbackProfileName;
