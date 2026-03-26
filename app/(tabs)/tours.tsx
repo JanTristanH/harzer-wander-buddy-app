@@ -1,4 +1,4 @@
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -127,9 +127,6 @@ function TourCard({
       </View>
 
       <Text style={styles.cardMeta}>
-        {`${formatDistance(item.distance)} • ${formatDuration(item.duration)}`}
-      </Text>
-      <Text style={styles.cardMeta}>
         {`Stempel gesamt: ${item.stampCount ?? 0} • Neue Stempel fuer mich: ${item.newStampCountForUser ?? 0}`}
       </Text>
 
@@ -141,6 +138,10 @@ function TourCard({
           </View>
         ) : null}
       </View>
+
+      <Text style={styles.cardMeta}>
+        {`${formatDistance(item.distance)} • ${formatDuration(item.duration)}`}
+      </Text>
 
       <View style={styles.cardFooterRow}>
         <Text style={styles.cardFooterText}>{`↑${formatElevation(item.totalElevationGain)} • ↓${formatElevation(item.totalElevationLoss)}`}</Text>
@@ -366,7 +367,7 @@ export default function ToursTabScreen() {
               <Pressable
                 onPress={() => setIsSortOpen(true)}
                 style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
-                <Feather color="#1e2a1e" name="menu" size={14} />
+                <MaterialIcons name="sort" size={24} color="black" />
                 <Text style={styles.sortButtonLabel}>Sortieren</Text>
               </Pressable>
             </View>

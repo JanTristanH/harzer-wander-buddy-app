@@ -1820,6 +1820,7 @@ export default function TourDetailScreen() {
                 onPress={() => focusMapItemOnMap(item)}
                 zIndex={isSelected ? 20 : 10}>
                 <View collapsable={false} style={styles.poiInTourMarkerWrap}>
+                  {isSelected ? <View style={styles.selectedMarkerHalo} /> : null}
                   {markerImageWithoutOrder ? (
                     <Image source={markerImageWithoutOrder} style={styles.poiInTourMarkerImage} />
                   ) : (
@@ -1837,6 +1838,22 @@ export default function TourDetailScreen() {
           }
 
           if (markerImage) {
+            if (isSelected) {
+              return (
+                <Marker
+                  anchor={{ x: 0.5, y: 1 }}
+                  coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+                  key={markerRenderKey}
+                  onPress={() => focusMapItemOnMap(item)}
+                  zIndex={20}>
+                  <View collapsable={false} style={styles.poiInTourMarkerWrap}>
+                    <View style={styles.selectedMarkerHalo} />
+                    <Image source={markerImage} style={styles.poiInTourMarkerImage} />
+                  </View>
+                </Marker>
+              );
+            }
+
             return (
               <Marker
                 anchor={{ x: 0.5, y: 1 }}
@@ -1878,6 +1895,7 @@ export default function TourDetailScreen() {
                     useParkingFallbackColor && styles.markerFallbackParking,
                     isSelected && styles.markerFallbackSelected,
                   ]}>
+                  {isSelected ? <View style={styles.selectedMarkerHaloFallback} /> : null}
                   <Text
                     style={[
                       styles.markerFallbackLabel,
@@ -2096,10 +2114,8 @@ export default function TourDetailScreen() {
             <Text style={styles.cardTitle}>Tourprofil</Text>
             <Text style={styles.profileStatusText}>{saveStateLabel}</Text>
           </View>
-          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(liveTourMetrics.distance)}`}</Text>
-          <Text style={styles.cardLine}>{`Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
+          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(liveTourMetrics.distance)} • Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
           <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(liveTourMetrics.totalElevationGain)} • ↓${formatElevation(liveTourMetrics.totalElevationLoss)}`}</Text>
-          <Text style={styles.cardLine}>{`Stempel: ${liveTourMetrics.stampCount ?? 0}`}</Text>
           <Text style={styles.cardLine}>{`Stempel gesamt: ${liveTourMetrics.stampCount ?? 0} • Neue Stempel fuer mich: ${liveTourMetrics.newStampCountForUser ?? 0}`}</Text>
         </View>
 
@@ -2274,10 +2290,11 @@ export default function TourDetailScreen() {
               onPress={handleFinishEditMode}
               style={({ pressed }) => [
                 styles.footerPrimaryButton,
+                styles.footerPrimaryButtonSecondary,
                 footerActionsDisabled && styles.footerPrimaryButtonDisabled,
                 pressed && !footerActionsDisabled && styles.pressed,
               ]}>
-              <Text style={styles.footerPrimaryButtonLabel}>Fertig</Text>
+              <Text style={[styles.footerPrimaryButtonLabel, styles.footerPrimaryButtonLabelSecondary]}>Fertig</Text>
             </Pressable>
           ) : (
             <Pressable
@@ -2799,6 +2816,42 @@ const styles = StyleSheet.create({
     borderColor: '#1e2a1e',
     transform: [{ scale: 1.08 }],
   },
+selectedMarkerHalo: {
+  position: 'absolute',
+  top: 10,
+  width: 51,
+  height: 51,
+  borderRadius: 999,
+
+  // subtle glow base (optional, can even be transparent)
+  backgroundColor: 'rgba(0, 0, 0, 0.15)',
+
+  // iOS shadow
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 0 },
+  shadowOpacity: 0.4,
+  shadowRadius: 10,
+
+  // Android shadow
+  elevation: 8,
+},
+
+selectedMarkerHaloFallback: {
+  position: 'absolute',
+  top: -6,
+  width: 56,
+  height: 56,
+  borderRadius: 999,
+
+  backgroundColor: 'rgba(0, 0, 0, 0.12)',
+
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 0 },
+  shadowOpacity: 0.35,
+  shadowRadius: 14,
+
+  elevation: 10,
+},
   markerFallbackLabel: {
     color: '#f5f3ee',
     fontSize: 10,
@@ -3069,11 +3122,19 @@ const styles = StyleSheet.create({
   footerPrimaryButtonDisabled: {
     backgroundColor: '#b8c7bb',
   },
+  footerPrimaryButtonSecondary: {
+    backgroundColor: '#eef3ed',
+    borderWidth: 1,
+    borderColor: '#d9e3d7',
+  },
   footerPrimaryButtonLabel: {
     color: '#f5f3ee',
     fontSize: 13,
     lineHeight: 16,
     fontWeight: '700',
+  },
+  footerPrimaryButtonLabelSecondary: {
+    color: '#4d6d56',
   },
   footerEditHint: {
     flex: 1,
