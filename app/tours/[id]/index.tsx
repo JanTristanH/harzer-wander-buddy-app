@@ -921,6 +921,10 @@ export default function TourDetailScreen() {
 
     return mapItemById.get(selectedMapItemId.toLowerCase()) ?? null;
   }, [mapItemById, selectedMapItemId]);
+  const normalizedSelectedMapItemId = useMemo(
+    () => selectedMapItemId?.toLowerCase() ?? null,
+    [selectedMapItemId]
+  );
 
   const mapItemsForRendering = useMemo(() => {
     const pinnedById = new Map<string, TourMapItem>();
@@ -1899,7 +1903,8 @@ export default function TourDetailScreen() {
         ))}
 
         {markerRenderStates.map((state) => {
-          if (state.overlayKind === 'none') {
+          const isSelected = normalizedSelectedMapItemId === state.id.toLowerCase();
+          if (!isSelected) {
             return null;
           }
 
@@ -1907,16 +1912,32 @@ export default function TourDetailScreen() {
             <Marker
               anchor={{ x: 0.5, y: 1 }}
               coordinate={state.coordinate}
-              key={state.overlayKey}
-              onPress={() => focusMapItemOnMap(state.item)}
-              zIndex={30}>
+              key={`${state.overlayKey}:halo`}
+              zIndex={0}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
-                {state.overlayKind === 'badge' ? (
-                  <View style={styles.poiInTourMarkerBadge}>
-                    <Feather color="#f5f3ee" name="map-pin" size={9} />
-                    <Text style={styles.poiInTourMarkerBadgeLabel}>{state.routeOrderLabel ?? '--'}</Text>
-                  </View>
-                ) : null}
+                <View style={styles.selectedMarkerHalo} />
+              </View>
+            </Marker>
+          );
+        })}
+
+        {markerRenderStates.map((state) => {
+          if (state.overlayKind !== 'badge') {
+            return null;
+          }
+
+          return (
+            <Marker
+              anchor={{ x: 0.5, y: 1 }}
+              coordinate={state.coordinate}
+              key={`${state.overlayKey}:badge`}
+              onPress={() => focusMapItemOnMap(state.item)}
+              zIndex={50}>
+              <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
+                <View style={styles.poiInTourMarkerBadge}>
+                  <Feather color="#f5f3ee" name="map-pin" size={9} />
+                  <Text style={styles.poiInTourMarkerBadgeLabel}>{state.routeOrderLabel ?? '--'}</Text>
+                </View>
               </View>
             </Marker>
           );
@@ -2802,6 +2823,14 @@ const styles = StyleSheet.create({
     height: 62,
     alignItems: 'center',
     justifyContent: 'flex-end',
+  },
+  selectedMarkerHalo: {
+    position: 'absolute',
+    top: 5,
+    width: 51,
+    height: 51,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0, 0, 0, 0.15)',
   },
   poiInTourMarkerBadge: {
     position: 'absolute',
