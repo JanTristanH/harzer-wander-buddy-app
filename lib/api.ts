@@ -2718,8 +2718,7 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
 
   const escapedQuery = escapeODataString(query);
   const filters = [
-    `contains(name,'${escapedQuery}') or contains(ID,'${escapedQuery}')`,
-    `startswith(name,'${escapedQuery}') or startswith(ID,'${escapedQuery}')`,
+    `contains(name,'${escapedQuery}') or startswith(name,'${escapedQuery}')`,
   ];
 
   for (const filter of filters) {
