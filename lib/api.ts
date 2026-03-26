@@ -1903,25 +1903,6 @@ export async function updateTourByPOIList(
   return normalizeTourUpdateResponse(parsed);
 }
 
-export async function previewTourByPOIList(
-  accessToken: string,
-  payload: {
-    TourID: string;
-    POIList: string;
-  }
-) {
-  const response = await mutateOData<unknown>(accessToken, buildUrl('previewTourByPOIList'), {
-    method: 'POST',
-    body: JSON.stringify({
-      TourID: safeTrim(payload.TourID),
-      POIList: safeTrim(payload.POIList),
-    }),
-  });
-
-  const parsed = parseODataFunctionResult<unknown>(response, 'previewTourByPOIList');
-  return normalizeTourUpdateResponse(parsed);
-}
-
 export async function fetchAllPointsOfInterest(accessToken: string) {
   const rows = await fetchCollection<PointOfInterestRow>(accessToken, 'AllPointsOfInterest', {
     select: [

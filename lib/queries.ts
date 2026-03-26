@@ -13,7 +13,6 @@ import {
   fetchTourPath,
   fetchTours,
   fetchProfileOverview,
-  previewTourByPOIList,
   fetchUserProfileOverview,
   fetchStampboxes,
   updateTourByPOIList,
@@ -586,31 +585,6 @@ export function useUpdateTourByPOIListMutation(tourId?: string) {
         queryClient.invalidateQueries({ queryKey: queryKeys.toursOverview(claims?.sub) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.tourDetail(claims?.sub, tourId) }),
       ]);
-    },
-  });
-}
-
-export function usePreviewTourByPOIListMutation(tourId?: string) {
-  const authorizedRequest = useAuthorizedRequest();
-
-  return useMutation<
-    TourUpdateResponse,
-    Error,
-    {
-      poiIds: string[];
-    }
-  >({
-    mutationFn: (variables) => {
-      if (!tourId) {
-        throw new Error('Tour ID is required');
-      }
-
-      return authorizedRequest((token) =>
-        previewTourByPOIList(token, {
-          TourID: tourId,
-          POIList: variables.poiIds.join(';'),
-        })
-      );
     },
   });
 }

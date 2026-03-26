@@ -1062,8 +1062,11 @@ function StampDetailContent() {
                 {visited ? 'Besucht' : 'Unbesucht'}
               </Text>
             </View>
-            <Pressable onPress={handleShare} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
-              <Feather color="#1e2a1e" name="share-2" size={18} />
+            <Pressable
+              onPress={handleShare}
+              style={({ pressed }) => [styles.shareHeaderButton, pressed && styles.topButtonPressed]}>
+              <Feather color="#3a4f84" name="share-2" size={14} />
+              <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
             </Pressable>
           </View>
           <View style={styles.heroBadge}>
@@ -1545,6 +1548,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     alignItems: 'center',
+  },
+  shareHeaderButton: {
+    minHeight: 32,
+    borderRadius: 10,
+    backgroundColor: '#edf2fc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  shareHeaderButtonLabel: {
+    color: '#3a4f84',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   statusPill: {
     minHeight: 40,

@@ -32,7 +32,6 @@ import {
   useDeleteTourMutation,
   useMapDataQuery,
   usePointsOfInterestQuery,
-  usePreviewTourByPOIListMutation,
   useTourDetailQuery,
   useUpdateTourByPOIListMutation,
   useUpdateTourNameMutation,
@@ -55,7 +54,6 @@ const MAP_EDGE_PADDING = {
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
-const PREVIEW_DEBOUNCE_MS = 700;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
@@ -185,7 +183,7 @@ function buildGoogleMapsDirectionsUrl(locations: string[]) {
     'api=1',
     `origin=${formatLocation(origin)}`,
     `destination=${formatLocation(destination)}`,
-    `travelmode=walk`,
+    `travelmode=walking`,
   ];
 
   if (waypoints.length > 0) {
@@ -294,16 +292,13 @@ function createMarkerKeys(input: {
   id: string;
   baseImageKind: MarkerBaseImageKind;
   baseImageLabel: string;
-  overlayKind: MarkerOverlayKind;
-  routeOrderLabel: string | null;
 }) {
   const normalizedId = input.id.trim().toLowerCase();
   const normalizedBaseImageLabel = input.baseImageLabel.trim().toUpperCase() || '--';
-  const normalizedRouteOrderLabel = input.routeOrderLabel?.trim().toUpperCase() || '--';
 
   return {
     baseKey: `${normalizedId}:base:${input.baseImageKind}:${normalizedBaseImageLabel}`,
-    overlayKey: `${normalizedId}:overlay:${input.overlayKind}:${normalizedRouteOrderLabel}`,
+    overlayKey: `${normalizedId}:overlay`,
   };
 }
 
@@ -323,8 +318,6 @@ function deriveMarkerRenderState(
     id: item.ID,
     baseImageKind,
     baseImageLabel,
-    overlayKind,
-    routeOrderLabel,
   });
 
   return {
@@ -706,7 +699,6 @@ export default function TourDetailScreen() {
   const deleteTourMutation = useDeleteTourMutation(tourId);
   const updateTourNameMutation = useUpdateTourNameMutation(tourId);
   const updateTourMutation = useUpdateTourByPOIListMutation(tourId);
-  const { mutateAsync: previewTour } = usePreviewTourByPOIListMutation(tourId);
 
   const [draftPoiIds, setDraftPoiIds] = useState<string[]>([]);
   const [lastPersistedPoiIds, setLastPersistedPoiIds] = useState<string[]>([]);
@@ -724,7 +716,7 @@ export default function TourDetailScreen() {
   const [livePathEntries, setLivePathEntries] = useState<TourPathEntry[]>([]);
   const [lastSaveErrorCode, setLastSaveErrorCode] = useState<403 | 404 | 422 | null>(null);
   const [blockingErrorCode, setBlockingErrorCode] = useState<403 | 404 | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [, setStatusMessage] = useState<string | null>(null);
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isViewOverflowOpen, setIsViewOverflowOpen] = useState(false);
@@ -735,20 +727,13 @@ export default function TourDetailScreen() {
   const hasAppliedAutoStartEditModeRef = useRef(false);
   const regionRef = useRef<Region>(HARZ_REGION);
   const lastMarkerPressAtRef = useRef(0);
-  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previewRequestIdRef = useRef(0);
+  const activeSaveRequestIdRef = useRef(0);
+  const queuedPoiIdsRef = useRef<string[] | null>(null);
+  const isAutoSaveRunningRef = useRef(false);
   const fullscreenProgress = useSharedValue(0);
   const fullscreenAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 0.94 + fullscreenProgress.value * 0.06 }],
   }));
-  const cancelPendingPreview = useCallback(() => {
-    if (previewTimerRef.current) {
-      clearTimeout(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
-
-    previewRequestIdRef.current += 1;
-  }, []);
 
   const openMapFullscreen = useCallback(() => {
     setIsMapFullscreen(true);
@@ -781,13 +766,10 @@ export default function TourDetailScreen() {
     setStatusMessage(null);
     setSaveStatus('idle');
     setIsEditMode(false);
+    activeSaveRequestIdRef.current = 0;
+    queuedPoiIdsRef.current = null;
+    isAutoSaveRunningRef.current = false;
   }, [tourId]);
-
-  useEffect(() => {
-    return () => {
-      cancelPendingPreview();
-    };
-  }, [cancelPendingPreview]);
 
   useEffect(() => {
     if (!isMapFullscreen) {
@@ -927,47 +909,8 @@ export default function TourDetailScreen() {
   );
 
   const mapItemsForRendering = useMemo(() => {
-    const pinnedById = new Map<string, TourMapItem>();
-
-    for (const draftPoiId of draftPoiIds) {
-      const item = mapItemById.get(draftPoiId.toLowerCase());
-      if (item) {
-        pinnedById.set(item.ID.toLowerCase(), item);
-      }
-    }
-
-    const visible = Array.from(pinnedById.values());
-    const parkingItems = allMapItems.filter((item) => item.kind === 'parking');
-    const stampItems = allMapItems.filter(
-      (item) => item.kind === 'visited-stamp' || item.kind === 'open-stamp'
-    );
-    const poiItems = allMapItems.filter((item) => item.kind === 'poi');
-
-    // Essential markers: parking and stamps are always shown.
-    for (const parkingItem of parkingItems) {
-      if (pinnedById.has(parkingItem.ID.toLowerCase())) {
-        continue;
-      }
-      visible.push(parkingItem);
-    }
-
-    for (const stampItem of stampItems) {
-      if (pinnedById.has(stampItem.ID.toLowerCase())) {
-        continue;
-      }
-      visible.push(stampItem);
-    }
-
-    // Generic POIs are always shown as regular markers (no clustering/limiting).
-    for (const poiItem of poiItems) {
-      if (pinnedById.has(poiItem.ID.toLowerCase())) {
-        continue;
-      }
-      visible.push(poiItem);
-    }
-
-    return visible;
-  }, [allMapItems, draftPoiIds, mapItemById]);
+    return allMapItems;
+  }, [allMapItems]);
 
   const markerRenderStates = useMemo(
     () =>
@@ -1075,7 +1018,8 @@ export default function TourDetailScreen() {
   }, [isEditMode, selectedItemVisitOptions.length]);
 
   const resetDraftToPersistedState = useCallback(() => {
-    cancelPendingPreview();
+    queuedPoiIdsRef.current = null;
+    isAutoSaveRunningRef.current = false;
     setDraftPoiIds(lastPersistedPoiIds);
     setLastSaveErrorCode(null);
     setSaveStatus('idle');
@@ -1085,7 +1029,7 @@ export default function TourDetailScreen() {
       setLivePathEntries(data.path ?? []);
       setLiveTourMetrics(createLiveTourMetrics(data.tour));
     }
-  }, [cancelPendingPreview, data?.path, data?.tour, lastPersistedPoiIds]);
+  }, [data?.path, data?.tour, lastPersistedPoiIds]);
   const handleEnterEditMode = useCallback(() => {
     if (!canEnterEditMode || isEditMode) {
       return;
@@ -1126,30 +1070,6 @@ export default function TourDetailScreen() {
     setTourNameDraft(data?.tour.name ?? '');
     setIsEditMode(false);
   }, [data?.tour.name]);
-  const handleFinishEditMode = useCallback(() => {
-    if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
-      return;
-    }
-
-    void (async () => {
-      if (hasPendingChanges) {
-        const didSave = await performSave(draftPoiIds, { manual: true });
-        if (!didSave) {
-          return;
-        }
-      }
-
-      exitEditMode();
-    })();
-  }, [
-    draftPoiIds,
-    exitEditMode,
-    hasPendingChanges,
-    isEditMode,
-    performSave,
-    updateTourMutation.isPending,
-    updateTourNameMutation.isPending,
-  ]);
   const navigateBackToTours = useCallback(() => {
     if (router.canGoBack()) {
       router.back();
@@ -1426,8 +1346,6 @@ export default function TourDetailScreen() {
         return false;
       }
 
-      cancelPendingPreview();
-
       setSaveStatus('saving');
       setStatusMessage('Wird gespeichert...');
       setLastSaveErrorCode(null);
@@ -1483,20 +1401,60 @@ export default function TourDetailScreen() {
         return false;
       }
     },
-    [cancelPendingPreview, editingBlocked, refetch, updateTourMutation]
+    [editingBlocked, refetch, updateTourMutation]
   );
-  useEffect(() => {
-    if (previewTimerRef.current) {
-      clearTimeout(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
 
+  const triggerAutoSave = useCallback(
+    async (nextPoiIds: string[]) => {
+      if (isAutoSaveRunningRef.current) {
+        queuedPoiIdsRef.current = nextPoiIds;
+        setSaveStatus((current) => (current === 'saving' ? current : 'pending'));
+        setStatusMessage('Aenderungen ausstehend...');
+        return;
+      }
+
+      isAutoSaveRunningRef.current = true;
+      let poiIdsToSave = nextPoiIds;
+      let saveFailed = false;
+
+      try {
+        while (true) {
+          activeSaveRequestIdRef.current += 1;
+          const requestId = activeSaveRequestIdRef.current;
+          const didSave = await performSave(poiIdsToSave);
+          if (!didSave || activeSaveRequestIdRef.current !== requestId) {
+            saveFailed = !didSave;
+            break;
+          }
+
+          const queuedPoiIds = queuedPoiIdsRef.current;
+          queuedPoiIdsRef.current = null;
+
+          if (!queuedPoiIds || arraysEqual(queuedPoiIds, poiIdsToSave)) {
+            break;
+          }
+
+          poiIdsToSave = queuedPoiIds;
+          setSaveStatus('pending');
+          setStatusMessage('Aenderungen ausstehend...');
+        }
+      } finally {
+        isAutoSaveRunningRef.current = false;
+        if (!saveFailed) {
+          queuedPoiIdsRef.current = null;
+        }
+      }
+    },
+    [performSave]
+  );
+
+  useEffect(() => {
     if (!isEditMode) {
-      previewRequestIdRef.current += 1;
+      queuedPoiIdsRef.current = null;
       return;
     }
 
-    if (!hasInitialized || editingBlocked || updateTourMutation.isPending) {
+    if (!hasInitialized || editingBlocked) {
       return;
     }
 
@@ -1504,75 +1462,44 @@ export default function TourDetailScreen() {
       return;
     }
 
-    setSaveStatus((current) => (current === 'saving' ? current : 'pending'));
-    setStatusMessage('Aenderungen ausstehend...');
-
     if (draftPoiIds.length < 2) {
       setLastSaveErrorCode(null);
       return;
     }
 
-    const requestId = previewRequestIdRef.current + 1;
-    previewRequestIdRef.current = requestId;
-    previewTimerRef.current = setTimeout(() => {
-      previewTimerRef.current = null;
-      void (async () => {
-        try {
-          const response = await previewTour({ poiIds: draftPoiIds });
-          if (previewRequestIdRef.current !== requestId) {
-            return;
-          }
-
-          setLivePathEntries(response.path ?? []);
-          setLiveTourMetrics((current) =>
-            updateMetricsFromResponse(
-              current || createEmptyLiveTourMetrics(),
-              response
-            )
-          );
-          setLastSaveErrorCode(null);
-          setStatusMessage('Vorschau aktualisiert (nicht gespeichert)');
-        } catch (nextError) {
-          if (previewRequestIdRef.current !== requestId) {
-            return;
-          }
-
-          if (nextError instanceof HttpStatusError) {
-            if (nextError.status === 403) {
-              setBlockingErrorCode(403);
-              setLastSaveErrorCode(403);
-              setSaveStatus('error');
-              setStatusMessage('Bearbeitung gesperrt');
-              return;
-            }
-
-            if (nextError.status === 404) {
-              setBlockingErrorCode(404);
-              setLastSaveErrorCode(404);
-              setSaveStatus('error');
-              setStatusMessage('Tour nicht mehr vorhanden');
-              return;
-            }
-
-            if (nextError.status === 422) {
-              setLastSaveErrorCode(422);
-              setStatusMessage('Route unvollstaendig berechenbar');
-              return;
-            }
-          }
-
-          setStatusMessage('Vorschau konnte nicht aktualisiert werden');
-        }
-      })();
-    }, PREVIEW_DEBOUNCE_MS);
+    void triggerAutoSave(draftPoiIds);
   }, [
     draftPoiIds,
     isEditMode,
     editingBlocked,
     hasInitialized,
     hasPendingChanges,
-    previewTour,
+    triggerAutoSave,
+  ]);
+
+  const handleFinishEditMode = useCallback(() => {
+    if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
+      return;
+    }
+
+    void (async () => {
+      if (hasPendingChanges) {
+        const didSave = await performSave(draftPoiIds, { manual: true });
+        if (!didSave) {
+          return;
+        }
+      }
+
+      exitEditMode();
+    })();
+  }, [
+    draftPoiIds,
+    exitEditMode,
+    hasPendingChanges,
+    isEditMode,
+    performSave,
     updateTourMutation.isPending,
+    updateTourNameMutation.isPending,
   ]);
 
   const handleAppendSelectedPoi = useCallback(() => {
@@ -1839,29 +1766,17 @@ export default function TourDetailScreen() {
     );
   }
 
-  const saveStateLabel = (() => {
+  const footerSaveLabel = (() => {
     if (!isEditMode) {
-      return 'Nur Ansicht';
+      return null;
     }
-    if (blockingErrorCode === 403) {
-      return 'Bearbeitung gesperrt';
-    }
-    if (blockingErrorCode === 404) {
-      return 'Tour nicht mehr vorhanden';
-    }
-    if (saveStatus === 'saving') {
-      return 'Wird gespeichert...';
-    }
-    if (saveStatus === 'pending' || hasPendingChanges) {
-      return 'Aenderungen ausstehend...';
+    if (saveStatus === 'saving' || saveStatus === 'pending') {
+      return 'Änderungen werden gespeichert...';
     }
     if (saveStatus === 'saved') {
-      return 'Alle Aenderungen gespeichert';
+      return 'Alle Änderungen gespeichert!';
     }
-    if (saveStatus === 'error' && lastSaveErrorCode === 422) {
-      return 'Route unvollstaendig berechenbar';
-    }
-    return statusMessage || 'Bereit';
+    return null;
   })();
   const renderTourMap = (isFullscreen: boolean) => (
     <View style={[styles.mapCard, isFullscreen && styles.mapCardFullscreen]}>
@@ -1897,8 +1812,8 @@ export default function TourDetailScreen() {
             image={state.baseImage}
             key={state.baseKey}
             onPress={() => focusMapItemOnMap(state.item)}
-            
-            zIndex={state.isInTour ? 10 : 1}
+            tracksViewChanges={false}
+            zIndex={1}
           />
         ))}
 
@@ -2024,9 +1939,9 @@ export default function TourDetailScreen() {
                   onPress={() => handleStartNavigation(selectedMapItem)}
                   style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
                   >
-                  <Feather color="#2e3a2e" name="navigation" size={16} />
+                  <Feather color="#2e3a2e" name="navigation" size={22} />
                 </Pressable>
-                <Feather color="#4d5b4d" name="chevron-right" size={16} />
+                <Feather color="#4d5b4d" name="chevron-right" size={22} />
               </View>
             </View>
           </Pressable>
@@ -2135,7 +2050,6 @@ export default function TourDetailScreen() {
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Tourprofil</Text>
-            <Text style={styles.profileStatusText}>{saveStateLabel}</Text>
           </View>
           <Text style={styles.cardLine}>{`Distanz: ${formatDistance(liveTourMetrics.distance)} • Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
           <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(liveTourMetrics.totalElevationGain)} • ↓${formatElevation(liveTourMetrics.totalElevationLoss)}`}</Text>
@@ -2271,12 +2185,12 @@ export default function TourDetailScreen() {
                         onPress={() => handleStartNavigation(item)}
                         style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
                         >
-                        <Feather color="#2e3a2e" name="navigation" size={16} />
+                        <Feather color="#2e3a2e" name="navigation" size={22} />
                       </Pressable>
                       <Pressable
                         onPress={() => openListItemDetailPage(item)}
                         style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
-                        <Feather color="#8b957f" name="chevron-right" size={18} style={styles.cardChevron} />
+                        <Feather color="#8b957f" name="chevron-right" size={22} />
                       </Pressable>
                     </View>
                   ) : null}
@@ -2292,7 +2206,11 @@ export default function TourDetailScreen() {
       <View style={[styles.floatingFooterShell, { paddingBottom: footerBottomInset }]}>
         <View style={styles.floatingFooterBar}>
           {isEditMode ? (
-            <Text style={styles.footerEditHint}>Aenderungen werden automatisch gespeichert</Text>
+            footerSaveLabel ? (
+              <Text style={styles.footerEditHint}>{footerSaveLabel}</Text>
+            ) : (
+              <View style={styles.footerEditHintPlaceholder} />
+            )
           ) : (
             <Pressable
               disabled={!mapsDirectionsUrl || footerActionsDisabled}
@@ -2662,12 +2580,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '700',
-  },
-  profileStatusText: {
-    color: '#2e6b4b',
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '600',
   },
   cardLine: {
     color: '#6b7a6b',
@@ -3085,9 +2997,12 @@ const styles = StyleSheet.create({
   footerEditHint: {
     flex: 1,
     color: '#4d6d56',
-    fontSize: 0,
+    fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
+  },
+  footerEditHintPlaceholder: {
+    flex: 1,
   },
   footerSecondaryButton: {
     borderRadius: 12,

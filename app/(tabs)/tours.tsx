@@ -1,4 +1,5 @@
 import { Feather, MaterialIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -35,6 +36,8 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'nameAsc', label: 'Name A-Z' },
   { key: 'nameDesc', label: 'Name Z-A' },
 ];
+const emptySearchIllustration = require('@/assets/images/buddy/telescope.png');
+const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
 
 function formatDistance(distanceMeters: number | null) {
   if (distanceMeters === null || !Number.isFinite(distanceMeters)) {
@@ -123,7 +126,12 @@ function TourCard({
         <Text numberOfLines={1} style={styles.cardTitle}>
           {item.name}
         </Text>
-        <Feather color="#8b957f" name="chevron-right" size={18} />
+        <Feather
+          color="#8b957f"
+          name="chevron-right"
+          size={18}
+          style={styles.cardChevronIcon}
+        />
       </View>
 
       <Text style={styles.cardMeta}>
@@ -144,8 +152,12 @@ function TourCard({
       </Text>
 
       <View style={styles.cardFooterRow}>
-        <Text style={styles.cardFooterText}>{`↑${formatElevation(item.totalElevationGain)} • ↓${formatElevation(item.totalElevationLoss)}`}</Text>
-        <Text style={styles.cardFooterTextMuted}>{item.createdAt ? new Date(item.createdAt).toLocaleDateString('de-DE') : ''}</Text>
+        <Text style={styles.cardFooterText}>
+          {`↑${formatElevation(item.totalElevationGain)} • ↓${formatElevation(item.totalElevationLoss)}`}
+        </Text>
+        <Text style={styles.cardFooterDate}>
+          {item.createdAt ? new Date(item.createdAt).toLocaleDateString('de-DE') : ''}
+        </Text>
       </View>
     </Pressable>
   );
@@ -235,6 +247,13 @@ export default function ToursTabScreen() {
   const blockingError = !data ? error : null;
   const isMineFilter = activeFilter === 'mine';
   const isSearching = query.trim().length > 0;
+  const emptyStateTitle = isMineFilter ? 'Keine eigenen Touren gefunden' : 'Keine Touren gefunden';
+  const emptyStateCopy = isMineFilter
+    ? isSearching
+      ? 'Passe die Suche an oder wechsle auf Alle.'
+      : 'Erstelle eine neue Tour oder wechsle auf Alle.'
+    : 'Passe die Suche an oder erstelle eine neue Tour.';
+  const emptyStateIllustration = isMineFilter && !isSearching ? emptyVisitedIllustration : emptySearchIllustration;
   const handleOpenTour = useCallback(
     (tour: Tour) => {
       router.push(`/tours/${encodeURIComponent(tour.ID)}` as never);
@@ -305,16 +324,11 @@ export default function ToursTabScreen() {
         keyExtractor={(item) => item.ID}
         ListEmptyComponent={
           <View style={styles.emptyStateWrap}>
-            <Text style={styles.emptyStateTitle}>
-              {isMineFilter ? 'Keine eigenen Touren gefunden' : 'Keine Touren gefunden'}
-            </Text>
-            <Text style={styles.emptyStateBody}>
-              {isMineFilter
-                ? isSearching
-                  ? 'Passe die Suche an oder wechsle auf Alle.'
-                  : 'Erstelle eine neue Tour oder wechsle auf Alle.'
-                : 'Passe die Suche an oder erstelle eine neue Tour.'}
-            </Text>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
+              <Image contentFit="contain" source={emptyStateIllustration} style={styles.emptyIllustration} />
+              <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
+            </View>
           </View>
         }
         ListHeaderComponent={
@@ -324,13 +338,12 @@ export default function ToursTabScreen() {
               <Text style={styles.totalLabel}>{`${tours.length} gesamt`}</Text>
             </View>
 
-            <Pressable onPress={handleQuickstart} style={({ pressed }) => [pressed && styles.pressed]}>
-              <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
-                <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
-                <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
-                <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
-              </LinearGradient>
-            </Pressable>
+
+            <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
+              <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
+              <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
+              <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
+            </LinearGradient>
 
             <View style={styles.searchShell}>
               <Feather color="#6d7d6e" name="search" size={14} />
@@ -681,8 +694,6 @@ const styles = StyleSheet.create({
   cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
   },
   cardTitle: {
     flex: 1,
@@ -690,6 +701,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '700',
+  },
+  cardChevronIcon: {
+    marginLeft: 8,
+    alignSelf: 'center',
   },
   cardMeta: {
     color: '#6b7a6b',
@@ -700,7 +715,7 @@ const styles = StyleSheet.create({
     color: '#5d6f5d',
     fontSize: 12,
     lineHeight: 16,
-    flex: 1,
+    flexShrink: 1,
   },
   cardCreatorRow: {
     flexDirection: 'row',
@@ -724,6 +739,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  cardFooterDate: {
+    color: '#445244',
+    fontSize: 11,
+    lineHeight: 14,
   },
   cardFooterText: {
     color: '#445244',
@@ -766,24 +786,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emptyStateWrap: {
-    marginHorizontal: 20,
+    paddingHorizontal: 20,
     marginTop: 8,
+  },
+  emptyState: {
     backgroundColor: '#fffaf0',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 6,
+    borderRadius: 22,
+    padding: 20,
+    gap: 8,
   },
-  emptyStateTitle: {
+  emptyTitle: {
     color: '#2e3a2e',
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 18,
+    lineHeight: 24,
     fontWeight: '700',
+    textAlign: 'center',
   },
-  emptyStateBody: {
+  emptyCopy: {
     color: '#6b7a6b',
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  emptyIllustration: {
+    width: 120,
+    height: 120,
+    alignSelf: 'center',
   },
   pressed: {
     opacity: 0.85,
