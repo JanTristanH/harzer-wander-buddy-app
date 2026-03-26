@@ -23,6 +23,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { currentUserProfile, logout, resetApp } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims & { sub?: string }>();
+  const matchingCurrentUserProfile =
+    claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
   const [activeStampFilter, setActiveStampFilter] = useState<StampFilter>('visited');
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const { data, error, isFetching, isPending, isPlaceholderData, refetch } = useProfileOverviewQuery();
@@ -36,8 +38,8 @@ export default function ProfileScreen() {
     const collectorSinceText = data.collectorSinceYear
       ? `Stempel-Sammler seit ${data.collectorSinceYear}`
       : 'Stempel-Sammler';
-    const profileName = data.name || currentUserProfile?.name || claims?.name || claims?.sub || 'Profil';
-    const profilePicture = data.picture || currentUserProfile?.picture || claims?.picture;
+    const profileName = data.name || matchingCurrentUserProfile?.name || claims?.name || claims?.sub || 'Profil';
+    const profilePicture = data.picture || matchingCurrentUserProfile?.picture || claims?.picture;
 
     const filteredStamps = data.stamps.filter((stamp) => {
       if (activeStampFilter === 'visited') {
@@ -129,8 +131,8 @@ export default function ProfileScreen() {
     claims?.name,
     claims?.picture,
     claims?.sub,
-    currentUserProfile?.name,
-    currentUserProfile?.picture,
+    matchingCurrentUserProfile?.name,
+    matchingCurrentUserProfile?.picture,
     data,
     isFetching,
     isPending,

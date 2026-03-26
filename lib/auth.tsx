@@ -325,6 +325,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       );
 
       await saveTokenResponse(tokenResponse);
+      setCurrentUserProfile(null);
       setAuthState({
         accessToken: tokenResponse.accessToken,
         idToken: tokenResponse.idToken,

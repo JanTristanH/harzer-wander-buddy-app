@@ -43,7 +43,7 @@ type ProfileClaims = {
 function ProfileEditContent() {
   const router = useRouter();
   const navigation = useNavigation();
-  const { accessToken, currentUserProfile, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
+  const { accessToken, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims>();
   const queryClient = useQueryClient();
   const [profile, setProfile] = useState<CurrentUserProfileData | null>(null);
@@ -62,7 +62,7 @@ function ProfileEditContent() {
     setIsLoading(true);
 
     try {
-      const nextProfile = currentUserProfile || (await preloadCurrentUserProfile());
+      const nextProfile = await preloadCurrentUserProfile();
       if (!nextProfile) {
         setError('Keine Profildaten verfuegbar.');
         return;
@@ -70,8 +70,8 @@ function ProfileEditContent() {
 
       const resolvedProfile = {
         ...nextProfile,
-        name: nextProfile.name || claims?.name || claims?.sub || nextProfile.id,
-        picture: nextProfile.picture || claims?.picture,
+        name: nextProfile.name || claims?.sub || nextProfile.id,
+        picture: nextProfile.picture,
       };
       setProfile(resolvedProfile);
       setName(resolvedProfile.name);
@@ -89,10 +89,7 @@ function ProfileEditContent() {
     }
   }, [
     accessToken,
-    claims?.name,
-    claims?.picture,
     claims?.sub,
-    currentUserProfile,
     logout,
     preloadCurrentUserProfile,
   ]);
@@ -367,11 +364,14 @@ function ProfileEditContent() {
             <Text style={styles.label}>Name</Text>
             <TextInput
               autoCapitalize="words"
+              autoComplete="off"
+              autoCorrect={false}
               editable={!isSaving}
               onChangeText={setName}
               placeholder="Dein Name"
               placeholderTextColor="#8A968A"
               style={styles.input}
+              textContentType="none"
               value={name}
             />
           </View>

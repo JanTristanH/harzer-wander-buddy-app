@@ -208,6 +208,8 @@ function getCachedSelfProfileOverview(
     picture?: string;
   } | null
 ) {
+  const matchingCurrentUserProfile =
+    claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
   const existingProfileOverview = queryClient.getQueryData<ProfileOverviewData>(
     queryKeys.profileOverview(claims?.sub)
   );
@@ -233,8 +235,8 @@ function getCachedSelfProfileOverview(
   const completionPercent = totalCount > 0 ? Math.round((visitedCount / totalCount) * 100) : 0;
 
   return {
-    name: currentUserProfile?.name || claims?.name || claims?.sub || 'Profil',
-    picture: currentUserProfile?.picture || claims?.picture,
+    name: matchingCurrentUserProfile?.name || claims?.name || claims?.sub || 'Profil',
+    picture: matchingCurrentUserProfile?.picture || claims?.picture,
     visitedCount,
     totalCount,
     openCount,
@@ -324,21 +326,24 @@ export function useProfileOverviewQuery() {
   const { accessToken, currentUserProfile, isAuthenticated } = useAuth();
   const authorizedRequest = useAuthorizedRequest();
   const queryClient = useQueryClient();
+  const matchingCurrentUserProfile =
+    claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
 
   return useQuery<ProfileOverviewData>({
     queryKey: queryKeys.profileOverview(claims?.sub),
     enabled: Boolean(accessToken && isAuthenticated),
-    placeholderData: () => getCachedSelfProfileOverview(queryClient, claims, currentUserProfile),
+    placeholderData: () =>
+      getCachedSelfProfileOverview(queryClient, claims, matchingCurrentUserProfile),
     queryFn: () =>
       authorizedRequest((token) => {
         const cachedStampsOverview = queryClient.getQueryData<StampsOverviewData>(
           queryKeys.stampsOverview(claims?.sub)
         );
-        const prefetchedCurrentUser = currentUserProfile
+        const prefetchedCurrentUser = matchingCurrentUserProfile
           ? {
-              id: currentUserProfile.id,
-              name: currentUserProfile.name,
-              picture: currentUserProfile.picture,
+              id: matchingCurrentUserProfile.id,
+              name: matchingCurrentUserProfile.name,
+              picture: matchingCurrentUserProfile.picture,
             }
           : claims?.sub
             ? {

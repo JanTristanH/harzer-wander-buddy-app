@@ -152,11 +152,13 @@ export default function OnboardingScreen() {
   const lastAutoSaveAttemptRef = useRef<string | null>(null);
   const profileSavePromiseRef = useRef<Promise<boolean> | null>(null);
   const normalizedInitialSaveKeyRef = useRef<string | null>(null);
+  const matchingCurrentUserProfile =
+    claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
   const primaryDisabled = !isAuthenticated || !!configError || isLoading;
   const errorMessage = configError || authError;
   const displayName = claims?.nickname || claims?.name || claims?.given_name || 'Wanderbuddy';
   const fallbackProfileName = getInitialProfileName(
-    currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+    matchingCurrentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
   );
   const claimsNameHasAt = Boolean((claims?.name || '').includes('@'));
   const effectiveProfileName = profileName.trim() || displayName;
@@ -203,18 +205,18 @@ export default function OnboardingScreen() {
 
     setProfileName(
       getInitialProfileName(
-        currentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
+        matchingCurrentUserProfile?.name || claims?.name || claims?.nickname || claims?.given_name || ''
       )
     );
-    setProfilePicture(currentUserProfile?.picture || claims?.picture || null);
+    setProfilePicture(matchingCurrentUserProfile?.picture || claims?.picture || null);
     setProfileSaveError(null);
   }, [
     claims?.given_name,
     claims?.name,
     claims?.nickname,
     claims?.picture,
-    currentUserProfile?.name,
-    currentUserProfile?.picture,
+    matchingCurrentUserProfile?.name,
+    matchingCurrentUserProfile?.picture,
     isAuthenticated,
   ]);
 
@@ -408,7 +410,7 @@ export default function OnboardingScreen() {
 
         const refreshedProfile = await preloadCurrentUserProfile();
         const resolvedProfile = refreshedProfile || {
-          id: currentUserProfile?.id || claims?.sub || nextName,
+          id: matchingCurrentUserProfile?.id || claims?.sub || nextName,
           name: nextName,
           picture: nextPicture,
         };
@@ -461,7 +463,7 @@ export default function OnboardingScreen() {
     fallbackProfileName,
     claims?.picture,
     claims?.sub,
-    currentUserProfile?.id,
+    matchingCurrentUserProfile?.id,
     isAuthenticated,
     logout,
     preloadCurrentUserProfile,
@@ -478,7 +480,7 @@ export default function OnboardingScreen() {
       !accessToken ||
       isProfileSaving ||
       !claimsNameHasAt ||
-      Boolean(currentUserProfile?.name)
+      Boolean(matchingCurrentUserProfile?.name)
     ) {
       return;
     }
@@ -494,7 +496,7 @@ export default function OnboardingScreen() {
     accessToken,
     claims?.sub,
     claimsNameHasAt,
-    currentUserProfile?.name,
+    matchingCurrentUserProfile?.name,
     fallbackProfileName,
     handleSaveProfile,
     isAuthenticated,

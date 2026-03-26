@@ -345,15 +345,24 @@ export default function ToursTabScreen() {
               <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
             </LinearGradient>
 
-            <View style={styles.searchShell}>
-              <Feather color="#6d7d6e" name="search" size={14} />
-              <TextInput
-                onChangeText={setQuery}
-                placeholder="Suche nach Tourname"
-                placeholderTextColor="#7b8776"
-                style={styles.searchInput}
-                value={query}
-              />
+            <View style={styles.searchRow}>
+              <View style={styles.searchShell}>
+                <Feather color="#6d7d6e" name="search" size={14} />
+                <TextInput
+                  onChangeText={setQuery}
+                  placeholder="Suche nach Tourname"
+                  placeholderTextColor="#7b8776"
+                  style={styles.searchInput}
+                  value={query}
+                />
+              </View>
+
+              <Pressable
+                onPress={() => setIsSortOpen(true)}
+                style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
+                <MaterialIcons name="sort" size={24} color="black" />
+                <Text style={styles.sortButtonLabel}>Sortieren</Text>
+              </Pressable>
             </View>
 
             <View style={styles.controlsRow}>
@@ -376,13 +385,6 @@ export default function ToursTabScreen() {
                   );
                 })}
               </View>
-
-              <Pressable
-                onPress={() => setIsSortOpen(true)}
-                style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
-                <MaterialIcons name="sort" size={24} color="black" />
-                <Text style={styles.sortButtonLabel}>Sortieren</Text>
-              </Pressable>
             </View>
 
             {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
@@ -525,6 +527,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   searchShell: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -537,6 +540,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 18,
     elevation: 3,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   searchInput: {
     flex: 1,
