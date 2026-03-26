@@ -34,6 +34,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AuthGuard } from '@/components/auth-guard';
 import { FriendsList } from '@/components/friends-list';
+import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
   deleteStamping,
@@ -199,6 +200,7 @@ function StampDetailContent() {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [isStamping, setIsStamping] = useState(false);
+  const [isStampSuccessToastVisible, setIsStampSuccessToastVisible] = useState(false);
   const [isEditingVisits, setIsEditingVisits] = useState(false);
   const [visitDrafts, setVisitDrafts] = useState<Record<string, string>>({});
   const [busyVisitId, setBusyVisitId] = useState<string | null>(null);
@@ -572,7 +574,7 @@ function StampDetailContent() {
 
       await queryClient.invalidateQueries();
       queryClient.removeQueries({ type: 'inactive' });
-      Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
+      setIsStampSuccessToastVisible(true);
     } catch (nextError) {
       rollbackOptimisticUpdates();
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -1020,6 +1022,12 @@ function StampDetailContent() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
+      <StampingSuccessToast
+        message="Stempel erfolgreich gesetzt."
+        onHide={() => setIsStampSuccessToastVisible(false)}
+        topOffset={insets.top + 10}
+        visible={isStampSuccessToastVisible}
+      />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}>

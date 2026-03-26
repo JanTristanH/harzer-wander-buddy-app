@@ -17,6 +17,7 @@ import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MapSelectionSheet } from '@/components/map-selection-sheet';
+import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
   fetchRouteMetrics,
@@ -460,6 +461,7 @@ export default function MapScreen() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isStamping, setIsStamping] = useState(false);
+  const [isStampSuccessToastVisible, setIsStampSuccessToastVisible] = useState(false);
   const [isParkingRevealPending, setIsParkingRevealPending] = useState(false);
   const [selectedSheetHeight, setSelectedSheetHeight] = useState(0);
   const [mapHeading, setMapHeading] = useState(0);
@@ -1220,7 +1222,7 @@ export default function MapScreen() {
           queryFn: () => fetchStampDetail(accessToken, stampId, claims?.sub),
         })
         .catch(() => undefined);
-      Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
+      setIsStampSuccessToastVisible(true);
     } catch (nextError) {
       rollbackOptimisticUpdates();
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
@@ -1348,6 +1350,12 @@ export default function MapScreen() {
           </Text>
         </View>
       ) : null}
+      <StampingSuccessToast
+        message="Stempel erfolgreich gesetzt."
+        onHide={() => setIsStampSuccessToastVisible(false)}
+        topOffset={insets.top + 64}
+        visible={isStampSuccessToastVisible}
+      />
       <MapView
         ref={mapRef}
         initialRegion={initialRegion}

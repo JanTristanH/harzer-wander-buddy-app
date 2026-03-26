@@ -1645,22 +1645,18 @@ export default function TourDetailScreen() {
       return;
     }
 
-    void (async () => {
-      try {
-        await deleteTourMutation.mutateAsync();
-        router.replace('/(tabs)/tours' as never);
-      } catch (nextError) {
-        if (nextError instanceof HttpStatusError && nextError.status === 404) {
-          router.replace('/(tabs)/tours' as never);
-          return;
-        }
+    router.replace('/(tabs)/tours' as never);
 
-        Alert.alert(
-          'Tour konnte nicht geloescht werden',
-          nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
-        );
+    void deleteTourMutation.mutateAsync().catch((nextError) => {
+      if (nextError instanceof HttpStatusError && nextError.status === 404) {
+        return;
       }
-    })();
+
+      Alert.alert(
+        'Tour konnte nicht geloescht werden',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+    });
   }, [canEnterEditMode, deleteTourMutation, router]);
 
   const handleCloseViewOverflowMenu = useCallback(() => {
