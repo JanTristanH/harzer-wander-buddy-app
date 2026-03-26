@@ -1,14 +1,15 @@
 import { Feather } from '@expo/vector-icons';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import {
   ActivityIndicator,
   Alert,
   Image,
   type ImageSourcePropType,
+  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -22,15 +23,15 @@ import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { HttpStatusError, type Tour, type TourUpdateResponse } from '@/lib/api';
+import { HttpStatusError, type Tour, type TourPathEntry, type TourUpdateResponse } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
 import {
   useDeleteTourMutation,
   useMapDataQuery,
-  usePreviewTourByPOIListMutation,
   usePointsOfInterestQuery,
+  usePreviewTourByPOIListMutation,
   useTourDetailQuery,
   useUpdateTourByPOIListMutation,
   useUpdateTourNameMutation,
@@ -82,6 +83,7 @@ type LiveTourMetrics = {
   distance: number | null;
   duration: number | null;
   stampCount: number | null;
+  newStampCountForUser: number | null;
   totalElevationGain: number | null;
   totalElevationLoss: number | null;
 };
@@ -141,6 +143,37 @@ function formatDistanceKm(distanceKm: number) {
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
+}
+
+function buildGoogleMapsDirectionsUrl(locations: string[]) {
+  if (locations.length < 2) {
+    return null;
+  }
+
+  const formatLocation = (value: string) => {
+    const trimmed = value.trim();
+    if (/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    return encodeURIComponent(trimmed);
+  };
+
+  const origin = locations[0];
+  const destination = locations[locations.length - 1];
+  const waypoints = locations.slice(1, -1);
+  const queryParts = [
+    'api=1',
+    `origin=${formatLocation(origin)}`,
+    `destination=${formatLocation(destination)}`,
+    `travelmode=walk`,
+  ];
+
+  if (waypoints.length > 0) {
+    queryParts.push(`waypoints=${waypoints.map((value) => formatLocation(value)).join('|')}`);
+  }
+
+  return `https://www.google.com/maps/dir/?${queryParts.join('&')}`;
 }
 
 function formatAlphabeticOrder(position: number) {
@@ -359,6 +392,7 @@ function createLiveTourMetrics(tour: Tour): LiveTourMetrics {
     distance: tour.distance,
     duration: tour.duration,
     stampCount: tour.stampCount,
+    newStampCountForUser: tour.newStampCountForUser,
     totalElevationGain: tour.totalElevationGain,
     totalElevationLoss: tour.totalElevationLoss,
   };
@@ -369,6 +403,7 @@ function updateMetricsFromResponse(current: LiveTourMetrics, response: TourUpdat
     distance: response.distance ?? current.distance,
     duration: response.duration ?? current.duration,
     stampCount: response.stampCount ?? current.stampCount,
+    newStampCountForUser: response.newStampCountForUser ?? current.newStampCountForUser,
     totalElevationGain: response.totalElevationGain ?? current.totalElevationGain,
     totalElevationLoss: response.totalElevationLoss ?? current.totalElevationLoss,
   };
@@ -379,9 +414,53 @@ function createEmptyLiveTourMetrics(): LiveTourMetrics {
     distance: null,
     duration: null,
     stampCount: null,
+    newStampCountForUser: null,
     totalElevationGain: null,
     totalElevationLoss: null,
   };
+}
+
+function buildLegMetricsByArrivalIndex(draftPoiIds: string[], path: TourPathEntry[]) {
+  const legsByArrivalIndex: (TourPathEntry['travelTime'] | null)[] = draftPoiIds.map(() => null);
+  if (draftPoiIds.length < 2 || path.length === 0) {
+    return legsByArrivalIndex;
+  }
+
+  const sortedPath = [...path].sort((left, right) => left.rank - right.rank);
+  const queueByPair = new Map<string, TourPathEntry['travelTime'][]>();
+
+  for (const entry of sortedPath) {
+    const travelTime = entry.travelTime;
+    const fromPoi = travelTime?.fromPoi?.trim().toLowerCase();
+    const toPoi = travelTime?.toPoi?.trim().toLowerCase();
+    if (!travelTime || !fromPoi || !toPoi) {
+      continue;
+    }
+
+    const pairKey = `${fromPoi}->${toPoi}`;
+    const queue = queueByPair.get(pairKey) ?? [];
+    queue.push(travelTime);
+    queueByPair.set(pairKey, queue);
+  }
+
+  for (let index = 1; index < draftPoiIds.length; index += 1) {
+    const fromPoi = draftPoiIds[index - 1]?.trim().toLowerCase();
+    const toPoi = draftPoiIds[index]?.trim().toLowerCase();
+    if (!fromPoi || !toPoi) {
+      continue;
+    }
+
+    const pairKey = `${fromPoi}->${toPoi}`;
+    const queue = queueByPair.get(pairKey);
+    if (queue && queue.length > 0) {
+      legsByArrivalIndex[index] = queue.shift() ?? null;
+      continue;
+    }
+
+    legsByArrivalIndex[index] = sortedPath[index - 1]?.travelTime ?? null;
+  }
+
+  return legsByArrivalIndex;
 }
 
 function rankSearchItem(item: TourMapItem, normalizedQuery: string): SearchResultRank | null {
@@ -523,11 +602,14 @@ export default function TourDetailScreen() {
   });
   const [liveTourMetrics, setLiveTourMetrics] = useState<LiveTourMetrics | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [livePathEntries, setLivePathEntries] = useState<TourPathEntry[]>([]);
   const [lastSaveErrorCode, setLastSaveErrorCode] = useState<403 | 404 | 422 | null>(null);
   const [blockingErrorCode, setBlockingErrorCode] = useState<403 | 404 | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isViewOverflowOpen, setIsViewOverflowOpen] = useState(false);
+  const [isRemoveVisitDialogOpen, setIsRemoveVisitDialogOpen] = useState(false);
   const [tourNameDraft, setTourNameDraft] = useState('');
 
   const mapRef = useRef<MapView | null>(null);
@@ -615,6 +697,7 @@ export default function TourDetailScreen() {
 
     setDraftPoiIds(originalPoiIds);
     setLastPersistedPoiIds(originalPoiIds);
+    setLivePathEntries(data.path ?? []);
     setLiveTourMetrics(createLiveTourMetrics(data.tour));
     setHasInitialized(true);
   }, [data, hasInitialized, isFetching, originalPoiIds]);
@@ -761,7 +844,6 @@ export default function TourDetailScreen() {
       if (pinnedById.has(poiItem.ID.toLowerCase())) {
         continue;
       }
-
       visible.push(poiItem);
     }
 
@@ -804,6 +886,27 @@ export default function TourDetailScreen() {
   const selectedItemInTourCount = selectedMapItem
     ? (draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? []).length
     : 0;
+  const selectedItemVisitOptions = useMemo(() => {
+    if (!selectedMapItem) {
+      return [] as { draftIndex: number; orderLabel: string }[];
+    }
+
+    const normalizedSelectedId = selectedMapItem.ID.toLowerCase();
+    const options: { draftIndex: number; orderLabel: string }[] = [];
+
+    draftPoiIds.forEach((poiId, index) => {
+      if (poiId.toLowerCase() !== normalizedSelectedId) {
+        return;
+      }
+
+      options.push({
+        draftIndex: index,
+        orderLabel: formatAlphabeticOrder(index + 1),
+      });
+    });
+
+    return options;
+  }, [draftPoiIds, selectedMapItem]);
   const selectedRouteOrderLabel = useMemo(() => {
     if (!selectedMapItem) {
       return null;
@@ -821,6 +924,31 @@ export default function TourDetailScreen() {
     () => resolveMapItemImageSource(selectedMapItem?.imageUrl, accessToken),
     [accessToken, selectedMapItem?.imageUrl]
   );
+  const routeLocationValues = useMemo(
+    () =>
+      draftPoiIds
+        .map((poiId) => mapItemById.get(poiId.toLowerCase()))
+        .filter((item): item is TourMapItem => Boolean(item))
+        .map((item) => `${item.latitude},${item.longitude}`),
+    [draftPoiIds, mapItemById]
+  );
+  const mapsDirectionsUrl = useMemo(
+    () => buildGoogleMapsDirectionsUrl(routeLocationValues),
+    [routeLocationValues]
+  );
+  const routeLegMetricsByArrivalIndex = useMemo(
+    () => buildLegMetricsByArrivalIndex(draftPoiIds, livePathEntries),
+    [draftPoiIds, livePathEntries]
+  );
+
+  useEffect(() => {
+    if (isEditMode && selectedItemVisitOptions.length > 1) {
+      return;
+    }
+
+    setIsRemoveVisitDialogOpen(false);
+  }, [isEditMode, selectedItemVisitOptions.length]);
+
   const resetDraftToPersistedState = useCallback(() => {
     cancelPendingPreview();
     setDraftPoiIds(lastPersistedPoiIds);
@@ -829,9 +957,10 @@ export default function TourDetailScreen() {
     setStatusMessage(null);
 
     if (data?.tour) {
+      setLivePathEntries(data.path ?? []);
       setLiveTourMetrics(createLiveTourMetrics(data.tour));
     }
-  }, [cancelPendingPreview, data?.tour, lastPersistedPoiIds]);
+  }, [cancelPendingPreview, data?.path, data?.tour, lastPersistedPoiIds]);
   const handleEnterEditMode = useCallback(() => {
     if (!canEnterEditMode || isEditMode) {
       return;
@@ -872,56 +1001,78 @@ export default function TourDetailScreen() {
     setTourNameDraft(data?.tour.name ?? '');
     setIsEditMode(false);
   }, [data?.tour.name]);
-  function handleExitEditMode() {
+  const handleFinishEditMode = useCallback(() => {
     if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
       return;
     }
 
-    if (!hasPendingChanges) {
+    void (async () => {
+      if (hasPendingChanges) {
+        const didSave = await performSave(draftPoiIds, { manual: true });
+        if (!didSave) {
+          return;
+        }
+      }
+
       exitEditMode();
+    })();
+  }, [
+    draftPoiIds,
+    exitEditMode,
+    hasPendingChanges,
+    isEditMode,
+    performSave,
+    updateTourMutation.isPending,
+    updateTourNameMutation.isPending,
+  ]);
+  const navigateBackToTours = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace('/(tabs)/tours' as never);
+  }, [router]);
+  const handleBackPress = useCallback(() => {
+    if (updateTourMutation.isPending || updateTourNameMutation.isPending) {
+      return;
+    }
+
+    if (!isEditMode) {
+      navigateBackToTours();
+      return;
+    }
+
+    if (!hasPendingChanges) {
+      navigateBackToTours();
       return;
     }
 
     Alert.alert(
-      'Aenderungen speichern?',
-      'Moechtest du die Aenderungen speichern, bevor du den Bearbeitungsmodus verlaesst?',
+      'Ungespeicherte Aenderungen',
+      'Du hast ungespeicherte Aenderungen an der Tour. Ohne Speichern verwerfen?',
       [
         {
           text: 'Weiter bearbeiten',
           style: 'cancel',
         },
         {
-          text: 'Ohne Speichern',
+          text: 'Verwerfen',
           style: 'destructive',
           onPress: () => {
             resetDraftToPersistedState();
             exitEditMode();
-          },
-        },
-        {
-          text: 'Speichern',
-          onPress: () => {
-            void (async () => {
-              const didSave = await performSave(draftPoiIds, { manual: true });
-              if (didSave) {
-                exitEditMode();
-              }
-            })();
+            skipNextPreventRemoveRef.current = true;
+            navigateBackToTours();
           },
         },
       ]
     );
-  }
-  const handleCancelPendingChangesAndExit = useCallback(() => {
-    if (!isEditMode || updateTourMutation.isPending || updateTourNameMutation.isPending) {
-      return;
-    }
-
-    resetDraftToPersistedState();
-    exitEditMode();
   }, [
     exitEditMode,
+    hasPendingChanges,
     isEditMode,
+    navigateBackToTours,
     resetDraftToPersistedState,
     updateTourMutation.isPending,
     updateTourNameMutation.isPending,
@@ -944,6 +1095,21 @@ export default function TourDetailScreen() {
       Alert.alert('Teilen nicht moeglich', nextError instanceof Error ? nextError.message : 'Unknown error');
     }
   }, [data?.tour?.ID, data?.tour?.name]);
+  const handleStartWholeTour = useCallback(async () => {
+    if (!mapsDirectionsUrl) {
+      Alert.alert('Route kann nicht gestartet werden', 'Bitte mindestens zwei Punkte zur Tour hinzufuegen.');
+      return;
+    }
+
+    try {
+      await ExpoLinking.openURL(mapsDirectionsUrl);
+    } catch (nextError) {
+      Alert.alert(
+        'Google Maps konnte nicht geoeffnet werden',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
+  }, [mapsDirectionsUrl]);
   useEffect(() => {
     if (!isEditMode || canEnterEditMode) {
       return;
@@ -1143,6 +1309,7 @@ export default function TourDetailScreen() {
 
       try {
         const response = await updateTourMutation.mutateAsync({ poiIds });
+        setLivePathEntries(response.path ?? []);
         setLiveTourMetrics((current) =>
           updateMetricsFromResponse(
             current || createEmptyLiveTourMetrics(),
@@ -1156,6 +1323,7 @@ export default function TourDetailScreen() {
         const refreshed = await refetch();
         if (refreshed.data?.tour) {
           setLiveTourMetrics(createLiveTourMetrics(refreshed.data.tour));
+          setLivePathEntries(refreshed.data.path ?? []);
           const refreshedPoiIds = derivePoiSequence(refreshed.data.path ?? []);
           setDraftPoiIds(refreshedPoiIds);
           setLastPersistedPoiIds(refreshedPoiIds);
@@ -1230,6 +1398,7 @@ export default function TourDetailScreen() {
             return;
           }
 
+          setLivePathEntries(response.path ?? []);
           setLiveTourMetrics((current) =>
             updateMetricsFromResponse(
               current || createEmptyLiveTourMetrics(),
@@ -1289,6 +1458,35 @@ export default function TourDetailScreen() {
     setDraftPoiIds((current) => [...current, selectedMapItem.ID]);
   }, [editingBlocked, selectedMapItem]);
 
+  const closeRemoveVisitDialog = useCallback(() => {
+    setIsRemoveVisitDialogOpen(false);
+  }, []);
+
+  const removeSelectedPoiVisitAtIndex = useCallback(
+    (draftIndex: number) => {
+      if (editingBlocked) {
+        return;
+      }
+
+      setDraftPoiIds((current) => current.filter((_, currentIndex) => currentIndex !== draftIndex));
+      closeRemoveVisitDialog();
+    },
+    [closeRemoveVisitDialog, editingBlocked]
+  );
+
+  const handleRemoveSelectedPoi = useCallback(() => {
+    if (editingBlocked || selectedItemVisitOptions.length === 0) {
+      return;
+    }
+
+    if (selectedItemVisitOptions.length === 1) {
+      removeSelectedPoiVisitAtIndex(selectedItemVisitOptions[0].draftIndex);
+      return;
+    }
+
+    setIsRemoveVisitDialogOpen(true);
+  }, [editingBlocked, removeSelectedPoiVisitAtIndex, selectedItemVisitOptions]);
+
   const openMapItemDetailPage = useCallback(
     (item: TourMapItem) => {
       if (item.kind === 'parking') {
@@ -1336,6 +1534,16 @@ export default function TourDetailScreen() {
     openMapItemDetailPage(selectedMapItem);
   }, [openMapItemDetailPage, selectedMapItem]);
 
+    async function handleStartNavigation(item: TourMapItem) {
+    if (!item.latitude || !item.longitude) {
+      Alert.alert('Navigation nicht moeglich', 'Diese Stempelstelle hat keine Koordinaten.');
+      return;
+    }
+
+    const url = `https://www.google.com/maps/search/?api=1&query=${item.latitude},${item.longitude}`;
+    await Linking.openURL(url);
+  }
+
   const openListItemDetailPage = useCallback(
     (item?: TourMapItem) => {
       if (!item) {
@@ -1381,39 +1589,62 @@ export default function TourDetailScreen() {
   );
 
   const handleDeleteTour = useCallback(() => {
-    if (editingBlocked || deleteTourMutation.isPending) {
+    if (!canEnterEditMode || deleteTourMutation.isPending) {
       return;
     }
 
-    Alert.alert('Tour loeschen?', 'Diese Aktion kann nicht rueckgaengig gemacht werden.', [
-      {
-        text: 'Abbrechen',
-        style: 'cancel',
-      },
-      {
-        text: 'Loeschen',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            try {
-              await deleteTourMutation.mutateAsync();
-              router.replace('/(tabs)/tours' as never);
-            } catch (nextError) {
-              if (nextError instanceof HttpStatusError && nextError.status === 404) {
-                router.replace('/(tabs)/tours' as never);
-                return;
-              }
+    void (async () => {
+      try {
+        await deleteTourMutation.mutateAsync();
+        router.replace('/(tabs)/tours' as never);
+      } catch (nextError) {
+        if (nextError instanceof HttpStatusError && nextError.status === 404) {
+          router.replace('/(tabs)/tours' as never);
+          return;
+        }
 
-              Alert.alert(
-                'Tour konnte nicht geloescht werden',
-                nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
-              );
-            }
-          })();
+        Alert.alert(
+          'Tour konnte nicht geloescht werden',
+          nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+        );
+      }
+    })();
+  }, [canEnterEditMode, deleteTourMutation, router]);
+
+  const handleCloseViewOverflowMenu = useCallback(() => {
+    setIsViewOverflowOpen(false);
+  }, []);
+
+  const handleOpenViewOverflowMenu = useCallback(() => {
+    if (isEditMode) {
+      return;
+    }
+    setIsViewOverflowOpen(true);
+  }, [isEditMode]);
+
+  const handleConfirmDeleteTour = useCallback(() => {
+    handleCloseViewOverflowMenu();
+
+    const tourName = (data?.tour.name ?? 'Tour').trim() || 'Tour';
+
+    Alert.alert(
+      'Tour endgueltig loeschen?',
+      `Du bist dabei, die Tour "${tourName}" zu loeschen. Diese Aktion kann nicht rueckgaengig gemacht werden.`,
+      [
+        {
+          text: 'Abbrechen',
+          style: 'cancel',
         },
-      },
-    ]);
-  }, [deleteTourMutation, editingBlocked, router]);
+        {
+          text: 'Endgueltig loeschen',
+          style: 'destructive',
+          onPress: () => {
+            void handleDeleteTour();
+          },
+        },
+      ]
+    );
+  }, [data?.tour.name, handleCloseViewOverflowMenu, handleDeleteTour]);
 
   const handleSubmitRename = useCallback(async (options?: { silent?: boolean }) => {
     if (editingBlocked || updateTourNameMutation.isPending || !data) {
@@ -1507,9 +1738,6 @@ export default function TourDetailScreen() {
     }
     return statusMessage || 'Bereit';
   })();
-  const isSaveDisabled = editingBlocked || updateTourMutation.isPending || draftPoiIds.length < 2;
-  const saveButtonLabel = updateTourMutation.isPending ? 'Speichere...' : 'Jetzt speichern';
-
   const renderTourMap = (isFullscreen: boolean) => (
     <View style={[styles.mapCard, isFullscreen && styles.mapCardFullscreen]}>
       <MapView
@@ -1548,7 +1776,7 @@ export default function TourDetailScreen() {
               ? item.kind
               : item.kind === 'parking'
                 ? 'parking-order'
-              : 'tour-order';
+                : 'tour-order';
           const isSelected = selectedMapItemId === item.ID;
           const markerRenderKey = `${item.ID}:${isInTour ? `tour:${routeOrderLabel}` : 'base'}:${isSelected ? 'selected' : 'default'}`;
 
@@ -1571,6 +1799,42 @@ export default function TourDetailScreen() {
                     label: item.kind === 'parking' ? 'P' : extractStampToken(item.markerLabel) || item.markerLabel,
                   })
                 : null;
+
+          if (isInTour) {
+            const markerImageWithoutOrder =
+              item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
+                ? getPreGeneratedMapMarkerImageSource({
+                    kind: item.kind,
+                    label: item.kind === 'parking' ? 'P' : extractStampToken(item.markerLabel) || item.markerLabel,
+                  })
+                : getPreGeneratedMapMarkerImageSource({
+                    kind: 'tour-order',
+                    label: '--',
+                  });
+
+            return (
+              <Marker
+                anchor={{ x: 0.5, y: 1 }}
+                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+                key={markerRenderKey}
+                onPress={() => focusMapItemOnMap(item)}
+                zIndex={isSelected ? 20 : 10}>
+                <View collapsable={false} style={styles.poiInTourMarkerWrap}>
+                  {markerImageWithoutOrder ? (
+                    <Image source={markerImageWithoutOrder} style={styles.poiInTourMarkerImage} />
+                  ) : (
+                    <View style={styles.poiInTourMarkerFallback}>
+                      <Feather color="#f5f3ee" name="map-pin" size={14} />
+                    </View>
+                  )}
+                  <View style={styles.poiInTourMarkerBadge}>
+                    <Feather color="#f5f3ee" name="map-pin" size={9} />
+                    <Text style={styles.poiInTourMarkerBadgeLabel}>{routeOrderLabel}</Text>
+                  </View>
+                </View>
+              </Marker>
+            );
+          }
 
           if (markerImage) {
             return (
@@ -1714,199 +1978,94 @@ export default function TourDetailScreen() {
                   {`${selectedRouteOrderLabel ? `Besuch ${selectedRouteOrderLabel} • ` : ''}${selectedStampNumber ? `Stempel ${selectedStampNumber} • ` : ''}${selectedMapItem.typeLabel}`}
                 </Text>
               </View>
-              <View style={styles.mapBottomOpenHint}>
-                <Text style={styles.mapBottomOpenLabel}>Oeffnen</Text>
+              <View style={styles.pathActions}>
+                <Pressable
+                  onPress={() => handleStartNavigation(selectedMapItem)}
+                  style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+                  >
+                  <Feather color="#2e3a2e" name="navigation" size={16} />
+                </Pressable>
                 <Feather color="#4d5b4d" name="chevron-right" size={16} />
               </View>
             </View>
           </Pressable>
           {isEditMode ? (
-            <Pressable
-              disabled={editingBlocked}
-              onPress={handleAppendSelectedPoi}
-              style={({ pressed }) => [
-                styles.addButton,
-                editingBlocked && styles.addButtonDisabled,
-                pressed && !editingBlocked && styles.pressed,
-              ]}>
-              <Text style={styles.addButtonLabel}>
-                {selectedItemInTourCount > 0 ? 'Nochmals hinzufuegen' : 'Zur Tour hinzufuegen'}
-              </Text>
-            </Pressable>
+            <View style={styles.mapBottomActionRow}>
+              <Pressable
+                disabled={editingBlocked}
+                onPress={handleAppendSelectedPoi}
+                style={({ pressed }) => [
+                  styles.addButton,
+                  styles.mapBottomActionButton,
+                  editingBlocked && styles.addButtonDisabled,
+                  pressed && !editingBlocked && styles.pressed,
+                ]}>
+                <Text style={styles.addButtonLabel}>
+                  {selectedItemInTourCount > 0 ? 'Nochmals hinzufuegen' : 'Zur Tour hinzufuegen'}
+                </Text>
+              </Pressable>
+
+              {selectedItemInTourCount > 0 ? (
+                <Pressable
+                  disabled={editingBlocked}
+                  onPress={handleRemoveSelectedPoi}
+                  style={({ pressed }) => [
+                    styles.removeButton,
+                    styles.mapBottomActionButton,
+                    editingBlocked && styles.removeButtonDisabled,
+                    pressed && !editingBlocked && styles.pressed,
+                  ]}>
+                  <Feather color={editingBlocked ? '#c19f9f' : '#a34e4e'} name="trash-2" size={13} />
+                  <Text style={[styles.removeButtonLabel, editingBlocked && styles.removeButtonLabelDisabled]}>
+                    Aus Tour entfernen
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : null}
         </View>
       ) : null}
     </View>
   );
 
+  const footerActionsDisabled =
+    updateTourMutation.isPending || updateTourNameMutation.isPending || deleteTourMutation.isPending;
+  const footerBottomInset = Math.max(insets.bottom, 12);
+  const footerReservedHeight = 88 + footerBottomInset;
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: footerReservedHeight }]}
         showsVerticalScrollIndicator={false}>
         <View style={styles.headerWrap}>
           <View style={styles.headerTopRow}>
             <Pressable
-              onPress={() => {
-                if (router.canGoBack()) {
-                  router.back();
-                  return;
-                }
-
-                router.replace('/(tabs)/tours' as never);
-              }}
+              onPress={handleBackPress}
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
               <Feather color="#1e2a1e" name="arrow-left" size={16} />
             </Pressable>
 
-            <View style={styles.headerActions}>
-              {!isEditMode ? (
+            {!isEditMode ? (
+              <View style={styles.headerActions}>
                 <Pressable
                   onPress={() => void handleShareTour()}
                   style={({ pressed }) => [styles.shareHeaderButton, pressed && styles.pressed]}>
                   <Feather color="#3a4f84" name="share-2" size={14} />
                   <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
                 </Pressable>
-              ) : null}
-              {isEditMode ? (
                 <Pressable
-                  disabled={isSaveDisabled}
-                  onPress={() => void performSave(draftPoiIds, { manual: true })}
+                  disabled={deleteTourMutation.isPending}
+                  onPress={handleOpenViewOverflowMenu}
                   style={({ pressed }) => [
-                    styles.saveHeaderButton,
-                    isSaveDisabled && styles.saveHeaderButtonDisabled,
-                    pressed && !isSaveDisabled && styles.pressed,
+                    styles.overflowHeaderButton,
+                    deleteTourMutation.isPending && styles.overflowHeaderButtonDisabled,
+                    pressed && !deleteTourMutation.isPending && styles.pressed,
                   ]}>
-                  <Feather color="#f5f3ee" name="save" size={14} />
-                  <Text style={styles.saveHeaderButtonLabel}>{saveButtonLabel}</Text>
+                  <Feather color={deleteTourMutation.isPending ? '#9ba59a' : '#2e3a2e'} name="more-horizontal" size={16} />
                 </Pressable>
-              ) : null}
-
-              {canEnterEditMode ? (
-                isEditMode && hasPendingChanges ? (
-                  <>
-                    <Pressable
-                      disabled={
-                        updateTourMutation.isPending ||
-                        updateTourNameMutation.isPending
-                      }
-                      onPress={handleExitEditMode}
-                      style={({ pressed }) => [
-                        styles.modeHeaderButton,
-                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                          styles.modeHeaderButtonDisabled,
-                        pressed &&
-                          !updateTourMutation.isPending &&
-                          !updateTourNameMutation.isPending &&
-                          styles.pressed,
-                      ]}>
-                      <Feather
-                        color={
-                          updateTourMutation.isPending || updateTourNameMutation.isPending
-                            ? '#9ba59a'
-                            : '#2e6b4b'
-                        }
-                        name="check"
-                        size={14}
-                      />
-                      <Text
-                        style={[
-                          styles.modeHeaderButtonLabel,
-                          (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                            styles.modeHeaderButtonLabelDisabled,
-                        ]}>
-                        Fertig
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
-                      onPress={handleCancelPendingChangesAndExit}
-                      style={({ pressed }) => [
-                        styles.cancelHeaderButton,
-                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                          styles.cancelHeaderButtonDisabled,
-                        pressed &&
-                          !updateTourMutation.isPending &&
-                          !updateTourNameMutation.isPending &&
-                          styles.pressed,
-                      ]}>
-                      <Feather
-                        color={
-                          updateTourMutation.isPending || updateTourNameMutation.isPending
-                            ? '#b8a8a8'
-                            : '#8a5a3a'
-                        }
-                        name="x"
-                        size={14}
-                      />
-                      <Text
-                        style={[
-                          styles.cancelHeaderButtonLabel,
-                          (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                            styles.cancelHeaderButtonLabelDisabled,
-                        ]}>
-                        Abbrechen
-                      </Text>
-                    </Pressable>
-                  </>
-                ) : (
-                  <Pressable
-                    disabled={updateTourMutation.isPending || updateTourNameMutation.isPending}
-                    onPress={isEditMode ? handleExitEditMode : handleEnterEditMode}
-                    style={({ pressed }) => [
-                      styles.modeHeaderButton,
-                      (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                        styles.modeHeaderButtonDisabled,
-                      pressed &&
-                        !(updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                        styles.pressed,
-                    ]}>
-                    <Feather
-                      color={
-                        updateTourMutation.isPending || updateTourNameMutation.isPending
-                          ? '#9ba59a'
-                          : '#2e6b4b'
-                      }
-                      name={isEditMode ? 'check' : 'edit-2'}
-                      size={14}
-                    />
-                    <Text
-                      style={[
-                        styles.modeHeaderButtonLabel,
-                        (updateTourMutation.isPending || updateTourNameMutation.isPending) &&
-                          styles.modeHeaderButtonLabelDisabled,
-                      ]}>
-                      {isEditMode ? 'Fertig' : 'Bearbeiten'}
-                    </Text>
-                  </Pressable>
-                )
-              ) : null}
-
-              {isEditMode ? (
-                <Pressable
-                  disabled={editingBlocked || deleteTourMutation.isPending}
-                  onPress={handleDeleteTour}
-                  style={({ pressed }) => [
-                    styles.deleteHeaderButton,
-                    (editingBlocked || deleteTourMutation.isPending) && styles.deleteHeaderButtonDisabled,
-                    pressed && !editingBlocked && !deleteTourMutation.isPending && styles.pressed,
-                  ]}>
-                  <Feather
-                    color={editingBlocked || deleteTourMutation.isPending ? '#b8a8a8' : '#a34e4e'}
-                    name="trash-2"
-                    size={14}
-                  />
-                  <Text
-                    style={[
-                      styles.deleteHeaderButtonLabel,
-                      (editingBlocked || deleteTourMutation.isPending) && styles.deleteHeaderButtonLabelDisabled,
-                    ]}>
-                    {deleteTourMutation.isPending ? 'Loesche...' : 'Loeschen'}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
+              </View>
+            ) : null}
           </View>
 
           {isEditMode ? (
@@ -1930,7 +2089,6 @@ export default function TourDetailScreen() {
           ) : (
             <Text style={styles.title}>{data.tour.name}</Text>
           )}
-          <Text style={styles.subtitle}>{`${formatDistance(liveTourMetrics.distance)} • ${formatDuration(liveTourMetrics.duration)} • ${liveTourMetrics.stampCount ?? 0} Stempel`}</Text>
         </View>
 
         <View style={styles.card}>
@@ -1942,6 +2100,7 @@ export default function TourDetailScreen() {
           <Text style={styles.cardLine}>{`Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
           <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(liveTourMetrics.totalElevationGain)} • ↓${formatElevation(liveTourMetrics.totalElevationLoss)}`}</Text>
           <Text style={styles.cardLine}>{`Stempel: ${liveTourMetrics.stampCount ?? 0}`}</Text>
+          <Text style={styles.cardLine}>{`Stempel gesamt: ${liveTourMetrics.stampCount ?? 0} • Neue Stempel fuer mich: ${liveTourMetrics.newStampCountForUser ?? 0}`}</Text>
         </View>
 
         {blockingErrorCode === 403 ? (
@@ -1977,6 +2136,11 @@ export default function TourDetailScreen() {
               const item = mapItemById.get(poiId.toLowerCase());
               const title = item?.name || poiId;
               const stampNumber = getStampNumber(item);
+              const legMetrics = routeLegMetricsByArrivalIndex[index] ?? null;
+              const legMetaLabel =
+                index > 0
+                  ? `${formatDuration(legMetrics?.durationSeconds ?? null)} • ${formatDistance(legMetrics?.distanceMeters ?? null)} • ↑${formatElevation(legMetrics?.elevationGain ?? null)} • ↓${formatElevation(legMetrics?.elevationLoss ?? null)}`
+                  : 'Startpunkt';
               const pathItemImageSource = resolveMapItemImageSource(item?.imageUrl, accessToken);
 
               return (
@@ -2016,6 +2180,7 @@ export default function TourDetailScreen() {
                           ? `Stempel ${stampNumber} • ${item?.typeLabel || 'Unbekannt'}`
                           : item?.typeLabel || 'Unbekannt'}
                       </Text>
+                      <Text style={styles.pathMetaLeg}>{legMetaLabel}</Text>
                     </View>
                   </Pressable>
                   {isEditMode ? (
@@ -2064,9 +2229,15 @@ export default function TourDetailScreen() {
                   ) : item ? (
                     <View style={styles.pathActions}>
                       <Pressable
+                        onPress={() => handleStartNavigation(item)}
+                        style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+                        >
+                        <Feather color="#2e3a2e" name="navigation" size={16} />
+                      </Pressable>
+                      <Pressable
                         onPress={() => openListItemDetailPage(item)}
                         style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}>
-                        <Text style={styles.pathNavButtonLabel}>{'>'}</Text>
+                        <Feather color="#8b957f" name="chevron-right" size={18} style={styles.cardChevron} />
                       </Pressable>
                     </View>
                   ) : null}
@@ -2076,21 +2247,119 @@ export default function TourDetailScreen() {
           )}
         </View>
 
-        {isEditMode ? (
-          <Pressable
-            disabled={isSaveDisabled}
-            onPress={() => void performSave(draftPoiIds, { manual: true })}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              isSaveDisabled && styles.primaryButtonDisabled,
-              pressed && !isSaveDisabled && styles.pressed,
-            ]}>
-            <Text style={styles.primaryButtonLabel}>{saveButtonLabel}</Text>
-          </Pressable>
-        ) : null}
-
         {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Tourdaten im Hintergrund...</Text> : null}
       </ScrollView>
+
+      <View style={[styles.floatingFooterShell, { paddingBottom: footerBottomInset }]}>
+        <View style={styles.floatingFooterBar}>
+          {isEditMode ? (
+            <Text style={styles.footerEditHint}>Aenderungen werden automatisch gespeichert</Text>
+          ) : (
+            <Pressable
+              disabled={!mapsDirectionsUrl || footerActionsDisabled}
+              onPress={() => void handleStartWholeTour()}
+              style={({ pressed }) => [
+                styles.footerSecondaryButton,
+                (!mapsDirectionsUrl || footerActionsDisabled) && styles.footerSecondaryButtonDisabled,
+                pressed && mapsDirectionsUrl && !footerActionsDisabled && styles.pressed,
+              ]}>
+              <Feather color="#8a5a3a" name="navigation" size={14} />
+              <Text style={styles.footerSecondaryButtonLabel}>Ganze Tour starten</Text>
+            </Pressable>
+          )}
+
+          {isEditMode ? (
+            <Pressable
+              disabled={footerActionsDisabled}
+              onPress={handleFinishEditMode}
+              style={({ pressed }) => [
+                styles.footerPrimaryButton,
+                footerActionsDisabled && styles.footerPrimaryButtonDisabled,
+                pressed && !footerActionsDisabled && styles.pressed,
+              ]}>
+              <Text style={styles.footerPrimaryButtonLabel}>Fertig</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              disabled={!canEnterEditMode || footerActionsDisabled}
+              onPress={handleEnterEditMode}
+              style={({ pressed }) => [
+                styles.footerPrimaryButton,
+                (!canEnterEditMode || footerActionsDisabled) && styles.footerPrimaryButtonDisabled,
+                pressed && canEnterEditMode && !footerActionsDisabled && styles.pressed,
+              ]}>
+              <Text style={styles.footerPrimaryButtonLabel}>Bearbeiten</Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={handleCloseViewOverflowMenu}
+        transparent
+        visible={isViewOverflowOpen}>
+        <View style={styles.overflowModalBackdrop}>
+          <Pressable onPress={handleCloseViewOverflowMenu} style={StyleSheet.absoluteFill} />
+          <View style={[styles.overflowPopover, { top: insets.top + 58 }]}>
+            <Text style={styles.overflowTitle}>Aktionen</Text>
+
+            {canEnterEditMode ? (
+              <Pressable
+                disabled={deleteTourMutation.isPending}
+                onPress={handleConfirmDeleteTour}
+                style={({ pressed }) => [
+                  styles.overflowActionButton,
+                  styles.overflowActionDanger,
+                  deleteTourMutation.isPending && styles.overflowActionButtonDisabled,
+                  pressed && !deleteTourMutation.isPending && styles.pressed,
+                ]}>
+                <Feather color={deleteTourMutation.isPending ? '#b89b9b' : '#a34e4e'} name="trash-2" size={14} />
+                <Text
+                  style={[
+                    styles.overflowActionLabel,
+                    styles.overflowActionLabelDanger,
+                    deleteTourMutation.isPending && styles.overflowActionLabelDisabled,
+                  ]}>
+                  Tour loeschen
+                </Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.overflowEmptyHint}>Keine verfuegbaren Aktionen.</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeRemoveVisitDialog}
+        transparent
+        visible={isRemoveVisitDialogOpen}>
+        <View style={styles.removeVisitBackdrop}>
+          <Pressable onPress={closeRemoveVisitDialog} style={StyleSheet.absoluteFill} />
+          <View style={styles.removeVisitDialog}>
+            <Text style={styles.removeVisitTitle}>Welchen Besuch entfernen?</Text>
+            <Text style={styles.removeVisitSubtitle}>Waehle den Besuch aus, der aus der Tour entfernt werden soll.</Text>
+
+            <View style={styles.removeVisitList}>
+              {selectedItemVisitOptions.map((visit) => (
+                <Pressable
+                  key={visit.draftIndex}
+                  onPress={() => removeSelectedPoiVisitAtIndex(visit.draftIndex)}
+                  style={({ pressed }) => [styles.removeVisitOption, pressed && styles.pressed]}>
+                  <Feather color="#a34e4e" name="map-pin" size={13} />
+                  <Text style={styles.removeVisitOptionLabel}>{`Besuch ${visit.orderLabel}`}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Pressable onPress={closeRemoveVisitDialog} style={({ pressed }) => [styles.removeVisitCancel, pressed && styles.pressed]}>
+              <Text style={styles.removeVisitCancelLabel}>Abbrechen</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="none"
@@ -2152,123 +2421,154 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '700',
   },
-  saveHeaderButton: {
+  backButton: {
     minHeight: 32,
     borderRadius: 10,
-    backgroundColor: '#2e6b4b',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 6,
-    paddingHorizontal: 10,
     shadowColor: '#141e14',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
   },
-  saveHeaderButtonDisabled: {
-    backgroundColor: '#b8c7bb',
-  },
-  saveHeaderButtonLabel: {
-    color: '#f5f3ee',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  modeHeaderButton: {
-    minHeight: 32,
+  overflowHeaderButton: {
+    width: 32,
+    height: 32,
     borderRadius: 10,
     backgroundColor: '#eef4ee',
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 10,
     shadowColor: '#141e14',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
   },
-  modeHeaderButtonDisabled: {
+  overflowHeaderButtonDisabled: {
     opacity: 0.7,
   },
-  modeHeaderButtonLabel: {
-    color: '#2e6b4b',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
+  overflowModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20,30,20,0.16)',
   },
-  modeHeaderButtonLabelDisabled: {
-    color: '#9ba59a',
-  },
-  cancelHeaderButton: {
-    minHeight: 32,
-    borderRadius: 10,
-    backgroundColor: '#fff4ec',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 10,
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  cancelHeaderButtonDisabled: {
-    opacity: 0.7,
-  },
-  cancelHeaderButtonLabel: {
-    color: '#8a5a3a',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  cancelHeaderButtonLabelDisabled: {
-    color: '#b8a8a8',
-  },
-  backButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+  overflowPopover: {
+    position: 'absolute',
+    right: 16,
+    width: 240,
     backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
     shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    elevation: 6,
   },
-  deleteHeaderButton: {
-    minHeight: 32,
-    borderRadius: 10,
-    backgroundColor: '#fff2f2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 10,
-    shadowColor: '#141e14',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  deleteHeaderButtonDisabled: {
-    opacity: 0.7,
-  },
-  deleteHeaderButtonLabel: {
-    color: '#a34e4e',
-    fontSize: 12,
-    lineHeight: 16,
+  overflowTitle: {
+    color: '#1e2a1e',
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: '700',
   },
-  deleteHeaderButtonLabelDisabled: {
-    color: '#b8a8a8',
+  overflowActionButton: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  overflowActionDanger: {
+    backgroundColor: '#fff0f0',
+  },
+  overflowActionButtonDisabled: {
+    backgroundColor: '#f7f1f1',
+  },
+  overflowActionLabel: {
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  overflowActionLabelDanger: {
+    color: '#a34e4e',
+  },
+  overflowActionLabelDisabled: {
+    color: '#b89b9b',
+  },
+  overflowEmptyHint: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  removeVisitBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20,30,20,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  removeVisitDialog: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    elevation: 6,
+  },
+  removeVisitTitle: {
+    color: '#1e2a1e',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  removeVisitSubtitle: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  removeVisitList: {
+    gap: 8,
+  },
+  removeVisitOption: {
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#fff0f0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  removeVisitOptionLabel: {
+    color: '#a34e4e',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  removeVisitCancel: {
+    borderRadius: 12,
+    backgroundColor: '#eef3ed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+  },
+  removeVisitCancelLabel: {
+    color: '#2e6b4b',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   titleInputShell: {
     borderRadius: 12,
@@ -2355,7 +2655,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   mapCard: {
-    height: 440,
+    height: 390,
     borderRadius: 22,
     overflow: 'visible',
     backgroundColor: '#e7ebde',
@@ -2508,6 +2808,51 @@ const styles = StyleSheet.create({
   markerFallbackLabelInTour: {
     color: '#f5f3ee',
   },
+  poiInTourMarkerWrap: {
+    width: 58,
+    height: 62,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  poiInTourMarkerImage: {
+    width: 42,
+    height: 52,
+  },
+  poiInTourMarkerFallback: {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2f7dd7',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  poiInTourMarkerBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 1,
+    minWidth: 22,
+    borderRadius: 999,
+    backgroundColor: '#2f7dd7',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    shadowColor: '#243f62',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  poiInTourMarkerBadgeLabel: {
+    color: '#f5f3ee',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '700',
+  },
   mapBottomSheet: {
     position: 'absolute',
     left: 12,
@@ -2566,6 +2911,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  mapBottomActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  mapBottomActionButton: {
+    flex: 1,
+  },
   addButton: {
     backgroundColor: '#2e6b4b',
     borderRadius: 10,
@@ -2582,6 +2934,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
+  },
+  removeButton: {
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: '#fff0f0',
+  },
+  removeButtonDisabled: {
+    backgroundColor: '#f7f1f1',
+  },
+  removeButtonLabel: {
+    color: '#a34e4e',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  removeButtonLabelDisabled: {
+    color: '#c19f9f',
   },
   pathRow: {
     flexDirection: 'row',
@@ -2634,6 +3008,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
   },
+  pathMetaLeg: {
+    color: '#4d6d56',
+    fontSize: 10,
+    lineHeight: 13,
+  },
   pathActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2656,23 +3035,72 @@ const styles = StyleSheet.create({
   iconButtonDisabled: {
     backgroundColor: '#f0f2ee',
   },
-  primaryButton: {
+  floatingFooterShell: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 0,
+  },
+  floatingFooterBar: {
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e7db',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  footerPrimaryButton: {
     backgroundColor: '#2e6b4b',
-    borderRadius: 14,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 11,
     paddingHorizontal: 12,
+    minWidth: 132,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4,
   },
-  primaryButtonDisabled: {
+  footerPrimaryButtonDisabled: {
     backgroundColor: '#b8c7bb',
   },
-  primaryButtonLabel: {
+  footerPrimaryButtonLabel: {
     color: '#f5f3ee',
     fontSize: 13,
     lineHeight: 16,
+    fontWeight: '700',
+  },
+  footerEditHint: {
+    flex: 1,
+    color: '#4d6d56',
+    fontSize: 0,
+    lineHeight: 16,
     fontWeight: '600',
+  },
+  footerSecondaryButton: {
+    borderRadius: 12,
+    backgroundColor: '#fff4ec',
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    minWidth: 120,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  footerSecondaryButtonDisabled: {
+    opacity: 0.7,
+  },
+  footerSecondaryButtonLabel: {
+    color: '#8a5a3a',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   refreshHint: {
     color: '#4d6d56',

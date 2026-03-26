@@ -570,12 +570,8 @@ function StampDetailContent() {
         };
       });
 
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: stampsOverviewKey }),
-        queryClient.invalidateQueries({ queryKey: mapDataKey }),
-        queryClient.invalidateQueries({ queryKey: profileOverviewKey }),
-        queryClient.invalidateQueries({ queryKey: stampDetailKey }),
-      ]);
+      await queryClient.invalidateQueries();
+      queryClient.removeQueries({ type: 'inactive' });
       Alert.alert('Besuch gespeichert', 'Die Stempelstelle wurde erfolgreich gestempelt.');
     } catch (nextError) {
       rollbackOptimisticUpdates();

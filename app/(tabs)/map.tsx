@@ -1212,12 +1212,8 @@ export default function MapScreen() {
         };
       });
 
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: stampsOverviewKey }),
-        queryClient.invalidateQueries({ queryKey: mapDataKey }),
-        queryClient.invalidateQueries({ queryKey: profileOverviewKey }),
-        queryClient.invalidateQueries({ queryKey: stampDetailKey }),
-      ]);
+      await queryClient.invalidateQueries();
+      queryClient.removeQueries({ type: 'inactive' });
       void queryClient
         .prefetchQuery({
           queryKey: stampDetailKey,
