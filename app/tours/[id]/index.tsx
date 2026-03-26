@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  type ImageRequireSource,
   type ImageSourcePropType,
   Linking,
   Modal,
@@ -99,6 +100,24 @@ type SearchResultRank = {
   matchIndex: number;
   numberDelta: number;
   nameLength: number;
+};
+
+type MarkerBaseImageKind = 'visited-stamp' | 'open-stamp' | 'parking';
+type MarkerOverlayKind = 'none' | 'badge';
+
+type MarkerRenderState = {
+  id: string;
+  item: TourMapItem;
+  coordinate: Coordinate;
+  kind: TourMapMarkerKind;
+  isInTour: boolean;
+  routeOrderLabel: string | null;
+  baseImageKind: MarkerBaseImageKind;
+  baseImageLabel: string;
+  baseImage: ImageRequireSource;
+  overlayKind: MarkerOverlayKind;
+  baseKey: string;
+  overlayKey: string;
 };
 
 function formatDistance(distanceMeters: number | null) {
@@ -213,18 +232,118 @@ function resolveRouteOrderLabel(positions: number[]) {
   return labels.join('/');
 }
 
-function resolveRouteOrderImageLabel(routeOrderLabel: string) {
-  const trimmed = routeOrderLabel.trim().toUpperCase();
-  if (!trimmed || trimmed === '--') {
+function deriveBaseMarkerImageKind(kind: TourMapMarkerKind): MarkerBaseImageKind {
+  if (kind === 'visited-stamp') {
+    return 'visited-stamp';
+  }
+
+  if (kind === 'open-stamp') {
+    return 'open-stamp';
+  }
+
+  if (kind === 'parking') {
+    return 'parking';
+  }
+
+  return 'open-stamp';
+}
+
+function deriveBaseMarkerImageLabel(item: TourMapItem, baseImageKind: MarkerBaseImageKind) {
+  if (baseImageKind === 'parking') {
+    return 'P';
+  }
+
+  if (item.kind === 'poi') {
     return '--';
   }
 
-  const compact = trimmed.replaceAll('/', '');
-  if (/^[A-Z]{1,3}$/.test(compact)) {
-    return compact;
+  return extractStampToken(item.markerLabel) || '--';
+}
+
+function selectMarkerImage(baseImageKind: MarkerBaseImageKind, baseImageLabel: string): ImageRequireSource {
+  const exactMatch = getPreGeneratedMapMarkerImageSource({
+    kind: baseImageKind,
+    label: baseImageLabel,
+  });
+  if (exactMatch) {
+    return exactMatch;
   }
 
-  return '--';
+  if (baseImageKind !== 'parking') {
+    const kindFallback = getPreGeneratedMapMarkerImageSource({
+      kind: baseImageKind,
+      label: '--',
+    });
+    if (kindFallback) {
+      return kindFallback;
+    }
+  }
+
+  const openStampFallback = getPreGeneratedMapMarkerImageSource({
+    kind: 'open-stamp',
+    label: '--',
+  });
+  if (openStampFallback) {
+    return openStampFallback;
+  }
+
+  return require('../../../assets/images/map/generated/ios-s250/open-stamp/fallback.png');
+}
+
+function createMarkerKeys(input: {
+  id: string;
+  baseImageKind: MarkerBaseImageKind;
+  baseImageLabel: string;
+  overlayKind: MarkerOverlayKind;
+  routeOrderLabel: string | null;
+}) {
+  const normalizedId = input.id.trim().toLowerCase();
+  const normalizedBaseImageLabel = input.baseImageLabel.trim().toUpperCase() || '--';
+  const normalizedRouteOrderLabel = input.routeOrderLabel?.trim().toUpperCase() || '--';
+
+  return {
+    baseKey: `${normalizedId}:base:${input.baseImageKind}:${normalizedBaseImageLabel}`,
+    overlayKey: `${normalizedId}:overlay:${input.overlayKind}:${normalizedRouteOrderLabel}`,
+  };
+}
+
+function deriveMarkerRenderState(
+  item: TourMapItem,
+  positionsById: Map<string, number[]>
+): MarkerRenderState {
+  const normalizedItemId = item.ID.toLowerCase();
+  const routePositions = positionsById.get(normalizedItemId) ?? [];
+  const isInTour = routePositions.length > 0;
+  const routeOrderLabel = isInTour ? resolveRouteOrderLabel(routePositions) : null;
+  const baseImageKind = deriveBaseMarkerImageKind(item.kind);
+  const baseImageLabel = deriveBaseMarkerImageLabel(item, baseImageKind);
+  const baseImage = selectMarkerImage(baseImageKind, baseImageLabel);
+  const overlayKind: MarkerOverlayKind = isInTour ? 'badge' : 'none';
+  const { baseKey, overlayKey } = createMarkerKeys({
+    id: item.ID,
+    baseImageKind,
+    baseImageLabel,
+    overlayKind,
+    routeOrderLabel,
+  });
+
+  return {
+    id: item.ID,
+    item,
+    coordinate: {
+      latitude: item.latitude,
+      longitude: item.longitude,
+    },
+    kind: item.kind,
+    isInTour,
+    routeOrderLabel,
+    baseImageKind,
+    baseImageLabel,
+    baseImage,
+    overlayKind,
+    baseKey,
+    overlayKey,
+  };
 }
 
 function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
@@ -813,10 +932,6 @@ export default function TourDetailScreen() {
       }
     }
 
-    if (selectedMapItem) {
-      pinnedById.set(selectedMapItem.ID.toLowerCase(), selectedMapItem);
-    }
-
     const visible = Array.from(pinnedById.values());
     const parkingItems = allMapItems.filter((item) => item.kind === 'parking');
     const stampItems = allMapItems.filter(
@@ -848,7 +963,13 @@ export default function TourDetailScreen() {
     }
 
     return visible;
-  }, [allMapItems, draftPoiIds, mapItemById, selectedMapItem]);
+  }, [allMapItems, draftPoiIds, mapItemById]);
+
+  const markerRenderStates = useMemo(
+    () =>
+      mapItemsForRendering.map((item) => deriveMarkerRenderState(item, draftPoiStats.positionsById)),
+    [draftPoiStats.positionsById, mapItemsForRendering]
+  );
 
   const routeCoordinates = useMemo(
     () =>
@@ -1765,158 +1886,39 @@ export default function TourDetailScreen() {
           <Polyline coordinates={routeCoordinates} strokeColor="#2e6b4b" strokeWidth={4} />
         ) : null}
 
-        {mapItemsForRendering.map((item) => {
-          const normalizedItemId = item.ID.toLowerCase();
-          const routePositions = draftPoiStats.positionsById.get(normalizedItemId) ?? [];
-          const isInTour = routePositions.length > 0;
-          const routeOrderLabel = resolveRouteOrderLabel(routePositions);
-          const routeOrderImageLabel = resolveRouteOrderImageLabel(routeOrderLabel);
-          const inTourMarkerKind =
-            item.kind === 'visited-stamp' || item.kind === 'open-stamp'
-              ? item.kind
-              : item.kind === 'parking'
-                ? 'parking-order'
-                : 'tour-order';
-          const isSelected = selectedMapItemId === item.ID;
-          const markerRenderKey = `${item.ID}:${isInTour ? `tour:${routeOrderLabel}` : 'base'}:${isSelected ? 'selected' : 'default'}`;
+        {markerRenderStates.map((state) => (
+          <Marker
+            anchor={{ x: 0.5, y: 1 }}
+            coordinate={state.coordinate}
+            image={state.baseImage}
+            key={state.baseKey}
+            onPress={() => focusMapItemOnMap(state.item)}
+            
+            zIndex={state.isInTour ? 10 : 1}
+          />
+        ))}
 
-          const tourOrderMarkerImage =
-            getPreGeneratedMapMarkerImageSource({
-              kind: inTourMarkerKind,
-              label: routeOrderImageLabel,
-            }) ||
-            getPreGeneratedMapMarkerImageSource({
-              kind: inTourMarkerKind,
-              label: '--',
-            });
-
-          const markerImage =
-            isInTour
-              ? tourOrderMarkerImage
-              : item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
-                ? getPreGeneratedMapMarkerImageSource({
-                    kind: item.kind,
-                    label: item.kind === 'parking' ? 'P' : extractStampToken(item.markerLabel) || item.markerLabel,
-                  })
-                : null;
-
-          if (isInTour) {
-            const markerImageWithoutOrder =
-              item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking'
-                ? getPreGeneratedMapMarkerImageSource({
-                    kind: item.kind,
-                    label: item.kind === 'parking' ? 'P' : extractStampToken(item.markerLabel) || item.markerLabel,
-                  })
-                : getPreGeneratedMapMarkerImageSource({
-                    kind: 'tour-order',
-                    label: '--',
-                  });
-
-            return (
-              <Marker
-                anchor={{ x: 0.5, y: 1 }}
-                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-                key={markerRenderKey}
-                onPress={() => focusMapItemOnMap(item)}
-                zIndex={isSelected ? 20 : 10}>
-                <View collapsable={false} style={styles.poiInTourMarkerWrap}>
-                  {isSelected ? <View style={styles.selectedMarkerHalo} /> : null}
-                  {markerImageWithoutOrder ? (
-                    <Image source={markerImageWithoutOrder} style={styles.poiInTourMarkerImage} />
-                  ) : (
-                    <View style={styles.poiInTourMarkerFallback}>
-                      <Feather color="#f5f3ee" name="map-pin" size={14} />
-                    </View>
-                  )}
-                  <View style={styles.poiInTourMarkerBadge}>
-                    <Feather color="#f5f3ee" name="map-pin" size={9} />
-                    <Text style={styles.poiInTourMarkerBadgeLabel}>{routeOrderLabel}</Text>
-                  </View>
-                </View>
-              </Marker>
-            );
-          }
-
-          if (markerImage) {
-            if (isSelected) {
-              return (
-                <Marker
-                  anchor={{ x: 0.5, y: 1 }}
-                  coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-                  key={markerRenderKey}
-                  onPress={() => focusMapItemOnMap(item)}
-                  zIndex={20}>
-                  <View collapsable={false} style={styles.poiInTourMarkerWrap}>
-                    <View style={styles.selectedMarkerHalo} />
-                    <Image source={markerImage} style={styles.poiInTourMarkerImage} />
-                  </View>
-                </Marker>
-              );
-            }
-
-            return (
-              <Marker
-                anchor={{ x: 0.5, y: 1 }}
-                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-                image={markerImage}
-                key={markerRenderKey}
-                onPress={() => focusMapItemOnMap(item)}
-                pinColor={undefined}
-                tracksViewChanges={false}
-                zIndex={isSelected ? 20 : isInTour ? 10 : 0}
-              />
-            );
-          }
-
-          if (isInTour || item.kind === 'visited-stamp' || item.kind === 'open-stamp' || item.kind === 'parking') {
-            const fallbackLabel =
-              isInTour
-                ? routeOrderLabel
-                : item.kind === 'parking'
-                  ? 'P'
-                  : extractStampToken(item.markerLabel) || '--';
-            const useTourFallbackColor =
-              isInTour && inTourMarkerKind !== 'open-stamp' && inTourMarkerKind !== 'parking-order';
-            const useParkingFallbackColor =
-              inTourMarkerKind === 'parking-order' || (!isInTour && item.kind === 'parking');
-
-            return (
-              <Marker
-                anchor={{ x: 0.5, y: 0.5 }}
-                coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-                key={markerRenderKey}
-                onPress={() => focusMapItemOnMap(item)}
-                zIndex={isSelected ? 20 : isInTour ? 10 : 0}>
-                <View
-                  collapsable={false}
-                  style={[
-                    styles.markerFallback,
-                    useTourFallbackColor && styles.markerFallbackInTour,
-                    useParkingFallbackColor && styles.markerFallbackParking,
-                    isSelected && styles.markerFallbackSelected,
-                  ]}>
-                  {isSelected ? <View style={styles.selectedMarkerHaloFallback} /> : null}
-                  <Text
-                    style={[
-                      styles.markerFallbackLabel,
-                      useTourFallbackColor && styles.markerFallbackLabelInTour,
-                    ]}>
-                    {fallbackLabel}
-                  </Text>
-                </View>
-              </Marker>
-            );
+        {markerRenderStates.map((state) => {
+          if (state.overlayKind === 'none') {
+            return null;
           }
 
           return (
             <Marker
-              coordinate={{ latitude: item.latitude, longitude: item.longitude }}
-              key={markerRenderKey}
-              onPress={() => focusMapItemOnMap(item)}
-              pinColor={isSelected ? '#2e6b4b' : '#bf7f3f'}
-              tracksViewChanges={false}
-              zIndex={isSelected ? 20 : 0}
-            />
+              anchor={{ x: 0.5, y: 1 }}
+              coordinate={state.coordinate}
+              key={state.overlayKey}
+              onPress={() => focusMapItemOnMap(state.item)}
+              zIndex={30}>
+              <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
+                {state.overlayKind === 'badge' ? (
+                  <View style={styles.poiInTourMarkerBadge}>
+                    <Feather color="#f5f3ee" name="map-pin" size={9} />
+                    <Text style={styles.poiInTourMarkerBadgeLabel}>{state.routeOrderLabel ?? '--'}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </Marker>
           );
         })}
       </MapView>
@@ -2795,91 +2797,11 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 22,
   },
-  markerFallback: {
-    minWidth: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-    backgroundColor: '#c1a093',
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
-  markerFallbackInTour: {
-    backgroundColor: '#2e6b4b',
-  },
-  markerFallbackParking: {
-    backgroundColor: '#2f7dd7',
-  },
-  markerFallbackSelected: {
-    borderColor: '#1e2a1e',
-    transform: [{ scale: 1.08 }],
-  },
-selectedMarkerHalo: {
-  position: 'absolute',
-  top: 10,
-  width: 51,
-  height: 51,
-  borderRadius: 999,
-
-  // subtle glow base (optional, can even be transparent)
-  backgroundColor: 'rgba(0, 0, 0, 0.15)',
-
-  // iOS shadow
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 0 },
-  shadowOpacity: 0.4,
-  shadowRadius: 10,
-
-  // Android shadow
-  elevation: 8,
-},
-
-selectedMarkerHaloFallback: {
-  position: 'absolute',
-  top: -6,
-  width: 56,
-  height: 56,
-  borderRadius: 999,
-
-  backgroundColor: 'rgba(0, 0, 0, 0.12)',
-
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 0 },
-  shadowOpacity: 0.35,
-  shadowRadius: 14,
-
-  elevation: 10,
-},
-  markerFallbackLabel: {
-    color: '#f5f3ee',
-    fontSize: 10,
-    lineHeight: 12,
-    fontWeight: '700',
-  },
-  markerFallbackLabelInTour: {
-    color: '#f5f3ee',
-  },
-  poiInTourMarkerWrap: {
+  markerOverlayWrap: {
     width: 58,
     height: 62,
     alignItems: 'center',
     justifyContent: 'flex-end',
-  },
-  poiInTourMarkerImage: {
-    width: 42,
-    height: 52,
-  },
-  poiInTourMarkerFallback: {
-    width: 30,
-    height: 30,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2f7dd7',
-    borderWidth: 2,
-    borderColor: '#ffffff',
   },
   poiInTourMarkerBadge: {
     position: 'absolute',
@@ -2894,11 +2816,6 @@ selectedMarkerHaloFallback: {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
-    shadowColor: '#243f62',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
   },
   poiInTourMarkerBadgeLabel: {
     color: '#f5f3ee',
