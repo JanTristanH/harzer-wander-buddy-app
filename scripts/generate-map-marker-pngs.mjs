@@ -51,7 +51,6 @@ const ascendingDoubleAlphaLabels = (() => {
 })();
 
 const allowedAlphabeticLabels = [...BASE_ALPHA_LABELS, ...ascendingDoubleAlphaLabels];
-const tourOrderLabels = [...allowedAlphabeticLabels];
 const stampAlphabeticLabels = [...allowedAlphabeticLabels];
 
 const markerVariants = [
@@ -80,18 +79,6 @@ const markerVariants = [
     fillColor: '#2f7dd7',
     textColor: '#111111',
     labels: ['P'],
-  },
-  {
-    kind: 'parking-order',
-    fillColor: '#2f7dd7',
-    textColor: '#111111',
-    labels: ['--', ...tourOrderLabels],
-  },
-  {
-    kind: 'tour-order',
-    fillColor: '#1e2a1e',
-    textColor: '#111111',
-    labels: ['--', ...tourOrderLabels],
   },
 ];
 
@@ -221,19 +208,6 @@ function normalizeStampLabel(label: string) {
   return null;
 }
 
-function normalizeTourOrderLabel(label: string) {
-  const trimmed = label.trim().toUpperCase();
-  if (trimmed === '--') {
-    return '--';
-  }
-
-  if (/^[A-Z]{1,3}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  return null;
-}
-
 export function getPreGeneratedMapMarkerImageSource(input: {
   kind: MarkerVisualKind;
   label: string;
@@ -243,15 +217,6 @@ export function getPreGeneratedMapMarkerImageSource(input: {
 
   if (input.kind === 'parking') {
     return sourceMap['parking:P'];
-  }
-
-  if (input.kind === 'tour-order' || input.kind === 'parking-order') {
-    const normalizedTourOrderLabel = normalizeTourOrderLabel(input.label);
-    if (!normalizedTourOrderLabel) {
-      return undefined;
-    }
-
-    return sourceMap[\`${'${input.kind}'}:${'${normalizedTourOrderLabel}'}\`];
   }
 
   const normalizedStampLabel = normalizeStampLabel(input.label);
