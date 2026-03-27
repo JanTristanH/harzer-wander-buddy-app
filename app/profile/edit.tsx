@@ -7,6 +7,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,25 +16,22 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { Fonts } from '@/constants/theme';
 import {
   updateCurrentUserProfile,
-  uploadAttachment,
+  uploadProfileImage,
   type CurrentUserProfileData,
   type ProfileOverviewData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import { type UploadableImage } from '@/lib/image-upload';
 import { queryKeys } from '@/lib/queries';
 
-type SelectedImage = {
-  uri: string;
-  fileName: string;
-  mimeType: string;
-};
+type SelectedImage = UploadableImage;
 
 type ProfileClaims = {
   sub?: string;
@@ -43,6 +42,7 @@ type ProfileClaims = {
 function ProfileEditContent() {
   const router = useRouter();
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const { accessToken, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims>();
   const queryClient = useQueryClient();
@@ -131,7 +131,7 @@ function ProfileEditContent() {
       allowsEditing: true,
       aspect: [1, 1],
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 1,
     });
 
     if (result.canceled || result.assets.length === 0) {
@@ -168,7 +168,7 @@ function ProfileEditContent() {
       let nextPicture = profile.picture;
 
       if (selectedImage) {
-        const uploadedImage = await uploadAttachment(accessToken, selectedImage);
+        const uploadedImage = await uploadProfileImage(accessToken, selectedImage);
         nextPicture = uploadedImage.url;
       }
 
@@ -324,74 +324,81 @@ function ProfileEditContent() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}>
-        <Pressable
-          disabled={isSaving}
-          onPress={handleAttemptLeave}
-          style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-          <Feather color="#1e2a1e" name="arrow-left" size={18} />
-        </Pressable>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={insets.top}
+        style={styles.keyboardAvoidingView}>
+        <ScrollView
+          automaticallyAdjustKeyboardInsets
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
+          <Pressable
+            disabled={isSaving}
+            onPress={handleAttemptLeave}
+            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+            <Feather color="#1e2a1e" name="arrow-left" size={18} />
+          </Pressable>
 
-        <View style={styles.card}>
-          <Text style={styles.title}>Profil bearbeiten</Text>
-          <Text style={styles.copy}>{helperText}</Text>
+          <View style={styles.card}>
+            <Text style={styles.title}>Profil bearbeiten</Text>
+            <Text style={styles.copy}>{helperText}</Text>
 
-          <View style={styles.avatarSection}>
-            {previewImage ? (
-              <Image
-                contentFit="cover"
-                source={buildAuthenticatedImageSource(previewImage, accessToken)}
-                style={styles.avatarPreview}
+            <View style={styles.avatarSection}>
+              {previewImage ? (
+                <Image
+                  contentFit="cover"
+                  source={buildAuthenticatedImageSource(previewImage, accessToken)}
+                  style={styles.avatarPreview}
+                />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Feather color="#5F6E5F" name="user" size={28} />
+                </View>
+              )}
+
+              <Pressable
+                disabled={isSaving}
+                onPress={() => void handlePickImage()}
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                <Text style={styles.secondaryButtonLabel}>Profilbild auswaehlen</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.formBlock}>
+              <Text style={styles.label}>Name</Text>
+              <TextInput
+                autoCapitalize="words"
+                autoComplete="off"
+                autoCorrect={false}
+                editable={!isSaving}
+                onChangeText={setName}
+                placeholder="Dein Name"
+                placeholderTextColor="#8A968A"
+                style={styles.input}
+                textContentType="none"
+                value={name}
               />
-            ) : (
-              <View style={styles.avatarFallback}>
-                <Feather color="#5F6E5F" name="user" size={28} />
-              </View>
-            )}
+            </View>
 
             <Pressable
-              disabled={isSaving}
-              onPress={() => void handlePickImage()}
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-              <Text style={styles.secondaryButtonLabel}>Profilbild auswaehlen</Text>
+              disabled={isSaving || !hasChanges}
+              onPress={() => void handleSave()}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                (isSaving || !hasChanges) && styles.primaryButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              {isSaving ? (
+                <ActivityIndicator color="#F5F3EE" size="small" />
+              ) : (
+                <Text style={styles.primaryButtonLabel}>Speichern</Text>
+              )}
             </Pressable>
           </View>
-
-          <View style={styles.formBlock}>
-            <Text style={styles.label}>Name</Text>
-            <TextInput
-              autoCapitalize="words"
-              autoComplete="off"
-              autoCorrect={false}
-              editable={!isSaving}
-              onChangeText={setName}
-              placeholder="Dein Name"
-              placeholderTextColor="#8A968A"
-              style={styles.input}
-              textContentType="none"
-              value={name}
-            />
-          </View>
-
-          <Pressable
-            disabled={isSaving || !hasChanges}
-            onPress={() => void handleSave()}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              (isSaving || !hasChanges) && styles.primaryButtonDisabled,
-              pressed && styles.pressed,
-            ]}>
-            {isSaving ? (
-              <ActivityIndicator color="#F5F3EE" size="small" />
-            ) : (
-              <Text style={styles.primaryButtonLabel}>Speichern</Text>
-            )}
-          </Pressable>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -409,10 +416,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F3EE',
   },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   content: {
+    flexGrow: 1,
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 40,
     gap: 18,
   },
   centered: {

@@ -28,12 +28,13 @@ import {
   createFriendRequest,
   searchUsers,
   updateCurrentUserProfile,
-  uploadAttachment,
+  uploadProfileImage,
   type ProfileOverviewData,
   type SearchUserResult,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import { type UploadableImage } from '@/lib/image-upload';
 import { fetchStampsOverviewData, queryKeys } from '@/lib/queries';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
@@ -53,11 +54,7 @@ type SentRequestPreview = {
   picture?: string;
 };
 
-type SelectedImage = {
-  uri: string;
-  fileName: string;
-  mimeType: string;
-};
+type SelectedImage = UploadableImage;
 
 type SaveProfileOptions = {
   showValidationAlert?: boolean;
@@ -351,7 +348,7 @@ export default function OnboardingScreen() {
       allowsEditing: true,
       aspect: [1, 1],
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 1,
     });
 
     if (result.canceled || result.assets.length === 0) {
@@ -400,7 +397,7 @@ export default function OnboardingScreen() {
         let nextPicture = nextPictureFromState;
 
         if (selectedProfileImage) {
-          const uploadedImage = await uploadAttachment(accessToken, selectedProfileImage);
+          const uploadedImage = await uploadProfileImage(accessToken, selectedProfileImage);
           nextPicture = uploadedImage.url;
         }
 
