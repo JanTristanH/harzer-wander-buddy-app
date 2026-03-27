@@ -13,8 +13,7 @@ const STAMP_MIN = 1;
 const STAMP_MAX = 222;
 const BASE_MARKER_WIDTH = 56;
 const BASE_MARKER_HEIGHT = 60;
-
-const MAP_MARKER_SCALE = Number.parseFloat(process.env.MAP_MARKER_SCALE || '2.5');
+const MARKER_ASSET_SCALES = [1, 2, 3];
 
 const PLACEHOLDERS = {
   fill: '__FILL_COLOR__',
@@ -196,8 +195,8 @@ async function ensureCleanDirectory(directoryPath) {
 }
 
 async function main() {
-  if (!Number.isFinite(MAP_MARKER_SCALE) || MAP_MARKER_SCALE <= 0) {
-    throw new Error(`Invalid marker scale: ${MAP_MARKER_SCALE}`);
+  if (MARKER_ASSET_SCALES.some((scale) => !Number.isFinite(scale) || scale <= 0)) {
+    throw new Error(`Invalid marker asset scales: ${MARKER_ASSET_SCALES.join(', ')}`);
   }
 
   const svgTemplate = await fs.readFile(templatePath, 'utf8');
@@ -207,21 +206,14 @@ async function main() {
 
   const mappingEntries = [];
 
-  const scaleToken = `s${Math.round(MAP_MARKER_SCALE * 100)}`;
-  const outputWidth = Math.round(BASE_MARKER_WIDTH * MAP_MARKER_SCALE);
-  const outputHeight = Math.round(BASE_MARKER_HEIGHT * MAP_MARKER_SCALE);
-  const outputRoot = path.join(generatedAssetsParent, scaleToken);
-
-  await fs.mkdir(outputRoot, { recursive: true });
-
   for (const variant of markerVariants) {
-    const kindDir = path.join(outputRoot, variant.kind);
+    const kindDir = path.join(generatedAssetsParent, variant.kind);
     await fs.mkdir(kindDir, { recursive: true });
 
     for (const label of variant.labels) {
-      const filename = `${filenameForLabel(label)}.png`;
-      const assetPath = path.join(kindDir, filename);
-      const relativeAssetPath = path.relative(rootDir, assetPath);
+      const filenameBase = filenameForLabel(label);
+      const baseAssetPath = path.join(kindDir, `${filenameBase}.png`);
+      const relativeAssetPath = path.relative(rootDir, baseAssetPath);
 
       const renderedSvg = renderSvg(svgTemplate, {
         fillColor: variant.fillColor,
@@ -229,12 +221,19 @@ async function main() {
         label,
       });
 
-      await sharp(Buffer.from(renderedSvg))
-        .resize(outputWidth, outputHeight, {
-          fit: 'fill',
-        })
-        .png({ compressionLevel: 9, adaptiveFiltering: true })
-        .toFile(assetPath);
+      for (const scale of MARKER_ASSET_SCALES) {
+        const scaleSuffix = scale === 1 ? '' : `@${scale}x`;
+        const assetPath = path.join(kindDir, `${filenameBase}${scaleSuffix}.png`);
+        const outputWidth = Math.round(BASE_MARKER_WIDTH * scale);
+        const outputHeight = Math.round(BASE_MARKER_HEIGHT * scale);
+
+        await sharp(Buffer.from(renderedSvg))
+          .resize(outputWidth, outputHeight, {
+            fit: 'fill',
+          })
+          .png({ compressionLevel: 9, adaptiveFiltering: true })
+          .toFile(assetPath);
+      }
 
       mappingEntries.push({
         key: `${variant.kind}:${label}`,
