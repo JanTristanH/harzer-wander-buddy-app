@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
 type ExtraConfig = {
   backendUrl?: string;
@@ -20,8 +21,20 @@ function readConfig(key: keyof ExtraConfig, envValue?: string) {
   return typeof value === 'string' ? value : '';
 }
 
+function resolveBackendUrlForPlatform(url: string) {
+  if (Platform.OS !== 'android') {
+    return url;
+  }
+
+  return url.replace(/^(https?):\/\/(localhost|127\.0\.0\.1)(?=[:/]|$)/i, '$1://10.0.2.2');
+}
+
+const backendUrl = resolveBackendUrlForPlatform(
+  readConfig('backendUrl', process.env.EXPO_PUBLIC_BACKEND_URL)
+);
+
 export const appConfig = {
-  backendUrl: readConfig('backendUrl', process.env.EXPO_PUBLIC_BACKEND_URL),
+  backendUrl,
   auth0Domain: readConfig('auth0Domain', process.env.EXPO_PUBLIC_AUTH0_DOMAIN),
   auth0ClientId: readConfig('auth0ClientId', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID),
   auth0Audience: readConfig('auth0Audience', process.env.EXPO_PUBLIC_AUTH0_AUDIENCE),
