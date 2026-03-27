@@ -1,4 +1,5 @@
 import { appConfig } from '@/lib/config';
+import { prepareProfileImageForUpload, type UploadableImage } from '@/lib/image-upload';
 import buildODataQuery, { type QueryOptions } from 'odata-query';
 
 export type Stampbox = {
@@ -492,7 +493,7 @@ function buildQuery(query?: QueryInput) {
     return buildLegacyQuery(query);
   }
 
-  return encodeURI(buildODataQuery(query));
+  return buildODataQuery(query);
 }
 
 function buildUrl(path: string, query?: QueryInput) {
@@ -1391,18 +1392,94 @@ function safeNormalizedText(value: unknown) {
   return safeTrim(value).toLowerCase();
 }
 
-function tokenizeFriendField(value?: string | string[] | number | null) {
+function decodeUriComponentSafely(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeFriendToken(value: unknown) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    return safeNormalizedText(decodeUriComponentSafely(trimmed));
+  }
+
+  if (typeof value === 'number') {
+    return safeNormalizedText(String(value));
+  }
+
+  return '';
+}
+
+function normalizeFriendFieldParts(value: unknown) {
+  if (value === null || value === undefined) {
+    return [] as unknown[];
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [] as unknown[];
+    }
+
+    const parsed = parsePotentialJson(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      return [parsed];
+    }
+
+    return trimmed.split(/[;,]/);
+  }
+
+  return [value];
+}
+
+function tokenizeFriendField(value?: unknown) {
   if (!value) {
     return [];
   }
 
-  const parts = Array.isArray(value) ? value : String(value).split(/[;,|]/);
+  const parts = normalizeFriendFieldParts(value);
+  const tokens = new Set<string>();
 
-  return parts.map((part) => safeNormalizedText(part)).filter(Boolean);
+  for (const part of parts) {
+    if (part && typeof part === 'object') {
+      const objectPart = part as Record<string, unknown>;
+      const idToken = normalizeFriendToken(objectPart.ID ?? objectPart.id);
+      const nameToken = normalizeFriendToken(objectPart.name ?? objectPart.Name);
+      if (idToken) {
+        tokens.add(idToken);
+      }
+      if (nameToken) {
+        tokens.add(nameToken);
+      }
+      continue;
+    }
+
+    const token = normalizeFriendToken(part);
+    if (token) {
+      tokens.add(token);
+    }
+  }
+
+  return [...tokens];
 }
 
 function stampContainsUserId(stamp: Stampbox, userId: string) {
-  const normalizedUserId = safeNormalizedText(userId);
+  const normalizedUserId = normalizeFriendToken(userId);
   if (!normalizedUserId) {
     return false;
   }
@@ -1411,7 +1488,7 @@ function stampContainsUserId(stamp: Stampbox, userId: string) {
 }
 
 function stampContainsUserName(stamp: Stampbox, name?: string) {
-  const normalizedName = safeNormalizedText(name);
+  const normalizedName = normalizeFriendToken(name);
   if (!normalizedName) {
     return false;
   }
@@ -2483,9 +2560,9 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       fetchStampboxes(accessToken),
       fetchComparisonStampboxes(accessToken, [currentUser.ID, targetUserId]),
       fetchCollection<Stamping>(accessToken, 'Stampings', {
-        select: ['ID', 'createdAt', 'createdBy', 'stamp_ID'],
+        select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
         filter: { createdBy: targetUserId },
-        orderBy: 'createdAt desc',
+        orderBy: 'visitedAt desc,createdAt desc',
         top: 200,
       }),
       fetchCollection<MyFriend>(accessToken, 'MyFriends', {
@@ -2559,7 +2636,14 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     0
   );
   const totalCount = stamps.length;
-  const latestVisits = targetStampings.slice(0, 3).map((visit) => {
+  const sortedTargetStampings = targetStampings
+    .slice()
+    .sort(
+      (left, right) =>
+        new Date(getVisitTimestamp(right) || 0).getTime() -
+        new Date(getVisitTimestamp(left) || 0).getTime()
+    );
+  const latestVisitsFromStampings = sortedTargetStampings.slice(0, 3).map((visit) => {
     const stamp = visit.stamp_ID ? stamps.find((item) => item.ID === visit.stamp_ID) : undefined;
     return {
       id: visit.ID,
@@ -2570,8 +2654,22 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       heroImageUrl: stamp?.heroImageUrl || stamp?.image,
     };
   });
+  const fallbackLatestVisits =
+    latestVisitsFromStampings.length > 0
+      ? latestVisitsFromStampings
+      : comparisonStamps
+          .filter((stamp) => stampContainsUser(stamp, targetUser))
+          .slice(0, 3)
+          .map((stamp) => ({
+            id: `fallback-${stamp.ID}`,
+            stampId: stamp.ID,
+            stampNumber: stamp.number,
+            stampName: stamp.name || 'Stempelstelle',
+            visitedAt: undefined,
+            heroImageUrl: stamp.heroImageUrl || stamp.image,
+          }));
 
-  const earliestVisit = targetStampings[targetStampings.length - 1];
+  const earliestVisit = sortedTargetStampings[sortedTargetStampings.length - 1];
   const mappedVisibleFriends = await buildFriendProgress(
     accessToken,
     visibleFriends.map((friend) => ({
@@ -2599,7 +2697,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     completionPercent: totalCount > 0 ? Math.round((targetVisitedCount / totalCount) * 100) : 0,
     sharedVisitedCount,
     collectorSinceYear: earliestVisit ? new Date(earliestVisit.createdAt || '').getFullYear() : null,
-    latestVisits,
+    latestVisits: fallbackLatestVisits,
     friends: mappedVisibleFriends,
     achievements: [
       {
@@ -2774,11 +2872,7 @@ export async function updateCurrentUserProfile(
 
 export async function uploadAttachment(
   accessToken: string,
-  file: {
-    uri: string;
-    fileName: string;
-    mimeType: string;
-  }
+  file: UploadableImage
 ) {
   const attachment = await mutateOData<Attachment>(accessToken, buildUrl('Attachments'), {
     method: 'POST',
@@ -2820,6 +2914,11 @@ export async function uploadAttachment(
     id: attachment.ID,
     url: contentUrl,
   };
+}
+
+export async function uploadProfileImage(accessToken: string, file: UploadableImage) {
+  const preparedFile = await prepareProfileImageForUpload(file);
+  return uploadAttachment(accessToken, preparedFile);
 }
 
 export async function updateFriendshipPermission(

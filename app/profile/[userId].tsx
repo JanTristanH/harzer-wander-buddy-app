@@ -18,7 +18,7 @@ import {
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { queryKeys, useUserProfileOverviewQuery } from '@/lib/queries';
 
-type ComparisonFilter = 'shared' | 'friendOnly' | 'meOnly' | 'neither';
+type ComparisonFilter = 'visited' | 'shared' | 'friendOnly' | 'meOnly' | 'neither';
 
 export default function FriendProfileScreen() {
   const router = useRouter();
@@ -28,7 +28,7 @@ export default function FriendProfileScreen() {
   const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const queryClient = useQueryClient();
-  const [activeFilter, setActiveFilter] = useState<ComparisonFilter>('shared');
+  const [activeFilter, setActiveFilter] = useState<ComparisonFilter>('visited');
   const [isMutating, setIsMutating] = useState(false);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const { data, error, isFetching, isPending, isPlaceholderData, refetch } =
@@ -65,7 +65,32 @@ export default function FriendProfileScreen() {
       return null;
     }
 
+    const comparisonTotalCount = data.stampComparisons.length;
+    const comparisonVisitedCount = data.stampComparisons.reduce(
+      (count, item) => count + (item.userVisited ? 1 : 0),
+      0
+    );
+    const comparisonSharedCount = data.stampComparisons.reduce(
+      (count, item) => count + (item.meVisited && item.userVisited ? 1 : 0),
+      0
+    );
+    const comparisonBuckets = {
+      shared: comparisonSharedCount,
+      friendOnly: data.stampComparisons.filter((item) => !item.meVisited && item.userVisited).length,
+      meOnly: data.stampComparisons.filter((item) => item.meVisited && !item.userVisited).length,
+      neither: data.stampComparisons.filter((item) => !item.meVisited && !item.userVisited).length,
+    };
+    const visitedCount = comparisonTotalCount > 0 ? comparisonVisitedCount : data.visitedCount;
+    const completionPercent =
+      comparisonTotalCount > 0 ? Math.round((comparisonVisitedCount / comparisonTotalCount) * 100) : data.completionPercent;
+    const sharedVisitedCount = comparisonTotalCount > 0 ? comparisonSharedCount : data.sharedVisitedCount;
+    const stampBuckets = comparisonTotalCount > 0 ? comparisonBuckets : data.stampBuckets;
+
     const filteredStamps = data.stampComparisons.filter((item) => {
+      if (activeFilter === 'visited') {
+        return item.userVisited;
+      }
+
       if (activeFilter === 'shared') {
         return item.meVisited && item.userVisited;
       }
@@ -105,9 +130,9 @@ export default function FriendProfileScreen() {
       avatarColor: '#dde9df',
       avatarImage: data.picture,
       stats: [
-        { label: 'Besucht', value: String(data.visitedCount) },
-        { label: 'Abschluss', value: `${data.completionPercent}%` },
-        { label: 'Gemeinsam', value: String(data.sharedVisitedCount) },
+        { label: 'Besucht', value: String(visitedCount) },
+        { label: 'Abschluss', value: `${completionPercent}%` },
+        { label: 'Gemeinsam', value: String(sharedVisitedCount) },
       ],
       actionCard:
         data.relationship === 'friend'
@@ -281,10 +306,11 @@ export default function FriendProfileScreen() {
         emptyText: 'Dieses Profil zeigt noch keine Freunde.',
       },
       stampChips: [
-        { key: 'shared', label: `Gemeinsam ${data.stampBuckets.shared}`, tone: 'success' },
-        { key: 'neither', label: `Keiner ${data.stampBuckets.neither}`, tone: 'subtle' },
-        { key: 'friendOnly', label: `Nur ${firstName} ${data.stampBuckets.friendOnly}`, tone: 'sand' },
-        { key: 'meOnly', label: `Nur ich ${data.stampBuckets.meOnly}`, tone: 'rose' },
+        { key: 'visited', label: `Besucht ${visitedCount}`, tone: 'success' },
+        { key: 'shared', label: `Gemeinsam ${stampBuckets.shared}`, tone: 'success' },
+        { key: 'neither', label: `Keiner ${stampBuckets.neither}`, tone: 'subtle' },
+        { key: 'friendOnly', label: `Nur ${firstName} ${stampBuckets.friendOnly}`, tone: 'sand' },
+        { key: 'meOnly', label: `Nur ich ${stampBuckets.meOnly}`, tone: 'rose' },
       ],
       activeStampChip: activeFilter,
       onSelectStampChip: (key) => setActiveFilter(key as ComparisonFilter),
