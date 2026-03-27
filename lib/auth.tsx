@@ -43,6 +43,7 @@ type AuthContextValue = {
   configError: string | null;
   login: () => Promise<void>;
   signup: () => Promise<void>;
+  completeOnboarding: () => Promise<void>;
   logout: () => Promise<void>;
   resetApp: () => Promise<void>;
   preloadCurrentUserProfile: () => Promise<CurrentUserProfileData | null>;
@@ -161,16 +162,12 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const preloadCurrentUserProfileForToken = useCallback(async (accessToken: string | null) => {
     if (!accessToken) {
       setCurrentUserProfile(null);
-      setHasCompletedOnboarding(false);
-      await saveOnboardingState(false);
       return null;
     }
 
     try {
       const profile = await fetchCurrentUserProfile(accessToken);
       setCurrentUserProfile(profile);
-      setHasCompletedOnboarding(true);
-      await saveOnboardingState(true);
       return profile;
     } catch (error) {
       if (error instanceof Error && error.name === 'UnauthorizedError') {
@@ -350,6 +347,11 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     await authenticate('signup');
   }, [authenticate]);
 
+  const completeOnboarding = useCallback(async () => {
+    await saveOnboardingState(true);
+    setHasCompletedOnboarding(true);
+  }, []);
+
   const logout = useCallback(async () => {
     setAuthError(null);
     await clearTokenResponse();
@@ -389,6 +391,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       isLoading,
       authError,
       configError,
+      completeOnboarding,
       login,
       signup,
       logout,
@@ -404,6 +407,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       authState?.issuedAt,
       authState?.refreshToken,
       configError,
+      completeOnboarding,
       currentUserProfile,
       login,
       hasCompletedOnboarding,

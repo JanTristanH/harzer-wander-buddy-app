@@ -128,6 +128,7 @@ export default function OnboardingScreen() {
     isAuthenticated,
     login,
     signup,
+    completeOnboarding,
     isLoading,
     logout,
     preloadCurrentUserProfile,
@@ -549,8 +550,9 @@ export default function OnboardingScreen() {
       return;
     }
 
+    await completeOnboarding();
     router.replace('/(tabs)');
-  }, [handleSaveProfile, router]);
+  }, [completeOnboarding, handleSaveProfile, router]);
 
   const handleCreateRequest = useCallback(
     async (userId: string) => {
