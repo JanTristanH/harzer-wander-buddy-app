@@ -54,6 +54,7 @@ const MAP_EDGE_PADDING = {
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
+const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 700;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
@@ -730,6 +731,7 @@ export default function TourDetailScreen() {
   const activeSaveRequestIdRef = useRef(0);
   const queuedPoiIdsRef = useRef<string[] | null>(null);
   const isAutoSaveRunningRef = useRef(false);
+  const renameDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fullscreenProgress = useSharedValue(0);
   const fullscreenAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 0.94 + fullscreenProgress.value * 0.06 }],
@@ -769,6 +771,10 @@ export default function TourDetailScreen() {
     activeSaveRequestIdRef.current = 0;
     queuedPoiIdsRef.current = null;
     isAutoSaveRunningRef.current = false;
+    if (renameDebounceTimeoutRef.current) {
+      clearTimeout(renameDebounceTimeoutRef.current);
+      renameDebounceTimeoutRef.current = null;
+    }
   }, [tourId]);
 
   useEffect(() => {
@@ -1694,7 +1700,18 @@ export default function TourDetailScreen() {
     );
   }, [data?.tour.name, handleCloseViewOverflowMenu, handleDeleteTour]);
 
+  const clearRenameDebounce = useCallback(() => {
+    if (!renameDebounceTimeoutRef.current) {
+      return;
+    }
+
+    clearTimeout(renameDebounceTimeoutRef.current);
+    renameDebounceTimeoutRef.current = null;
+  }, []);
+
   const handleSubmitRename = useCallback(async (options?: { silent?: boolean }) => {
+    clearRenameDebounce();
+
     if (editingBlocked || updateTourNameMutation.isPending || !data) {
       return;
     }
@@ -1728,7 +1745,47 @@ export default function TourDetailScreen() {
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
       );
     }
-  }, [data, editingBlocked, refetch, tourNameDraft, updateTourNameMutation]);
+  }, [clearRenameDebounce, data, editingBlocked, refetch, tourNameDraft, updateTourNameMutation]);
+
+  const handleTourNameChange = useCallback(
+    (nextValue: string) => {
+      setTourNameDraft(nextValue);
+
+      if (!isEditMode || !data) {
+        return;
+      }
+
+      if (nextValue.trim() === data.tour.name) {
+        setSaveStatus('idle');
+        return;
+      }
+
+      setSaveStatus((current) => (current === 'saving' ? current : 'pending'));
+    },
+    [data, isEditMode]
+  );
+
+  useEffect(() => {
+    if (!isEditMode || editingBlocked || !data) {
+      clearRenameDebounce();
+      return;
+    }
+
+    const normalizedDraft = tourNameDraft.trim();
+    if (!normalizedDraft || normalizedDraft === data.tour.name) {
+      clearRenameDebounce();
+      return;
+    }
+
+    clearRenameDebounce();
+    renameDebounceTimeoutRef.current = setTimeout(() => {
+      void handleSubmitRename({ silent: true });
+    }, TOUR_NAME_AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearRenameDebounce();
+    };
+  }, [clearRenameDebounce, data, editingBlocked, handleSubmitRename, isEditMode, tourNameDraft]);
 
   if (!tourId) {
     return (
@@ -2006,6 +2063,7 @@ export default function TourDetailScreen() {
                   <Feather color="#3a4f84" name="share-2" size={14} />
                   <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
                 </Pressable>
+                {canEnterEditMode ? (
                 <Pressable
                   disabled={deleteTourMutation.isPending}
                   onPress={handleOpenViewOverflowMenu}
@@ -2016,6 +2074,7 @@ export default function TourDetailScreen() {
                   ]}>
                   <Feather color={deleteTourMutation.isPending ? '#9ba59a' : '#2e3a2e'} name="more-horizontal" size={16} />
                 </Pressable>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -2023,17 +2082,17 @@ export default function TourDetailScreen() {
           {isEditMode ? (
             <View style={styles.titleInputShell}>
               <TextInput
-                editable={!editingBlocked && !updateTourNameMutation.isPending}
+                editable={!editingBlocked}
                 maxLength={120}
                 onBlur={() => void handleSubmitRename({ silent: true })}
-                onChangeText={setTourNameDraft}
+                onChangeText={handleTourNameChange}
                 onSubmitEditing={() => void handleSubmitRename()}
                 placeholder="Tourname"
                 placeholderTextColor="#7b8776"
                 returnKeyType="done"
                 style={[
                   styles.titleInput,
-                  (editingBlocked || updateTourNameMutation.isPending) && styles.titleInputDisabled,
+                  editingBlocked && styles.titleInputDisabled,
                 ]}
                 value={tourNameDraft}
               />
