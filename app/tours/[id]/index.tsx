@@ -27,7 +27,10 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { HttpStatusError, type Tour, type TourPathEntry, type TourUpdateResponse } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
-import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
+import {
+  getPreGeneratedMapMarkerFallbackImageSource,
+  getPreGeneratedMapMarkerImageSource,
+} from '@/lib/map-marker-images.generated';
 import {
   useDeleteTourMutation,
   useMapDataQuery,
@@ -169,7 +172,7 @@ function formatDistanceKm(distanceKm: number) {
 }
 
 function buildGoogleMapsDirectionsUrl(locations: string[]) {
-  if (locations.length < 2) {
+  if (locations.length === 0) {
     return null;
   }
 
@@ -182,12 +185,10 @@ function buildGoogleMapsDirectionsUrl(locations: string[]) {
     return encodeURIComponent(trimmed);
   };
 
-  const origin = locations[0];
   const destination = locations[locations.length - 1];
-  const waypoints = locations.slice(1, -1);
+  const waypoints = locations.slice(0, -1);
   const queryParts = [
     'api=1',
-    `origin=${formatLocation(origin)}`,
     `destination=${formatLocation(destination)}`,
     `travelmode=walking`,
   ];
@@ -291,7 +292,7 @@ function selectMarkerImage(baseImageKind: MarkerBaseImageKind, baseImageLabel: s
     return openStampFallback;
   }
 
-  return require('../../../assets/images/map/generated/ios-s250/open-stamp/fallback.png');
+  return getPreGeneratedMapMarkerFallbackImageSource('open-stamp');
 }
 
 function createMarkerKeys(input: {
@@ -1597,13 +1598,18 @@ export default function TourDetailScreen() {
     openMapItemDetailPage(selectedMapItem);
   }, [openMapItemDetailPage, selectedMapItem]);
 
-    async function handleStartNavigation(item: TourMapItem) {
+  async function handleStartNavigation(item: TourMapItem) {
     if (!item.latitude || !item.longitude) {
       Alert.alert('Navigation nicht moeglich', 'Diese Stempelstelle hat keine Koordinaten.');
       return;
     }
 
-    const url = `https://www.google.com/maps/search/?api=1&query=${item.latitude},${item.longitude}`;
+    const url = buildGoogleMapsDirectionsUrl([`${item.latitude},${item.longitude}`]);
+    if (!url) {
+      Alert.alert('Navigation nicht moeglich', 'Diese Stempelstelle hat keine gueltige Route.');
+      return;
+    }
+
     await Linking.openURL(url);
   }
 

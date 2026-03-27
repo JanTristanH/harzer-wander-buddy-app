@@ -175,6 +175,18 @@ export function getPreGeneratedMapMarkerImageSource(input: {
 
   return sourceMap[\`${'${input.kind}'}:${'${normalizedStampLabel}'}\`];
 }
+
+export function getPreGeneratedMapMarkerFallbackImageSource(
+  kind: MarkerVisualKind = 'open-stamp'
+): ImageRequireSource {
+  const sourceMap = MAP_MARKER_IMAGE_SOURCE_BY_KEY;
+
+  if (kind === 'parking') {
+    return sourceMap['parking:P'];
+  }
+
+  return sourceMap[\`${'${kind}'}:--\`] ?? sourceMap['open-stamp:--'];
+}
 `;
 }
 
