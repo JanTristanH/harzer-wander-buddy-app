@@ -55,6 +55,11 @@ const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
 const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 700;
+const MARKER_Z_INDEX_BASE = 10;
+const MARKER_Z_INDEX_BADGE = 30;
+const MARKER_Z_INDEX_SELECTED_HALO = 59;
+const MARKER_Z_INDEX_SELECTED_BASE = 60;
+const MARKER_Z_INDEX_SELECTED_BADGE = 61;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
@@ -1866,7 +1871,11 @@ export default function TourDetailScreen() {
             key={state.baseKey}
             onPress={() => focusMapItemOnMap(state.item)}
             tracksViewChanges={false}
-            zIndex={1}
+            zIndex={
+              normalizedSelectedMapItemId === state.id.toLowerCase()
+                ? MARKER_Z_INDEX_SELECTED_BASE
+                : MARKER_Z_INDEX_BASE
+            }
           />
         ))}
 
@@ -1881,7 +1890,8 @@ export default function TourDetailScreen() {
               anchor={{ x: 0.5, y: 1 }}
               coordinate={state.coordinate}
               key={`${state.overlayKey}:halo`}
-              zIndex={0}>
+              tracksViewChanges={false}
+              zIndex={MARKER_Z_INDEX_SELECTED_HALO}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.selectedMarkerHalo} />
               </View>
@@ -1894,13 +1904,16 @@ export default function TourDetailScreen() {
             return null;
           }
 
+          const isSelected = normalizedSelectedMapItemId === state.id.toLowerCase();
+
           return (
             <Marker
               anchor={{ x: 0.5, y: 1 }}
               coordinate={state.coordinate}
-              key={`${state.overlayKey}:badge`}
+              key={`${state.overlayKey}:badge:${state.routeOrderLabel ?? '--'}`}
               onPress={() => focusMapItemOnMap(state.item)}
-              zIndex={50}>
+              tracksViewChanges={false}
+              zIndex={isSelected ? MARKER_Z_INDEX_SELECTED_BADGE : MARKER_Z_INDEX_BADGE}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.poiInTourMarkerBadge}>
                   <Feather color="#f5f3ee" name="map-pin" size={9} />
