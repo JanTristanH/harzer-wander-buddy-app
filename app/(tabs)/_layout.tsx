@@ -1,11 +1,14 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { FloatingBarIcon } from '@/components/floating-bar-icon';
 import { HapticTab } from '@/components/haptic-tab';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
     <AuthGuard>
       <Tabs
@@ -21,7 +24,7 @@ export default function TabLayout() {
             paddingTop: 6,
             paddingBottom: 6,
             marginHorizontal: 20,
-            marginBottom: 20,
+            marginBottom: Math.max(insets.bottom, 20),
             borderRadius: 24,
             position: 'absolute',
             shadowColor: '#141e14',
