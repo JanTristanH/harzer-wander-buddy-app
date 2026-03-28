@@ -6,7 +6,7 @@ const isAndroidEasBuild = process.env.EAS_BUILD_PLATFORM === 'android';
 
 if (isAndroidEasBuild && !androidGoogleMapsApiKey) {
   throw new Error(
-    'Missing EXPO_PUBLIC_GOOGLE_MAPS_API_KEY for Android build. Set it with: eas secret:create --scope project --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value <your_key>'
+    'Missing EXPO_PUBLIC_GOOGLE_MAPS_API_KEY for Android build. For EAS cloud builds, create or update it with `eas env:create`/`eas env:update` using `--visibility sensitive` (or `plaintext`). For `--local` builds, export it in your shell or add it to a local .env file before running EAS.'
   );
 }
 

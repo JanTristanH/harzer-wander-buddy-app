@@ -94,7 +94,12 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/1511f3e0-0255-4c5b-97a4-43e285483bc2"
+      "url": "https://u.expo.dev/1511f3e0-0255-4c5b-97a4-43e285483bc2",
+      "assetPatternsToBeBundled": [
+        "node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/*.ttf",
+        "node_modules/expo-router/assets/*.png",
+        "node_modules/@react-navigation/elements/lib/module/assets/*.png"
+      ]
     }
   }
 }

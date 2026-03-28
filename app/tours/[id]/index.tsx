@@ -58,6 +58,7 @@ const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
 const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 700;
+const MARKER_OVERLAY_TRACKS_VIEW_CHANGES_MS = 250;
 const MARKER_Z_INDEX_BASE = 10;
 const MARKER_Z_INDEX_BADGE = 30;
 const MARKER_Z_INDEX_SELECTED_HALO = 59;
@@ -729,6 +730,7 @@ export default function TourDetailScreen() {
   const [isViewOverflowOpen, setIsViewOverflowOpen] = useState(false);
   const [isRemoveVisitDialogOpen, setIsRemoveVisitDialogOpen] = useState(false);
   const [tourNameDraft, setTourNameDraft] = useState('');
+  const [tracksOverlayViewChanges, setTracksOverlayViewChanges] = useState(true);
 
   const mapRef = useRef<MapView | null>(null);
   const hasAppliedAutoStartEditModeRef = useRef(false);
@@ -738,6 +740,7 @@ export default function TourDetailScreen() {
   const queuedPoiIdsRef = useRef<string[] | null>(null);
   const isAutoSaveRunningRef = useRef(false);
   const renameDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayTracksViewChangesTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fullscreenProgress = useSharedValue(0);
   const fullscreenAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 0.94 + fullscreenProgress.value * 0.06 }],
@@ -929,6 +932,14 @@ export default function TourDetailScreen() {
       mapItemsForRendering.map((item) => deriveMarkerRenderState(item, draftPoiStats.positionsById)),
     [draftPoiStats.positionsById, mapItemsForRendering]
   );
+  const overlayRenderSignature = useMemo(
+    () =>
+      markerRenderStates
+        .filter((state) => state.overlayKind !== 'none')
+        .map((state) => `${state.id}:${state.overlayKind}:${state.routeOrderLabel ?? ''}`)
+        .join('|'),
+    [markerRenderStates]
+  );
 
   const routeCoordinates = useMemo(
     () =>
@@ -938,6 +949,25 @@ export default function TourDetailScreen() {
         .map((item) => ({ latitude: item.latitude, longitude: item.longitude })),
     [draftPoiIds, mapItemById]
   );
+
+  useEffect(() => {
+    if (overlayTracksViewChangesTimeoutRef.current) {
+      clearTimeout(overlayTracksViewChangesTimeoutRef.current);
+    }
+
+    setTracksOverlayViewChanges(true);
+    overlayTracksViewChangesTimeoutRef.current = setTimeout(() => {
+      setTracksOverlayViewChanges(false);
+      overlayTracksViewChangesTimeoutRef.current = null;
+    }, MARKER_OVERLAY_TRACKS_VIEW_CHANGES_MS);
+
+    return () => {
+      if (overlayTracksViewChangesTimeoutRef.current) {
+        clearTimeout(overlayTracksViewChangesTimeoutRef.current);
+        overlayTracksViewChangesTimeoutRef.current = null;
+      }
+    };
+  }, [normalizedSelectedMapItemId, overlayRenderSignature]);
 
   const hasPendingChanges = useMemo(
     () => !arraysEqual(draftPoiIds, lastPersistedPoiIds),
@@ -1896,7 +1926,7 @@ export default function TourDetailScreen() {
               anchor={{ x: 0.5, y: 1 }}
               coordinate={state.coordinate}
               key={`${state.overlayKey}:halo`}
-              tracksViewChanges={false}
+              tracksViewChanges={tracksOverlayViewChanges}
               zIndex={MARKER_Z_INDEX_SELECTED_HALO}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.selectedMarkerHalo} />
@@ -1918,7 +1948,7 @@ export default function TourDetailScreen() {
               coordinate={state.coordinate}
               key={`${state.overlayKey}:badge:${state.routeOrderLabel ?? '--'}`}
               onPress={() => focusMapItemOnMap(state.item)}
-              tracksViewChanges={false}
+              tracksViewChanges={tracksOverlayViewChanges}
               zIndex={isSelected ? MARKER_Z_INDEX_SELECTED_BADGE : MARKER_Z_INDEX_BADGE}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.poiInTourMarkerBadge}>

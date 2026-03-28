@@ -83,16 +83,27 @@ Set this env var for EAS/local builds:
 EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your_android_maps_sdk_key
 ```
 
-For EAS, add it as a secret before building:
+For EAS cloud builds, create it for the `preview` environment with readable visibility so it can also be used by local tooling:
 
 ```bash
-eas secret:create --scope project --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value your_android_maps_sdk_key
+eas env:create --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value your_android_maps_sdk_key --environment preview --visibility sensitive
 ```
+
+If the variable already exists as a `secret`, update it instead:
+
+```bash
+eas env:update --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value your_android_maps_sdk_key --environment preview --visibility sensitive
+```
+
+For `eas build --local`, EAS cannot read variables with `secret` visibility. Export the key in your shell or put it in a local `.env`/`.env.local` file before running the build.
 
 ## Internal Distribution
 ```
 eas build --platform android --profile preview
 ````
+
+npx eas update --channel preview --platform android --message "Message"
+
 
 ## build ios locally
 
