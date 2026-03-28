@@ -275,6 +275,22 @@ function StampDetailContent() {
     } as never);
   }
 
+  async function refreshAfterVisitMutation() {
+    await refetch();
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.stampsOverview(claims?.sub),
+      exact: true,
+    });
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.mapData(claims?.sub),
+      exact: true,
+    });
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.profileOverview(claims?.sub),
+      exact: true,
+    });
+  }
+
   async function handleStampVisit() {
     if (!accessToken || !stampId || isStamping) {
       return;
@@ -600,12 +616,7 @@ function StampDetailContent() {
 
     try {
       await deleteStamping(accessToken, stampingId);
-      await refetch();
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
-      ]);
+      await refreshAfterVisitMutation();
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -658,12 +669,7 @@ function StampDetailContent() {
         [stampingId]: nextVisitedAt,
       }));
       await updateStamping(accessToken, stampingId, nextVisitedAt);
-      await refetch();
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
-      ]);
+      await refreshAfterVisitMutation();
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
