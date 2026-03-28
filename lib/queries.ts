@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   createTour,
@@ -76,6 +76,41 @@ export const queryKeys = {
   parkingDetail: (userId: string | undefined, parkingId: string | undefined) =>
     ['parking-detail', userId ?? 'anonymous', parkingId ?? 'unknown'] as const,
 };
+
+export async function resetCurrentUserQueries(queryClient: QueryClient, userId?: string) {
+  await Promise.all([
+    queryClient.resetQueries({ queryKey: queryKeys.profileOverview(userId), exact: true }),
+    queryClient.resetQueries({ queryKey: queryKeys.userProfileOverview(userId, userId), exact: true }),
+  ]);
+}
+
+export function updateCurrentUserProfileCaches(
+  queryClient: QueryClient,
+  userId: string | undefined,
+  profile: { name: string; picture?: string }
+) {
+  queryClient.setQueryData<ProfileOverviewData>(queryKeys.profileOverview(userId), (currentProfileOverview) =>
+    currentProfileOverview
+      ? {
+          ...currentProfileOverview,
+          name: profile.name,
+          picture: profile.picture,
+        }
+      : currentProfileOverview
+  );
+
+  queryClient.setQueryData<UserProfileOverviewData>(
+    queryKeys.userProfileOverview(userId, userId),
+    (currentUserProfileOverview) =>
+      currentUserProfileOverview
+        ? {
+            ...currentUserProfileOverview,
+            name: profile.name,
+            picture: profile.picture,
+          }
+        : currentUserProfileOverview
+  );
+}
 
 function getCachedUserProfileSummary(
   queryClient: ReturnType<typeof useQueryClient>,
