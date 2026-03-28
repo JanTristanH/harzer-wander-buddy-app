@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FriendsList } from '@/components/friends-list';
 import { Fonts } from '@/constants/theme';
@@ -28,6 +28,7 @@ import {
   type SearchUserResult,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { getFloatingActionBottomOffset } from '@/lib/tab-bar-layout';
 import { queryKeys, useFriendsOverviewQuery } from '@/lib/queries';
 
 type FriendFilter = 'friends' | 'requests' | 'sent';
@@ -96,6 +97,7 @@ function EmptyState({
 
 export default function FriendsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const queryClient = useQueryClient();
@@ -113,6 +115,7 @@ export default function FriendsScreen() {
   const { data, error, isFetching, isPending, refetch } = useFriendsOverviewQuery();
   const isRefreshing = isFetching && !isPending;
   const blockingError = !data ? error : null;
+  const floatingActionBottom = getFloatingActionBottomOffset(insets.bottom);
 
   useEffect(() => {
     if (!isSearchModalVisible) {
@@ -521,7 +524,11 @@ export default function FriendsScreen() {
         <Pressable
           accessibilityLabel="Freunde suchen"
           onPress={() => setIsSearchModalVisible(true)}
-          style={({ pressed }) => [styles.searchButton, pressed && styles.pressed]}>
+          style={({ pressed }) => [
+            styles.searchButton,
+            { bottom: floatingActionBottom },
+            pressed && styles.pressed,
+          ]}>
           <Feather color="#F5F3EE" name="search" size={24} />
         </Pressable>
 
@@ -718,7 +725,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#2E6B4B',
     borderRadius: 18,
-    bottom: 108,
     height: 52,
     justifyContent: 'center',
     position: 'absolute',

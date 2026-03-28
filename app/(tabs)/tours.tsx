@@ -20,6 +20,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import type { Tour } from '@/lib/api';
 import { useIdTokenClaims } from '@/lib/auth';
+import { getFloatingActionBottomOffset } from '@/lib/tab-bar-layout';
 import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
 
 type FilterKey = 'mine' | 'all';
@@ -166,6 +167,7 @@ function TourCard({
 export default function ToursTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const floatingActionBottom = getFloatingActionBottomOffset(insets.bottom);
   const { width: windowWidth } = useWindowDimensions();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
@@ -424,6 +426,7 @@ export default function ToursTabScreen() {
         onPress={() => void handleQuickstart({ startInEditMode: true })}
         style={({ pressed }) => [
           styles.floatingAddButton,
+          { bottom: floatingActionBottom },
           createTourMutation.isPending && styles.floatingAddButtonDisabled,
           pressed && styles.pressed,
         ]}>
@@ -669,7 +672,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#2E6B4B',
     borderRadius: 18,
-    bottom: 108,
     height: 52,
     justifyContent: 'center',
     position: 'absolute',
