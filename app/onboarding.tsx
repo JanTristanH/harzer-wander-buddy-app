@@ -29,17 +29,13 @@ import {
   searchUsers,
   updateCurrentUserProfile,
   uploadProfileImage,
+  type ProfileOverviewData,
   type SearchUserResult,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { type UploadableImage } from '@/lib/image-upload';
-import {
-  fetchStampsOverviewData,
-  queryKeys,
-  resetCurrentUserQueries,
-  updateCurrentUserProfileCaches,
-} from '@/lib/queries';
+import { fetchStampsOverviewData, queryKeys } from '@/lib/queries';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
 const PROFILE_AUTO_SAVE_DELAY_MS = 3000;
@@ -410,16 +406,26 @@ export default function OnboardingScreen() {
           picture: nextPicture,
         });
 
-        const resolvedProfile = {
+        const refreshedProfile = await preloadCurrentUserProfile();
+        const resolvedProfile = refreshedProfile || {
           id: matchingCurrentUserProfile?.id || claims?.sub || nextName,
           name: nextName,
           picture: nextPicture,
         };
 
         setCurrentUserProfile(resolvedProfile);
-        updateCurrentUserProfileCaches(queryClient, claims?.sub, resolvedProfile);
-        await resetCurrentUserQueries(queryClient, claims?.sub);
-        void preloadCurrentUserProfile();
+        queryClient.setQueryData<ProfileOverviewData>(
+          queryKeys.profileOverview(claims?.sub),
+          (currentProfileOverview) =>
+            currentProfileOverview
+              ? {
+                  ...currentProfileOverview,
+                  name: resolvedProfile.name,
+                  picture: resolvedProfile.picture,
+                }
+              : currentProfileOverview
+        );
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
         setProfileName(resolvedProfile.name);
         setProfilePicture(resolvedProfile.picture || null);
         setSelectedProfileImage(null);

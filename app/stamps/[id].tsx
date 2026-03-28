@@ -38,8 +38,6 @@ import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
   deleteStamping,
-  fetchMapData,
-  fetchStampDetail,
   type LatestVisitedStamp,
   type MapData,
   type ProfileOverviewData,
@@ -50,7 +48,7 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
-import { fetchStampsOverviewData, queryKeys, useStampDetailQuery } from '@/lib/queries';
+import { queryKeys, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
   sub?: string;
@@ -197,7 +195,7 @@ function StampDetailContent() {
     : params.disableNavigation;
   const isNavigationDisabled =
     disableNavigationParam === '1' || disableNavigationParam === 'true';
-  const { data: detail, error, isFetching, isPending, isPlaceholderData } =
+  const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useStampDetailQuery(stampId);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -275,52 +273,6 @@ function StampDetailContent() {
       pathname: '/(tabs)/map',
       params: { stampId: detail.stamp.ID },
     } as never);
-  }
-
-  async function refreshStampQueries(nextStampId: string) {
-    if (!accessToken || !nextStampId) {
-      return;
-    }
-
-    const stampDetailKey = queryKeys.stampDetail(claims?.sub, nextStampId);
-    const stampsOverviewKey = queryKeys.stampsOverview(claims?.sub);
-    const mapDataKey = queryKeys.mapData(claims?.sub);
-    const profileOverviewKey = queryKeys.profileOverview(claims?.sub);
-
-    await Promise.all([
-      queryClient.cancelQueries({ queryKey: stampDetailKey }),
-      queryClient.cancelQueries({ queryKey: stampsOverviewKey }),
-      queryClient.cancelQueries({ queryKey: mapDataKey }),
-      queryClient.cancelQueries({ queryKey: profileOverviewKey }),
-    ]);
-
-    queryClient.removeQueries({ queryKey: stampDetailKey, exact: true });
-    queryClient.removeQueries({ queryKey: stampsOverviewKey, exact: true });
-    queryClient.removeQueries({ queryKey: mapDataKey, exact: true });
-    queryClient.removeQueries({ queryKey: profileOverviewKey, exact: true });
-
-    const refreshedStampsOverview = await queryClient.fetchQuery({
-      queryKey: stampsOverviewKey,
-      queryFn: () => fetchStampsOverviewData(accessToken, claims?.sub),
-    });
-
-    await Promise.all([
-      queryClient.fetchQuery({
-        queryKey: stampDetailKey,
-        queryFn: () => fetchStampDetail(accessToken, nextStampId, claims?.sub),
-      }),
-      queryClient.fetchQuery({
-        queryKey: mapDataKey,
-        queryFn: () =>
-          fetchMapData(
-            accessToken,
-            claims?.sub,
-            refreshedStampsOverview.stamps,
-            refreshedStampsOverview.lastVisited
-          ),
-      }),
-      queryClient.invalidateQueries({ queryKey: profileOverviewKey }),
-    ]);
   }
 
   async function handleStampVisit() {
@@ -620,7 +572,8 @@ function StampDetailContent() {
         };
       });
 
-      await refreshStampQueries(stampId);
+      await queryClient.invalidateQueries();
+      queryClient.removeQueries({ type: 'inactive' });
       setIsStampSuccessToastVisible(true);
     } catch (nextError) {
       rollbackOptimisticUpdates();
@@ -647,7 +600,12 @@ function StampDetailContent() {
 
     try {
       await deleteStamping(accessToken, stampingId);
-      await refreshStampQueries(stampId ?? detail?.stamp.ID ?? '');
+      await refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+      ]);
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -700,7 +658,12 @@ function StampDetailContent() {
         [stampingId]: nextVisitedAt,
       }));
       await updateStamping(accessToken, stampingId, nextVisitedAt);
-      await refreshStampQueries(stampId ?? detail?.stamp.ID ?? '');
+      await refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+      ]);
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();

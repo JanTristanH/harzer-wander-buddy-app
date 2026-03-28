@@ -24,11 +24,12 @@ import {
   updateCurrentUserProfile,
   uploadProfileImage,
   type CurrentUserProfileData,
+  type ProfileOverviewData,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { type UploadableImage } from '@/lib/image-upload';
-import { resetCurrentUserQueries, updateCurrentUserProfileCaches } from '@/lib/queries';
+import { queryKeys } from '@/lib/queries';
 
 type SelectedImage = UploadableImage;
 
@@ -175,16 +176,26 @@ function ProfileEditContent() {
         name: nextName,
         picture: nextPicture,
       });
-      const resolvedProfile = {
+      const refreshedProfile = await preloadCurrentUserProfile();
+      const resolvedProfile = refreshedProfile || {
         id: profile.id,
         name: nextName,
         picture: nextPicture,
       };
 
       setCurrentUserProfile(resolvedProfile);
-      updateCurrentUserProfileCaches(queryClient, claims?.sub, resolvedProfile);
-      await resetCurrentUserQueries(queryClient, claims?.sub);
-      void preloadCurrentUserProfile();
+      queryClient.setQueryData<ProfileOverviewData>(
+        queryKeys.profileOverview(claims?.sub),
+        (currentProfileOverview) =>
+          currentProfileOverview
+            ? {
+                ...currentProfileOverview,
+                name: resolvedProfile.name,
+                picture: resolvedProfile.picture,
+              }
+            : currentProfileOverview
+      );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
 
       closeScreen();
     } catch (nextError) {
