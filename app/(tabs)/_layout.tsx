@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
@@ -8,6 +9,8 @@ import { HapticTab } from '@/components/haptic-tab';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  const tabBarBottomMargin =
+    Platform.OS === 'android' && insets.bottom > 0 ? insets.bottom + 12 : 20;
 
   return (
     <AuthGuard>
@@ -24,7 +27,7 @@ export default function TabLayout() {
             paddingTop: 6,
             paddingBottom: 6,
             marginHorizontal: 20,
-            marginBottom: Math.max(insets.bottom, 20),
+            marginBottom: tabBarBottomMargin,
             borderRadius: 24,
             position: 'absolute',
             shadowColor: '#141e14',
