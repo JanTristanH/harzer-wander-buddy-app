@@ -5,7 +5,6 @@ import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
@@ -16,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SkeletonBlock } from '@/components/skeleton';
 import { StampListItem } from '@/components/stamp-list-item';
 import { useStampsOverviewQuery } from '@/lib/queries';
 
@@ -286,8 +286,80 @@ export default function StampsScreen() {
   if (isPending && !data) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator color="#2e6b4b" size="large" />
+        <View style={styles.loadingContent}>
+          <View style={styles.loadingIntro}>
+            <View style={styles.loadingTitleRow}>
+              <Text style={styles.title}>Stempelstellen</Text>
+              <Text style={styles.totalLabel}>-- gesamt</Text>
+            </View>
+            <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.loadingProgressCard}>
+              <SkeletonBlock height={14} radius={7} width="34%" />
+              <SkeletonBlock height={24} radius={12} tone="strong" width="64%" />
+              <SkeletonBlock height={8} radius={999} tone="muted" width="100%" />
+              <SkeletonBlock height={12} radius={6} width="76%" />
+            </LinearGradient>
+          </View>
+
+          <View style={styles.loadingControls}>
+            <View style={styles.searchShell}>
+              <View style={styles.searchIconWrap}>
+                <Feather color="#6d7d6e" name="search" size={14} />
+              </View>
+              <TextInput
+                editable={false}
+                placeholder="Suche nach Nummer oder Ort"
+                placeholderTextColor="#7b8776"
+                style={styles.searchInput}
+                value=""
+              />
+            </View>
+            <View style={styles.filterRow}>
+              {FILTERS.map((filter) => (
+                <View
+                  key={filter.key}
+                  style={[
+                    styles.filterPill,
+                    activeFilter === filter.key && styles.filterPillActive,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.filterPillLabel,
+                      activeFilter === filter.key && styles.filterPillLabelActive,
+                    ]}>
+                    {filter.label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.loadingCards}>
+            <View style={styles.loadingStampCard}>
+              <SkeletonBlock height={64} radius={14} width={64} />
+              <View style={styles.loadingStampBody}>
+                <SkeletonBlock height={18} radius={9} tone="strong" width="68%" />
+                <SkeletonBlock height={12} radius={6} width="88%" />
+                <SkeletonBlock height={12} radius={6} width="62%" />
+              </View>
+            </View>
+            <View style={styles.loadingStampCard}>
+              <SkeletonBlock height={64} radius={14} width={64} />
+              <View style={styles.loadingStampBody}>
+                <SkeletonBlock height={18} radius={9} tone="strong" width="54%" />
+                <SkeletonBlock height={12} radius={6} width="74%" />
+                <SkeletonBlock height={12} radius={6} width="66%" />
+              </View>
+            </View>
+            <View style={styles.loadingStampCard}>
+              <SkeletonBlock height={64} radius={14} width={64} />
+              <View style={styles.loadingStampBody}>
+                <SkeletonBlock height={18} radius={9} tone="strong" width="61%" />
+                <SkeletonBlock height={12} radius={6} width="78%" />
+                <SkeletonBlock height={12} radius={6} width="58%" />
+              </View>
+            </View>
+          </View>
+
           <Text style={styles.helperText}>Lade Stempelstellen aus dem OData-v4-Service...</Text>
         </View>
       </SafeAreaView>
@@ -388,6 +460,51 @@ const styles = StyleSheet.create({
   listContent: {
     paddingTop: 20,
     paddingBottom: 220,
+  },
+  loadingContent: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    gap: 14,
+  },
+  loadingIntro: {
+    gap: 12,
+  },
+  loadingTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  loadingProgressCard: {
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 10,
+  },
+  loadingControls: {
+    gap: 10,
+  },
+  loadingCards: {
+    gap: 12,
+  },
+  loadingStampCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  loadingStampBody: {
+    flex: 1,
+    gap: 8,
   },
   introWrap: {
     paddingHorizontal: 20,

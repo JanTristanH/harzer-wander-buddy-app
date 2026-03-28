@@ -1,7 +1,8 @@
 import { Redirect } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { SkeletonBlock } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 
 export function AuthGuard({ children }: React.PropsWithChildren) {
@@ -19,8 +20,11 @@ export function AuthGuard({ children }: React.PropsWithChildren) {
   if (isLoading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#155e63" />
-        <Text style={styles.loadingText}>Restoring your session…</Text>
+        <View style={styles.loadingCard}>
+          <SkeletonBlock height={16} radius={8} tone="strong" width="38%" />
+          <SkeletonBlock height={42} radius={14} width="100%" />
+          <SkeletonBlock height={14} radius={7} width="72%" />
+        </View>
       </View>
     );
   }
@@ -54,8 +58,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#3d2a15',
   },
-  loadingText: {
-    fontSize: 16,
-    color: '#155e63',
+  loadingCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 12,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 3,
   },
 });

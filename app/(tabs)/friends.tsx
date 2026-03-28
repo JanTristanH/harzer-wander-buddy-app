@@ -19,6 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FriendsList } from '@/components/friends-list';
+import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { Fonts } from '@/constants/theme';
 import {
   acceptPendingFriendshipRequest,
@@ -422,8 +423,31 @@ export default function FriendsScreen() {
           {isRefreshing ? <Text style={styles.refreshHint}>Aktualisiere Daten im Hintergrund...</Text> : null}
 
           {isPending && !data ? (
-            <View style={styles.centered}>
-              <ActivityIndicator color="#2E6B4B" size="large" />
+            <View style={styles.loadingShell}>
+              <View style={styles.loadingCardsColumn}>
+                <View style={styles.loadingFriendCard}>
+                  <SkeletonCircle size={44} tone="muted" />
+                  <View style={styles.loadingFriendCopy}>
+                    <SkeletonBlock height={16} radius={8} tone="strong" width="58%" />
+                    <SkeletonBlock height={12} radius={6} width="44%" />
+                  </View>
+                </View>
+                <View style={styles.loadingFriendCard}>
+                  <SkeletonCircle size={44} tone="muted" />
+                  <View style={styles.loadingFriendCopy}>
+                    <SkeletonBlock height={16} radius={8} tone="strong" width="52%" />
+                    <SkeletonBlock height={12} radius={6} width="38%" />
+                  </View>
+                </View>
+                <View style={styles.loadingFriendCard}>
+                  <SkeletonCircle size={44} tone="muted" />
+                  <View style={styles.loadingFriendCopy}>
+                    <SkeletonBlock height={16} radius={8} tone="strong" width="62%" />
+                    <SkeletonBlock height={12} radius={6} width="41%" />
+                  </View>
+                </View>
+              </View>
+
               <Text style={styles.helperText}>Freunde werden geladen...</Text>
             </View>
           ) : null}
@@ -654,6 +678,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 64,
+  },
+  loadingShell: {
+    gap: 14,
+    paddingTop: 12,
+  },
+  loadingCardsColumn: {
+    gap: 16,
+  },
+  loadingFriendCard: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#141E14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  loadingFriendCopy: {
+    flex: 1,
+    gap: 8,
   },
   helperText: {
     color: '#6B7A6B',

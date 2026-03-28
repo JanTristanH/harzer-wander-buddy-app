@@ -3,7 +3,6 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   type ImageStyle,
   Pressable,
   RefreshControl,
@@ -17,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FriendsList } from '@/components/friends-list';
+import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import type { Stampbox } from '@/lib/api';
@@ -370,13 +370,13 @@ function SimpleStampRow({
 }
 
 function SkeletonBar({ width }: { width: number | `${number}%` }) {
-  return <View style={[styles.skeletonBar, { width }]} />;
+  return <SkeletonBlock height={12} radius={999} width={width} />;
 }
 
 function SkeletonVisitRow() {
   return (
     <View style={styles.skeletonRow}>
-      <View style={styles.skeletonArtwork} />
+      <SkeletonBlock height={54} radius={18} width={54} />
       <View style={styles.skeletonBody}>
         <SkeletonBar width="58%" />
         <SkeletonBar width="42%" />
@@ -388,7 +388,7 @@ function SkeletonVisitRow() {
 function SkeletonFriendRow() {
   return (
     <View style={styles.skeletonFriendRow}>
-      <View style={styles.skeletonAvatar} />
+      <SkeletonCircle size={52} tone="muted" />
       <View style={styles.skeletonBody}>
         <SkeletonBar width="46%" />
         <SkeletonBar width="34%" />
@@ -400,10 +400,57 @@ function SkeletonFriendRow() {
 export function ProfileLoadingState({ label }: { label: string }) {
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.centered}>
-        <ActivityIndicator color="#2e6b4b" size="large" />
+      <ScrollView contentContainerStyle={styles.loadingContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.loadingHeaderRow}>
+          <SkeletonCircle size={104} tone="muted" />
+          <View style={styles.loadingHeaderCopy}>
+            <SkeletonBlock height={20} radius={10} tone="strong" width="64%" />
+            <SkeletonBlock height={14} radius={7} width="72%" />
+            <SkeletonBlock height={14} radius={7} width="54%" />
+          </View>
+        </View>
+
+        <View style={styles.loadingStatsRow}>
+          <View style={styles.loadingStatCard}>
+            <SkeletonBlock height={16} radius={8} tone="strong" width="48%" />
+            <SkeletonBlock height={12} radius={6} width="70%" />
+          </View>
+          <View style={styles.loadingStatCard}>
+            <SkeletonBlock height={16} radius={8} tone="strong" width="52%" />
+            <SkeletonBlock height={12} radius={6} width="62%" />
+          </View>
+          <View style={styles.loadingStatCard}>
+            <SkeletonBlock height={16} radius={8} tone="strong" width="56%" />
+            <SkeletonBlock height={12} radius={6} width="66%" />
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <SkeletonBlock height={18} radius={9} tone="strong" width="42%" />
+          <SkeletonVisitRow />
+          <SkeletonVisitRow />
+        </View>
+
+        <View style={styles.section}>
+          <SkeletonBlock height={18} radius={9} tone="strong" width="38%" />
+          <SkeletonFriendRow />
+          <SkeletonFriendRow />
+          <SkeletonFriendRow />
+        </View>
+
+        <View style={styles.section}>
+          <SkeletonBlock height={18} radius={9} tone="strong" width="44%" />
+          <View style={styles.skeletonChipRow}>
+            <SkeletonBlock height={34} radius={999} width={120} />
+            <SkeletonBlock height={34} radius={999} width={116} />
+            <SkeletonBlock height={34} radius={999} width={84} />
+          </View>
+          <SkeletonVisitRow />
+          <SkeletonVisitRow />
+        </View>
+
         <Text style={styles.helperText}>{label}</Text>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -870,6 +917,39 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     textAlign: 'center',
   },
+  loadingContent: {
+    paddingHorizontal: 20,
+    paddingTop: 22,
+    paddingBottom: 220,
+    gap: 12,
+  },
+  loadingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 4,
+  },
+  loadingHeaderCopy: {
+    flex: 1,
+    gap: 8,
+  },
+  loadingStatsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  loadingStatCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+  },
   errorTitle: {
     color: '#1e2a1e',
     fontSize: 22,
@@ -1145,26 +1225,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  skeletonArtwork: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
-    backgroundColor: '#ece6db',
-  },
-  skeletonAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 18,
-    backgroundColor: '#ece6db',
-  },
   skeletonBody: {
     flex: 1,
     gap: 8,
-  },
-  skeletonBar: {
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: '#ece6db',
   },
   skeletonChipRow: {
     flexDirection: 'row',

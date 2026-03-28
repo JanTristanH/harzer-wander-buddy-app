@@ -19,6 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
+import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { Fonts } from '@/constants/theme';
 import {
   updateCurrentUserProfile,
@@ -290,9 +291,31 @@ function ProfileEditContent() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator color="#2E6B4B" size="large" />
-          <Text style={styles.helperText}>Profil wird geladen...</Text>
+        <View style={styles.content}>
+          <View style={styles.backButton}>
+            <Feather color="#1e2a1e" name="arrow-left" size={18} />
+          </View>
+          <View style={styles.card}>
+            <Text style={styles.title}>Profil bearbeiten</Text>
+            <Text style={styles.copy}>Lade Profildaten und bereite Bearbeitung vor.</Text>
+
+            <View style={styles.loadingAvatarSection}>
+              <SkeletonCircle size={108} tone="muted" />
+              <View style={[styles.secondaryButton, styles.primaryButtonDisabled]}>
+                <Text style={styles.secondaryButtonLabel}>Profilbild auswaehlen</Text>
+              </View>
+            </View>
+
+            <View style={styles.formBlock}>
+              <Text style={styles.label}>Name</Text>
+              <SkeletonBlock height={50} radius={14} width="100%" />
+            </View>
+
+            <View style={[styles.primaryButton, styles.primaryButtonDisabled]}>
+              <Text style={styles.primaryButtonLabel}>Speichern</Text>
+            </View>
+            <Text style={styles.helperText}>Profil wird geladen...</Text>
+          </View>
         </View>
       </SafeAreaView>
     );
@@ -476,6 +499,11 @@ const styles = StyleSheet.create({
   avatarSection: {
     alignItems: 'center',
     gap: 12,
+  },
+  loadingAvatarSection: {
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 2,
   },
   avatarPreview: {
     borderRadius: 54,

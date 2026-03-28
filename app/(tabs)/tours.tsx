@@ -4,7 +4,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -18,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SkeletonBlock } from '@/components/skeleton';
 import type { Tour } from '@/lib/api';
 import { useIdTokenClaims } from '@/lib/auth';
 import { getFloatingActionBottomOffset } from '@/lib/tab-bar-layout';
@@ -299,8 +299,70 @@ export default function ToursTabScreen() {
   if (isPending && !data) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator color="#2e6b4b" size="large" />
+        <View style={styles.loadingContent}>
+          <View style={styles.headerWrap}>
+            <View style={styles.loadingTitleRow}>
+              <Text style={styles.title}>Touren</Text>
+              <Text style={styles.totalLabel}>-- gesamt</Text>
+            </View>
+
+            <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
+              <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
+              <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
+              <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
+            </LinearGradient>
+
+            <View style={styles.loadingSearchRow}>
+              <View style={styles.searchShell}>
+                <Feather color="#6d7d6e" name="search" size={14} />
+                <TextInput
+                  editable={false}
+                  placeholder="Suche nach Tourname"
+                  placeholderTextColor="#7b8776"
+                  style={styles.searchInput}
+                  value=""
+                />
+              </View>
+              <View style={[styles.sortButton, styles.loadingDisabledControl]}>
+                <MaterialIcons name="sort" size={24} color="black" />
+                <Text style={styles.sortButtonLabel}>Sortieren</Text>
+              </View>
+            </View>
+
+            <View style={styles.loadingFilterRow}>
+              {FILTERS.map((filter) => (
+                <View
+                  key={filter.key}
+                  style={[styles.filterPill, activeFilter === filter.key && styles.filterPillActive]}>
+                  <Text
+                    style={[
+                      styles.filterPillLabel,
+                      activeFilter === filter.key && styles.filterPillLabelActive,
+                    ]}>
+                    {filter.label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.loadingCards}>
+            <View style={styles.loadingTourCard}>
+              <SkeletonBlock height={20} radius={10} tone="strong" width="58%" />
+              <SkeletonBlock height={12} radius={6} width="92%" />
+              <SkeletonBlock height={12} radius={6} width="42%" />
+              <SkeletonBlock height={12} radius={6} width="64%" />
+              <SkeletonBlock height={12} radius={6} width="54%" />
+            </View>
+            <View style={styles.loadingTourCard}>
+              <SkeletonBlock height={20} radius={10} tone="strong" width="46%" />
+              <SkeletonBlock height={12} radius={6} width="88%" />
+              <SkeletonBlock height={12} radius={6} width="38%" />
+              <SkeletonBlock height={12} radius={6} width="58%" />
+              <SkeletonBlock height={12} radius={6} width="48%" />
+            </View>
+          </View>
+
           <Text style={styles.helperText}>Lade Touren...</Text>
         </View>
       </SafeAreaView>
@@ -478,10 +540,50 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 220,
   },
+  loadingContent: {
+    flex: 1,
+    paddingTop: 20,
+    paddingBottom: 40,
+    gap: 14,
+  },
   headerWrap: {
     paddingHorizontal: 20,
     paddingBottom: 12,
     gap: 12,
+  },
+  loadingTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  loadingSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  loadingDisabledControl: {
+    opacity: 0.8,
+  },
+  loadingFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  loadingCards: {
+    gap: 12,
+    paddingHorizontal: 20,
+  },
+  loadingTourCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+    gap: 6,
   },
   titleRow: {
     flexDirection: 'row',

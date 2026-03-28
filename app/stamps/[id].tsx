@@ -10,7 +10,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-native-markdown-display';
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   FlatList,
@@ -34,6 +33,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AuthGuard } from '@/components/auth-guard';
 import { FriendsList } from '@/components/friends-list';
+import { SkeletonBlock } from '@/components/skeleton';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
@@ -146,7 +146,7 @@ function SkeletonLine({
   width: number | `${number}%`;
   height?: number;
 }) {
-  return <View style={[styles.skeletonLine, { width, height }]} />;
+  return <SkeletonBlock height={height} radius={999} width={width} />;
 }
 
 function SkeletonRow() {
@@ -177,6 +177,45 @@ function Section({
       </View>
       {children}
     </View>
+  );
+}
+
+function StampDetailLoadingState({ onBack }: { onBack: () => void }) {
+  return (
+    <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
+      <ScrollView contentContainerStyle={styles.loadingContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.loadingHero}>
+          <Pressable onPress={onBack} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
+            <Feather color="#1e2a1e" name="arrow-left" size={18} />
+          </Pressable>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Stempelstelle</Text>
+          </View>
+        </View>
+
+        <View style={styles.body}>
+          <SkeletonBlock height={34} radius={12} tone="strong" width="66%" />
+          <View style={styles.descriptionSkeleton}>
+            <SkeletonLine width="100%" />
+            <SkeletonLine width="84%" />
+            <SkeletonLine width="62%" />
+          </View>
+
+          <Section title="Stempel in der Naehe">
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
+          </Section>
+
+          <Section title="Parkplätze in der Nähe">
+            <SkeletonRow />
+            <SkeletonRow />
+          </Section>
+        </View>
+
+        <Text style={styles.helperText}>Lade Details aus dem OData-v4-Service...</Text>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -988,14 +1027,7 @@ function StampDetailContent() {
   }
 
   if (isPending && !detail) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator color="#2e6b4b" size="large" />
-          <Text style={styles.helperText}>Lade Details aus dem OData-v4-Service...</Text>
-        </View>
-      </SafeAreaView>
-    );
+    return <StampDetailLoadingState onBack={handleBack} />;
   }
 
   if (error && !detail) {
@@ -1523,6 +1555,18 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 180,
   },
+  loadingContent: {
+    paddingBottom: 40,
+  },
+  loadingHero: {
+    height: 240,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    backgroundColor: '#d5cfbf',
+    overflow: 'hidden',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
   hero: {
     height: 240,
     borderBottomLeftRadius: 24,
@@ -1773,10 +1817,6 @@ const styles = StyleSheet.create({
   skeletonColumn: {
     flex: 1,
     gap: 8,
-  },
-  skeletonLine: {
-    borderRadius: 999,
-    backgroundColor: '#ece6db',
   },
   visitCard: {
     gap: 8,

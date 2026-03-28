@@ -5,7 +5,6 @@ import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Image,
   type ImageRequireSource,
@@ -24,6 +23,7 @@ import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SkeletonBlock } from '@/components/skeleton';
 import { HttpStatusError, type Tour, type TourPathEntry, type TourUpdateResponse } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
@@ -1841,8 +1841,43 @@ export default function TourDetailScreen() {
   if ((isPending && !data) || isPoiPending || isMapDataPending || !liveTourMetrics) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.centered}>
-          <ActivityIndicator color="#2e6b4b" size="large" />
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingHeaderRow}>
+            <Pressable onPress={handleBackPress} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+              <Feather color="#1e2a1e" name="arrow-left" size={16} />
+            </Pressable>
+            <SkeletonBlock height={34} radius={12} tone="strong" width="56%" />
+          </View>
+
+          <View style={styles.loadingCard}>
+            <SkeletonBlock height={18} radius={9} tone="strong" width="42%" />
+            <SkeletonBlock height={12} radius={6} width="86%" />
+            <SkeletonBlock height={12} radius={6} width="78%" />
+            <SkeletonBlock height={12} radius={6} width="68%" />
+          </View>
+
+          <View style={styles.loadingMapCard}>
+            <SkeletonBlock height={236} radius={18} width="100%" />
+          </View>
+
+          <View style={styles.loadingCard}>
+            <SkeletonBlock height={18} radius={9} tone="strong" width="48%" />
+            <View style={styles.loadingPathRow}>
+              <SkeletonBlock height={18} radius={9} width={18} />
+              <View style={styles.loadingPathCopy}>
+                <SkeletonBlock height={14} radius={7} width="58%" />
+                <SkeletonBlock height={12} radius={6} width="72%" />
+              </View>
+            </View>
+            <View style={styles.loadingPathRow}>
+              <SkeletonBlock height={18} radius={9} width={18} />
+              <View style={styles.loadingPathCopy}>
+                <SkeletonBlock height={14} radius={7} width="46%" />
+                <SkeletonBlock height={12} radius={6} width="66%" />
+              </View>
+            </View>
+          </View>
+
           <Text style={styles.helperText}>Lade Tourdetails...</Text>
         </View>
       </SafeAreaView>
@@ -2447,6 +2482,52 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 40,
     gap: 12,
+  },
+  loadingContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 32,
+    gap: 12,
+  },
+  loadingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 4,
+  },
+  loadingCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  loadingMapCard: {
+    borderRadius: 18,
+    height: 260,
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+    padding: 12,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  loadingPathRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadingPathCopy: {
+    flex: 1,
+    gap: 6,
   },
   headerWrap: {
     gap: 6,
