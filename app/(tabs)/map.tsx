@@ -117,6 +117,8 @@ const SELECTION_TARGET_VERTICAL_RATIO = 0.3;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
 const MARKER_ANCHOR = { x: 0.5, y: 1 };
+const MARKER_Z_INDEX_PARKING = 10;
+const MARKER_Z_INDEX_STAMP = 20;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_MARKER_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 
@@ -179,6 +181,10 @@ function markerColors(kind: MarkerKind) {
     badgeFill: '#e3effc',
     badgeText: '#2f7dd7',
   };
+}
+
+function markerZIndex(kind: MarkerKind) {
+  return kind === 'parking' ? MARKER_Z_INDEX_PARKING : MARKER_Z_INDEX_STAMP;
 }
 
 function clampDelta(value: number) {
@@ -1394,7 +1400,8 @@ export default function MapScreen() {
                 anchor={MARKER_ANCHOR}
                 coordinate={item.coordinate}
                 key={item.id}
-                onPress={() => handleClusterPress(item)}>
+                onPress={() => handleClusterPress(item)}
+                zIndex={markerZIndex(item.clusterKind)}>
                 <View collapsable={false} style={styles.pinMarker}>
                   <View
                     style={[
@@ -1426,7 +1433,8 @@ export default function MapScreen() {
                 anchor={MARKER_ANCHOR}
                 coordinate={stampItem.coordinate}
                 key={stampItem.id}
-                onPress={() => handleMarkerPress(stampItem)}>
+                onPress={() => handleMarkerPress(stampItem)}
+                zIndex={markerZIndex(stampItem.kind)}>
                 <View collapsable={false} style={styles.pinMarker}>
                   <View
                     style={[
@@ -1453,6 +1461,7 @@ export default function MapScreen() {
               onPress={() => handleMarkerPress(stampItem)}
               pinColor={markerImage ? undefined : colors.fill}
               tracksViewChanges={false}
+              zIndex={markerZIndex(stampItem.kind)}
             />
           );
         })}
@@ -1469,7 +1478,8 @@ export default function MapScreen() {
                 anchor={MARKER_ANCHOR}
                 coordinate={item.coordinate}
                 key={item.id}
-                onPress={() => handleMarkerPress(item)}>
+                onPress={() => handleMarkerPress(item)}
+                zIndex={markerZIndex(item.kind)}>
                 <View collapsable={false} style={styles.pinMarker}>
                   <View
                     style={[
@@ -1496,6 +1506,7 @@ export default function MapScreen() {
               onPress={() => handleMarkerPress(item)}
               pinColor={markerImage ? undefined : colors.fill}
               tracksViewChanges={false}
+              zIndex={markerZIndex(item.kind)}
             />
           );
         })}

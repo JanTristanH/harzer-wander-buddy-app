@@ -59,11 +59,16 @@ const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
 const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 700;
 const MARKER_OVERLAY_TRACKS_VIEW_CHANGES_MS = 250;
-const MARKER_Z_INDEX_BASE = 10;
+const MARKER_Z_INDEX_BASE = 20;
 const MARKER_Z_INDEX_BADGE = 30;
 const MARKER_Z_INDEX_SELECTED_HALO = 59;
 const MARKER_Z_INDEX_SELECTED_BASE = 60;
 const MARKER_Z_INDEX_SELECTED_BADGE = 61;
+const MARKER_Z_INDEX_PARKING_BASE = 10;
+const MARKER_Z_INDEX_PARKING_BADGE = 13;
+const MARKER_Z_INDEX_PARKING_SELECTED_HALO = 12;
+const MARKER_Z_INDEX_PARKING_SELECTED_BASE = 11;
+const MARKER_Z_INDEX_PARKING_SELECTED_BADGE = 14;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
@@ -345,6 +350,30 @@ function deriveMarkerRenderState(
     baseKey,
     overlayKey,
   };
+}
+
+function markerBaseZIndex(kind: TourMapMarkerKind, isSelected: boolean) {
+  if (kind === 'parking') {
+    return isSelected ? MARKER_Z_INDEX_PARKING_SELECTED_BASE : MARKER_Z_INDEX_PARKING_BASE;
+  }
+
+  return isSelected ? MARKER_Z_INDEX_SELECTED_BASE : MARKER_Z_INDEX_BASE;
+}
+
+function markerHaloZIndex(kind: TourMapMarkerKind) {
+  if (kind === 'parking') {
+    return MARKER_Z_INDEX_PARKING_SELECTED_HALO;
+  }
+
+  return MARKER_Z_INDEX_SELECTED_HALO;
+}
+
+function markerBadgeZIndex(kind: TourMapMarkerKind, isSelected: boolean) {
+  if (kind === 'parking') {
+    return isSelected ? MARKER_Z_INDEX_PARKING_SELECTED_BADGE : MARKER_Z_INDEX_PARKING_BADGE;
+  }
+
+  return isSelected ? MARKER_Z_INDEX_SELECTED_BADGE : MARKER_Z_INDEX_BADGE;
 }
 
 function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
@@ -1945,11 +1974,10 @@ export default function TourDetailScreen() {
             key={state.baseKey}
             onPress={() => focusMapItemOnMap(state.item)}
             tracksViewChanges={false}
-            zIndex={
+            zIndex={markerBaseZIndex(
+              state.kind,
               normalizedSelectedMapItemId === state.id.toLowerCase()
-                ? MARKER_Z_INDEX_SELECTED_BASE
-                : MARKER_Z_INDEX_BASE
-            }
+            )}
           />
         ))}
 
@@ -1965,7 +1993,7 @@ export default function TourDetailScreen() {
               coordinate={state.coordinate}
               key={`${state.overlayKey}:halo`}
               tracksViewChanges={tracksOverlayViewChanges}
-              zIndex={MARKER_Z_INDEX_SELECTED_HALO}>
+              zIndex={markerHaloZIndex(state.kind)}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.selectedMarkerHalo} />
               </View>
@@ -1987,7 +2015,7 @@ export default function TourDetailScreen() {
               key={`${state.overlayKey}:badge:${state.routeOrderLabel ?? '--'}`}
               onPress={() => focusMapItemOnMap(state.item)}
               tracksViewChanges={tracksOverlayViewChanges}
-              zIndex={isSelected ? MARKER_Z_INDEX_SELECTED_BADGE : MARKER_Z_INDEX_BADGE}>
+              zIndex={markerBadgeZIndex(state.kind, isSelected)}>
               <View collapsable={false} pointerEvents="none" style={styles.markerOverlayWrap}>
                 <View style={styles.poiInTourMarkerBadge}>
                   <Feather color="#f5f3ee" name="map-pin" size={9} />
