@@ -306,11 +306,21 @@ export default function ToursTabScreen() {
               <Text style={styles.totalLabel}>-- gesamt</Text>
             </View>
 
-            <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
-              <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
-              <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
-              <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
-            </LinearGradient>
+            <Pressable
+              accessibilityLabel="Neue Tour planen"
+              accessibilityRole="button"
+              disabled={createTourMutation.isPending}
+              onPress={() => void handleQuickstart({ startInEditMode: true })}
+              style={({ pressed }) => [
+                createTourMutation.isPending && styles.quickstartCardDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
+                <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
+                <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
+                <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
+              </LinearGradient>
+            </Pressable>
 
             <View style={styles.loadingSearchRow}>
               <View style={styles.searchShell}>
@@ -403,11 +413,21 @@ export default function ToursTabScreen() {
             </View>
 
 
-            <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
-              <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
-              <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
-              <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
-            </LinearGradient>
+            <Pressable
+              accessibilityLabel="Neue Tour planen"
+              accessibilityRole="button"
+              disabled={createTourMutation.isPending}
+              onPress={() => void handleQuickstart({ startInEditMode: true })}
+              style={({ pressed }) => [
+                createTourMutation.isPending && styles.quickstartCardDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
+                <Text style={styles.quickstartEyebrow}>Schnellstart</Text>
+                <Text style={styles.quickstartTitle}>Neue Tour planen</Text>
+                <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
+              </LinearGradient>
+            </Pressable>
 
             <View style={styles.searchRow}>
               <View style={styles.searchShell}>
@@ -611,6 +631,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 24,
     elevation: 6,
+  },
+  quickstartCardDisabled: {
+    opacity: 0.7,
   },
   quickstartEyebrow: {
     color: '#f5f3ee',

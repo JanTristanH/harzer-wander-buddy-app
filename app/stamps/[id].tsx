@@ -1057,6 +1057,7 @@ function StampDetailContent() {
   const activeCarouselItem = carouselImages[activeCarouselIndex];
   const showNearbyCarouselPill =
     isImageCarouselVisible && activeCarouselItem?.kind === 'nearby';
+  const bottomInset = Math.max(insets.bottom, 0);
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
@@ -1067,7 +1068,7 @@ function StampDetailContent() {
         visible={isStampSuccessToastVisible}
       />
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 180 + bottomInset }]}
         showsVerticalScrollIndicator={false}>
         <LinearGradient colors={heroGradient(visited)} style={styles.hero}>
           {heroImageUri ? (
@@ -1335,7 +1336,7 @@ function StampDetailContent() {
         </View>
       </ScrollView>
 
-      <View pointerEvents="box-none" style={styles.bottomDock}>
+      <View pointerEvents="box-none" style={[styles.bottomDock, { bottom: 18 + bottomInset }]}>
         <View style={styles.bottomActions}>
           <View style={styles.secondaryButtonRow}>
             <Pressable
