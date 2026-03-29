@@ -11,6 +11,7 @@ import {
   type StyleProp,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -260,6 +261,21 @@ function chipToneStyle(tone?: StampChip['tone']) {
   }
 }
 
+function normalizedText(value: unknown) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim().toLocaleLowerCase();
+}
+
+function stampSearchText(stamp: Stampbox) {
+  return [stamp.number, stamp.name, stamp.description]
+    .map((value) => normalizedText(value))
+    .filter(Boolean)
+    .join(' ');
+}
+
 function ProfileSection({
   title,
   children,
@@ -481,11 +497,14 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
   const [showAllVisits, setShowAllVisits] = useState(false);
   const [showAllFriends, setShowAllFriends] = useState(false);
   const [showAllStamps, setShowAllStamps] = useState(false);
+  const [stampSearchQuery, setStampSearchQuery] = useState('');
+  const normalizedStampSearchQuery = normalizedText(stampSearchQuery);
 
   useEffect(() => {
     setShowAllVisits(false);
     setShowAllFriends(false);
     setShowAllStamps(false);
+    setStampSearchQuery('');
   }, [
     data.mode,
     data.name,
@@ -494,6 +513,10 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
     data.activeStampChip,
     data.stampItems.length,
   ]);
+
+  useEffect(() => {
+    setShowAllStamps(false);
+  }, [normalizedStampSearchQuery]);
 
   const visibleVisits = useMemo(
     () => (showAllVisits ? data.latestVisits : data.latestVisits.slice(0, DEFAULT_VISIBLE_ITEMS)),
@@ -508,9 +531,19 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
     return showAllFriends ? data.friendsList.items : data.friendsList.items.slice(0, DEFAULT_VISIBLE_ITEMS);
   }, [data.friendsList, showAllFriends]);
 
+  const filteredStamps = useMemo(() => {
+    if (!normalizedStampSearchQuery) {
+      return data.stampItems;
+    }
+
+    return data.stampItems.filter((item) =>
+      stampSearchText(item.stamp).includes(normalizedStampSearchQuery)
+    );
+  }, [data.stampItems, normalizedStampSearchQuery]);
+
   const visibleStamps = useMemo(
-    () => (showAllStamps ? data.stampItems : data.stampItems.slice(0, DEFAULT_VISIBLE_ITEMS)),
-    [data.stampItems, showAllStamps]
+    () => (showAllStamps ? filteredStamps : filteredStamps.slice(0, DEFAULT_VISIBLE_ITEMS)),
+    [filteredStamps, showAllStamps]
   );
 
   const hiddenVisitCount = Math.max(0, data.latestVisits.length - DEFAULT_VISIBLE_ITEMS);
@@ -519,7 +552,8 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
     ? Math.max(0, data.friendsList.items.length - DEFAULT_VISIBLE_ITEMS)
     : 0;
 
-  const hiddenStampCount = Math.max(0, data.stampItems.length - DEFAULT_VISIBLE_ITEMS);
+  const hiddenStampCount = Math.max(0, filteredStamps.length - DEFAULT_VISIBLE_ITEMS);
+  const hasStampSearchQuery = normalizedStampSearchQuery.length > 0;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -818,11 +852,29 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
             </ScrollView>
           )}
 
-          {!data.showDeferredSkeletons && data.stampItems.length > 0 ? (
+          {!data.showDeferredSkeletons ? (
+            <View style={styles.stampSearchInputShell}>
+              <View style={styles.stampSearchInputIconWrap}>
+                <Feather color="#6b7a6b" name="search" size={14} />
+              </View>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                clearButtonMode="while-editing"
+                onChangeText={setStampSearchQuery}
+                placeholder="Stempelstelle suchen"
+                placeholderTextColor="#6b7a6b"
+                style={styles.stampSearchInput}
+                value={stampSearchQuery}
+              />
+            </View>
+          ) : null}
+
+          {!data.showDeferredSkeletons && filteredStamps.length > 0 ? (
             <>
               {showAllStamps &&
               hiddenStampCount > 0 &&
-              data.stampItems.length >= MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE ? (
+              filteredStamps.length >= MIN_ITEMS_FOR_TOP_COLLAPSE_TOGGLE ? (
                 <Pressable
                   onPress={() => setShowAllStamps(false)}
                   style={({ pressed }) => [
@@ -861,7 +913,11 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
               ) : null}
             </>
           ) : !data.showDeferredSkeletons ? (
-            data.emptyStampIllustration ? (
+            hasStampSearchQuery ? (
+              <Text style={styles.emptyText}>
+                {`Keine Stempelstellen passend zu ${stampSearchQuery.trim()} gefunden.`}
+              </Text>
+            ) : data.emptyStampIllustration ? (
               <View style={styles.emptyStampState}>
                 <Image
                   contentFit="contain"
@@ -1304,6 +1360,30 @@ const styles = StyleSheet.create({
   chipRow: {
     gap: 8,
     paddingRight: 8,
+  },
+  stampSearchInputShell: {
+    alignItems: 'center',
+    backgroundColor: '#f6f2ea',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  stampSearchInputIconWrap: {
+    alignItems: 'center',
+    height: 14,
+    justifyContent: 'center',
+    width: 14,
+  },
+  stampSearchInput: {
+    color: '#1e2a1e',
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    padding: 0,
   },
   countChip: {
     minWidth: 92,
