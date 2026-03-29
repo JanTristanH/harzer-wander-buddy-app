@@ -2,7 +2,7 @@
   "expo": {
     "name": "Harzer Wanderbuddy",
     "slug": "harzer-wander-buddy-app",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "harzerwanderbuddyapp",
@@ -79,7 +79,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "backendUrl": "http://192.168.2.188:4004",
+      "backendUrl": "http://localhost:4004",
       "auth0Domain": "dev-ijucl08spdudaszc.us.auth0.com",
       "auth0ClientId": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh",
       "auth0Audience": "https://app.harzer-wander-buddy.de/api/v2/",
