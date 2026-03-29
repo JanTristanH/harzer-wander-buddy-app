@@ -35,6 +35,7 @@ import {
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
 import { queryKeys, useMapDataQuery } from '@/lib/queries';
+import { getMapSheetBottomOffset } from '@/lib/tab-bar-layout';
 
 type VisitFilter = 'all' | 'visited' | 'open';
 type MarkerKind = MapStamp['kind'] | MapParkingSpot['kind'];
@@ -107,9 +108,6 @@ const PARKING_HIDE_LONGITUDE_DELTA = 0.18;
 const MIN_ZOOM_DELTA = 0.0075;
 const MAX_ZOOM_DELTA = 1.2;
 const MAP_EDGE_PADDING = { top: 140, right: 64, bottom: 260, left: 64 };
-const TAB_BAR_HEIGHT = 72;
-const TAB_BAR_MARGIN_BOTTOM = 20;
-const SHEET_TO_TAB_BAR_GAP = 8;
 const ZOOM_CONTROLS_GAP = 16;
 const SEARCH_RESULT_LIMIT = 6;
 const SEARCH_TARGET_DELTA = 0.06;
@@ -821,7 +819,7 @@ export default function MapScreen() {
     return `Stempel: ${nearestCounterpart.title} • ${infoText}`;
   }, [nearestCounterpart, nearestRouteMetrics]);
 
-  const sheetBottomOffset = TAB_BAR_HEIGHT + TAB_BAR_MARGIN_BOTTOM + SHEET_TO_TAB_BAR_GAP;
+  const sheetBottomOffset = getMapSheetBottomOffset(insets.bottom);
   const zoomControlsBottomOffset =
     sheetBottomOffset +
     (selectedItem ? selectedSheetHeight + ZOOM_CONTROLS_GAP : ZOOM_CONTROLS_GAP);
@@ -1601,7 +1599,7 @@ export default function MapScreen() {
         ) : null}
 
         {error && !data ? (
-          <View style={styles.errorBanner}>
+          <View style={[styles.errorBanner, { bottom: sheetBottomOffset }]}>
             <Text style={styles.errorBannerTitle}>Karte konnte nicht geladen werden</Text>
             <Text style={styles.errorBannerBody}>{error.message}</Text>
           </View>
@@ -1701,7 +1699,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 20,
     right: 20,
-    bottom: 110,
     borderRadius: 18,
     paddingHorizontal: 16,
     paddingVertical: 14,

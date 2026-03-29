@@ -702,8 +702,8 @@ export default function TourDetailScreen() {
   const editParam = Array.isArray(params.edit) ? params.edit[0] : params.edit;
   const shouldStartInEditMode = editParam === '1' || editParam === 'true';
   const { data, error, isPending, isFetching, refetch } = useTourDetailQuery(tourId);
-  const { data: poiData = [], isPending: isPoiPending } = usePointsOfInterestQuery();
-  const { data: mapData, isPending: isMapDataPending } = useMapDataQuery();
+  const { data: poiData = [] } = usePointsOfInterestQuery();
+  const { data: mapData } = useMapDataQuery();
   const deleteTourMutation = useDeleteTourMutation(tourId);
   const updateTourNameMutation = useUpdateTourNameMutation(tourId);
   const updateTourMutation = useUpdateTourByPOIListMutation(tourId);
@@ -1050,6 +1050,7 @@ export default function TourDetailScreen() {
     () => buildLegMetricsByArrivalIndex(draftPoiIds, livePathEntries),
     [draftPoiIds, livePathEntries]
   );
+  const showDeferredTourSections = !hasInitialized && isFetching;
 
   useEffect(() => {
     if (isEditMode && selectedItemVisitOptions.length > 1) {
@@ -1838,7 +1839,9 @@ export default function TourDetailScreen() {
     );
   }
 
-  if ((isPending && !data) || isPoiPending || isMapDataPending || !liveTourMetrics) {
+  const tourMetrics = liveTourMetrics ?? (data ? createLiveTourMetrics(data.tour) : null);
+
+  if ((isPending && !data) || !tourMetrics) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
@@ -2190,9 +2193,9 @@ export default function TourDetailScreen() {
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Tourprofil</Text>
           </View>
-          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(liveTourMetrics.distance)} • Dauer: ${formatDuration(liveTourMetrics.duration)}`}</Text>
-          <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(liveTourMetrics.totalElevationGain)} • ↓${formatElevation(liveTourMetrics.totalElevationLoss)}`}</Text>
-          <Text style={styles.cardLine}>{`Stempel gesamt: ${liveTourMetrics.stampCount ?? 0} • Neue Stempel fuer mich: ${liveTourMetrics.newStampCountForUser ?? 0}`}</Text>
+          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(tourMetrics.distance)} • Dauer: ${formatDuration(tourMetrics.duration)}`}</Text>
+          <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(tourMetrics.totalElevationGain)} • ↓${formatElevation(tourMetrics.totalElevationLoss)}`}</Text>
+          <Text style={styles.cardLine}>{`Stempel gesamt: ${tourMetrics.stampCount ?? 0} • Neue Stempel fuer mich: ${tourMetrics.newStampCountForUser ?? 0}`}</Text>
         </View>
 
         {blockingErrorCode === 403 ? (
@@ -2217,11 +2220,32 @@ export default function TourDetailScreen() {
           </View>
         ) : null}
 
-        {isMapFullscreen ? null : renderTourMap(false)}
+        {isMapFullscreen ? null : showDeferredTourSections ? (
+          <View style={styles.loadingMapCard}>
+            <SkeletonBlock height={236} radius={18} width="100%" />
+          </View>
+        ) : renderTourMap(false)}
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Aktuelle Reihenfolge</Text>
-          {draftPoiIds.length === 0 ? (
+          {showDeferredTourSections ? (
+            <>
+              <View style={styles.loadingPathRow}>
+                <SkeletonBlock height={18} radius={9} width={18} />
+                <View style={styles.loadingPathCopy}>
+                  <SkeletonBlock height={14} radius={7} width="58%" />
+                  <SkeletonBlock height={12} radius={6} width="72%" />
+                </View>
+              </View>
+              <View style={styles.loadingPathRow}>
+                <SkeletonBlock height={18} radius={9} width={18} />
+                <View style={styles.loadingPathCopy}>
+                  <SkeletonBlock height={14} radius={7} width="46%" />
+                  <SkeletonBlock height={12} radius={6} width="66%" />
+                </View>
+              </View>
+            </>
+          ) : draftPoiIds.length === 0 ? (
             <Text style={styles.cardLine}>Noch keine Punkte in der Tour.</Text>
           ) : (
             draftPoiIds.map((poiId, index) => {

@@ -472,6 +472,14 @@ export type RouteMetrics = {
   elevationLossMeters: number | null;
 };
 
+function buildStringEqualsFilter(field: string, value: string) {
+  return `${field} eq '${escapeODataString(value)}'`;
+}
+
+function buildStringNotEqualsFilter(field: string, value: string) {
+  return `${field} ne '${escapeODataString(value)}'`;
+}
+
 function normalizeBaseUrl(url: string) {
   return url.replace(/\/$/, '');
 }
@@ -1072,7 +1080,7 @@ async function attachUserProgress<T extends { id: string }>(
 async function fetchUserFriends(accessToken: string, userId: string) {
   const rows = await fetchCollection<FriendshipRecord>(accessToken, 'Friendships', {
     select: ['ID', 'toUser_ID'],
-    filter: { fromUser_ID: userId },
+    filter: buildStringEqualsFilter('fromUser_ID', userId),
     expand: {
       toUser: {
         select: ['ID', 'name', 'picture'],
@@ -1113,9 +1121,7 @@ async function fetchComparisonStampboxes(accessToken: string, groupUserIds: stri
     skip: 0,
     top: 250,
     orderBy: 'orderBy asc',
-    filter: {
-      groupFilterStampings: { ne: groupFilter },
-    },
+    filter: buildStringNotEqualsFilter('groupFilterStampings', groupFilter),
   });
 
   return rows.slice().sort((left, right) => {
@@ -1236,6 +1242,76 @@ async function fetchStampFriendVisits(
   } catch {
     return [] as StampFriendVisitRow[];
   }
+}
+
+async function enrichLatestVisitsWithFriendVisitDates(
+  accessToken: string,
+  targetUserId: string,
+  latestVisits: UserProfileOverviewData['latestVisits']
+) {
+  const unresolvedVisits = latestVisits.filter(
+    (visit) => !safeTrim(visit.visitedAt) && safeTrim(visit.stampId)
+  );
+  if (unresolvedVisits.length === 0) {
+    return latestVisits;
+  }
+
+  const targetUserIdTrimmed = safeTrim(targetUserId);
+  const unresolvedStampIds = [...new Set(unresolvedVisits.map((visit) => safeTrim(visit.stampId)))].filter(
+    Boolean
+  ) as string[];
+  const resolvedTimestampByStampId = new Map<string, string>();
+
+  await Promise.all(
+    unresolvedStampIds.map(async (stampId) => {
+      try {
+        const friendVisits = await fetchStampFriendVisits(accessToken, stampId, [targetUserIdTrimmed]);
+        const matchingFriendVisit = friendVisits.find(
+          (friendVisit) => safeTrim(friendVisit.friendId) === targetUserIdTrimmed
+        );
+        const timestamp =
+          safeTrim(matchingFriendVisit?.visitedAt) ||
+          safeTrim(matchingFriendVisit?.createdAt) ||
+          safeTrim(matchingFriendVisit?.timestamp);
+
+        if (timestamp) {
+          resolvedTimestampByStampId.set(stampId, timestamp);
+        }
+      } catch {
+        // Keep fallback behavior when the friend-visit endpoint is unavailable.
+      }
+    })
+  );
+
+  if (resolvedTimestampByStampId.size === 0) {
+    return latestVisits;
+  }
+
+  return latestVisits
+    .map((visit) => {
+      if (safeTrim(visit.visitedAt)) {
+        return visit;
+      }
+
+      const stampId = safeTrim(visit.stampId);
+      if (!stampId) {
+        return visit;
+      }
+
+      const resolvedTimestamp = resolvedTimestampByStampId.get(stampId);
+      if (!resolvedTimestamp) {
+        return visit;
+      }
+
+      return {
+        ...visit,
+        visitedAt: resolvedTimestamp,
+      };
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.visitedAt || 0).getTime() - new Date(left.visitedAt || 0).getTime()
+    );
 }
 
 function estimateMinutes(distanceKm: number | null) {
@@ -1767,7 +1843,7 @@ export async function fetchTours(accessToken: string, groupUserIds: string[] = [
     },
     orderBy: 'createdAt desc',
     top: 250,
-    ...(groupFilter ? { filter: { groupFilterStampings: { ne: groupFilter } } } : {}),
+    ...(groupFilter ? { filter: buildStringNotEqualsFilter('groupFilterStampings', groupFilter) } : {}),
   });
 
   return rows.map((row) => normalizeTourRow(row));
@@ -2039,7 +2115,7 @@ export async function fetchLatestVisitedStamp(accessToken: string, currentUserId
 
   const latestStamping = await fetchCollection<Stamping>(accessToken, 'Stampings', {
     select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
-    filter: { createdBy: currentUserId },
+    filter: buildStringEqualsFilter('createdBy', currentUserId),
     orderBy: 'visitedAt desc,createdAt desc',
     top: 1,
     expand: {
@@ -2474,7 +2550,7 @@ export async function fetchProfileOverview(
     resolvedCurrentUserId
       ? fetchCollection<Stamping>(accessToken, 'Stampings', {
           select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
-          filter: { createdBy: resolvedCurrentUserId },
+          filter: buildStringEqualsFilter('createdBy', resolvedCurrentUserId),
           orderBy: 'visitedAt desc,createdAt desc',
           top: 100,
         })
@@ -2561,7 +2637,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       fetchComparisonStampboxes(accessToken, [currentUser.ID, targetUserId]),
       fetchCollection<Stamping>(accessToken, 'Stampings', {
         select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
-        filter: { createdBy: targetUserId },
+        filter: buildStringEqualsFilter('createdBy', targetUserId),
         orderBy: 'visitedAt desc,createdAt desc',
         top: 200,
       }),
@@ -2668,6 +2744,11 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
             visitedAt: undefined,
             heroImageUrl: stamp.heroImageUrl || stamp.image,
           }));
+  const latestVisits = await enrichLatestVisitsWithFriendVisitDates(
+    accessToken,
+    targetUser.ID,
+    fallbackLatestVisits
+  );
 
   const earliestVisit = sortedTargetStampings[sortedTargetStampings.length - 1];
   const mappedVisibleFriends = await buildFriendProgress(
@@ -2697,7 +2778,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     completionPercent: totalCount > 0 ? Math.round((targetVisitedCount / totalCount) * 100) : 0,
     sharedVisitedCount,
     collectorSinceYear: earliestVisit ? new Date(earliestVisit.createdAt || '').getFullYear() : null,
-    latestVisits: fallbackLatestVisits,
+    latestVisits,
     friends: mappedVisibleFriends,
     achievements: [
       {
