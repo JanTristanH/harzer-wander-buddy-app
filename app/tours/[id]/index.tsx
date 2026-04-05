@@ -1,14 +1,13 @@
 import { Feather } from '@expo/vector-icons';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Image,
   type ImageRequireSource,
-  type ImageSourcePropType,
   Linking,
   Modal,
   Pressable,
@@ -125,6 +124,8 @@ type SearchResultRank = {
   numberDelta: number;
   nameLength: number;
 };
+
+type ExpoImageSource = React.ComponentProps<typeof Image>['source'];
 
 type MarkerBaseImageKind = 'visited-stamp' | 'open-stamp' | 'parking';
 type MarkerOverlayKind = 'none' | 'badge';
@@ -716,17 +717,12 @@ function getMapItemGradientColors(kind: TourMapMarkerKind): readonly [string, st
 function resolveMapItemImageSource(
   imageUrl: string | undefined,
   accessToken: string | null
-): ImageSourcePropType | null {
+): ExpoImageSource | null {
   if (!imageUrl) {
     return null;
   }
 
-  const source = buildAuthenticatedImageSource(imageUrl, accessToken);
-  if (typeof source === 'string') {
-    return { uri: source };
-  }
-
-  return source;
+  return buildAuthenticatedImageSource(imageUrl, accessToken);
 }
 
 export default function TourDetailScreen() {
@@ -1093,7 +1089,7 @@ export default function TourDetailScreen() {
     return resolveRouteOrderLabel(positions);
   }, [draftPoiStats.positionsById, selectedMapItem]);
   const selectedStampNumber = getStampNumber(selectedMapItem);
-  const selectedMapItemImageSource = useMemo<ImageSourcePropType | null>(
+  const selectedMapItemImageSource = useMemo<ExpoImageSource | null>(
     () => resolveMapItemImageSource(selectedMapItem?.imageUrl, accessToken),
     [accessToken, selectedMapItem?.imageUrl]
   );
@@ -2314,7 +2310,7 @@ export default function TourDetailScreen() {
             style={({ pressed }) => [styles.mapBottomInfoTap, pressed && styles.pressed]}>
             <View style={styles.mapBottomInfoRow}>
               {selectedMapItemImageSource ? (
-                <Image source={selectedMapItemImageSource} style={styles.mapBottomArtwork} />
+                <Image cachePolicy="disk" source={selectedMapItemImageSource} style={styles.mapBottomArtwork} />
               ) : (
                 <LinearGradient
                   colors={getMapItemGradientColors(selectedMapItem.kind)}
@@ -2553,7 +2549,7 @@ export default function TourDetailScreen() {
                       pressed && item && styles.pressed,
                     ]}>
                     {pathItemImageSource ? (
-                      <Image source={pathItemImageSource} style={styles.pathArtwork} />
+                      <Image cachePolicy="disk" source={pathItemImageSource} style={styles.pathArtwork} />
                     ) : item ? (
                       <LinearGradient
                         colors={getMapItemGradientColors(item.kind)}

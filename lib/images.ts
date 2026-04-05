@@ -65,18 +65,35 @@ function rebaseLegacyAttachmentUri(uri: string) {
   }
 }
 
+export type AuthenticatedImageSource =
+  | string
+  | {
+      uri: string;
+      cacheKey: string;
+      headers?: Record<string, string>;
+    };
+
 export function buildAuthenticatedImageSource(uri: string, accessToken?: string | null) {
   const resolvedUri = rebaseLegacyAttachmentUri(resolveImageUri(uri));
+  if (!resolvedUri) {
+    return '';
+  }
+
   const shouldUseAuthHeader = Boolean(accessToken && isBackendImageUri(resolvedUri));
+  const cacheKey = resolvedUri;
 
   if (!shouldUseAuthHeader) {
-    return resolvedUri;
+    return {
+      uri: resolvedUri,
+      cacheKey,
+    } satisfies AuthenticatedImageSource;
   }
 
   return {
     uri: resolvedUri,
+    cacheKey,
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
-  };
+  } satisfies AuthenticatedImageSource;
 }

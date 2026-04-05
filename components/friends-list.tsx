@@ -42,6 +42,7 @@ export function FriendAvatar({
   if (image) {
     return (
       <Image
+        cachePolicy="disk"
         contentFit="cover"
         source={buildAuthenticatedImageSource(image, accessToken)}
         style={[avatarStyle, styles.avatarImage]}

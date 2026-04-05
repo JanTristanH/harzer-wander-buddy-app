@@ -22,6 +22,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   Share,
   StyleSheet,
@@ -1058,6 +1059,7 @@ function StampDetailContent() {
   const showNearbyCarouselPill =
     isImageCarouselVisible && activeCarouselItem?.kind === 'nearby';
   const bottomInset = Math.max(insets.bottom, 0);
+  const isPullRefreshing = isFetching && !isPending;
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
@@ -1069,11 +1071,21 @@ function StampDetailContent() {
       />
       <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingBottom: 180 + bottomInset }]}
+        refreshControl={
+          <RefreshControl
+            onRefresh={() => {
+              void refetch();
+            }}
+            refreshing={isPullRefreshing}
+            tintColor="#2e6b4b"
+          />
+        }
         showsVerticalScrollIndicator={false}>
         <LinearGradient colors={heroGradient(visited)} style={styles.hero}>
           {heroImageUri ? (
             <>
               <Image
+                cachePolicy="disk"
                 contentFit="cover"
                 source={buildAuthenticatedImageSource(heroImageUri, accessToken)}
                 style={styles.heroImage}
@@ -1170,6 +1182,7 @@ function StampDetailContent() {
                   ]}>
                   {neighbor.heroImageUrl ? (
                     <Image
+                      cachePolicy="disk"
                       contentFit="cover"
                       source={buildAuthenticatedImageSource(neighbor.heroImageUrl, accessToken)}
                       style={styles.rowArtwork}
@@ -1440,6 +1453,7 @@ function StampDetailContent() {
                           : undefined,
                       ]}>
                       <Image
+                        cachePolicy="disk"
                         contentFit="contain"
                         source={buildAuthenticatedImageSource(item.uri, accessToken)}
                         style={styles.carouselImage}

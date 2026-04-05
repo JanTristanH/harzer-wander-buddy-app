@@ -686,6 +686,7 @@ export default function OnboardingScreen() {
                     style={({ pressed }) => [styles.profileAvatarButton, pressed && styles.actionButtonPressed]}>
                     {effectiveProfilePicture ? (
                       <Image
+                        cachePolicy="disk"
                         contentFit="cover"
                         source={buildAuthenticatedImageSource(effectiveProfilePicture, accessToken)}
                         style={styles.profileAvatarImage}
