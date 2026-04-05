@@ -418,6 +418,11 @@ function rankSearchResult(item: MarkerItem, normalizedQuery: string): SearchResu
   }
 
   if (titleIndex > 0) {
+    // reject weak substring hits far inside the title
+    if (normalizedQuery.length < 3) {
+      return null;
+    }
+
     return {
       matchTier: 4,
       matchIndex: titleIndex,
@@ -426,12 +431,8 @@ function rankSearchResult(item: MarkerItem, normalizedQuery: string): SearchResu
     };
   }
 
-  return {
-    matchTier: 5,
-    matchIndex: descriptionIndex,
-    numberDelta,
-    titleLength: normalizedTitle.length,
-  };
+  // optionally reject description-only matches completely
+  return null;
 }
 
 export default function MapScreen() {
