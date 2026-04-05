@@ -57,17 +57,16 @@ const MAP_EDGE_PADDING = {
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
+const POI_AUTOSAVE_DEBOUNCE_MS = 300;
 const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 2000;
 const MARKER_OVERLAY_TRACKS_VIEW_CHANGES_MS = 250;
 const MARKER_Z_INDEX_BASE = 20;
 const MARKER_Z_INDEX_BADGE = 30;
 const MARKER_Z_INDEX_SELECTED_HALO = 59;
-const MARKER_Z_INDEX_SELECTED_BASE = 60;
 const MARKER_Z_INDEX_SELECTED_BADGE = 61;
 const MARKER_Z_INDEX_PARKING_BASE = 10;
 const MARKER_Z_INDEX_PARKING_BADGE = 13;
 const MARKER_Z_INDEX_PARKING_SELECTED_HALO = 12;
-const MARKER_Z_INDEX_PARKING_SELECTED_BASE = 11;
 const MARKER_Z_INDEX_PARKING_SELECTED_BADGE = 14;
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
@@ -352,12 +351,12 @@ function deriveMarkerRenderState(
   };
 }
 
-function markerBaseZIndex(kind: TourMapMarkerKind, isSelected: boolean) {
+function markerBaseZIndex(kind: TourMapMarkerKind) {
   if (kind === 'parking') {
-    return isSelected ? MARKER_Z_INDEX_PARKING_SELECTED_BASE : MARKER_Z_INDEX_PARKING_BASE;
+    return MARKER_Z_INDEX_PARKING_BASE;
   }
 
-  return isSelected ? MARKER_Z_INDEX_SELECTED_BASE : MARKER_Z_INDEX_BASE;
+  return MARKER_Z_INDEX_BASE;
 }
 
 function markerHaloZIndex(kind: TourMapMarkerKind) {
@@ -767,7 +766,10 @@ export default function TourDetailScreen() {
   const lastMarkerPressAtRef = useRef(0);
   const activeSaveRequestIdRef = useRef(0);
   const queuedPoiIdsRef = useRef<string[] | null>(null);
+  const latestDraftPoiIdsRef = useRef<string[]>([]);
+  const poiAutosaveDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAutoSaveRunningRef = useRef(false);
+  const wasEditModeRef = useRef(false);
   const renameDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTracksViewChangesTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fullscreenProgress = useSharedValue(0);
@@ -808,7 +810,12 @@ export default function TourDetailScreen() {
     setIsEditMode(false);
     activeSaveRequestIdRef.current = 0;
     queuedPoiIdsRef.current = null;
+    latestDraftPoiIdsRef.current = [];
     isAutoSaveRunningRef.current = false;
+    if (poiAutosaveDebounceTimeoutRef.current) {
+      clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+      poiAutosaveDebounceTimeoutRef.current = null;
+    }
     if (renameDebounceTimeoutRef.current) {
       clearTimeout(renameDebounceTimeoutRef.current);
       renameDebounceTimeoutRef.current = null;
@@ -1004,7 +1011,11 @@ export default function TourDetailScreen() {
   );
 
   useEffect(() => {
-    if (!hasInitialized || !data) {
+    latestDraftPoiIdsRef.current = draftPoiIds;
+  }, [draftPoiIds]);
+
+  useEffect(() => {
+    if (!hasInitialized || !data || isEditMode) {
       return;
     }
 
@@ -1013,10 +1024,13 @@ export default function TourDetailScreen() {
     }
 
     setLiveTourMetrics(createLiveTourMetrics(data.tour));
+    if (!arraysEqual(draftPoiIds, originalPoiIds)) {
+      setDraftPoiIds(originalPoiIds);
+    }
     if (!arraysEqual(lastPersistedPoiIds, originalPoiIds)) {
       setLastPersistedPoiIds(originalPoiIds);
     }
-  }, [data, hasInitialized, hasPendingChanges, lastPersistedPoiIds, originalPoiIds, saveStatus]);
+  }, [data, draftPoiIds, hasInitialized, hasPendingChanges, isEditMode, lastPersistedPoiIds, originalPoiIds, saveStatus]);
 
   const normalizedTourOwnerId = normalizeUserId(data?.tour.createdBy);
   const ownershipResolved = Boolean(normalizedCurrentUserId && normalizedTourOwnerId);
@@ -1092,6 +1106,10 @@ export default function TourDetailScreen() {
   const resetDraftToPersistedState = useCallback(() => {
     queuedPoiIdsRef.current = null;
     isAutoSaveRunningRef.current = false;
+    if (poiAutosaveDebounceTimeoutRef.current) {
+      clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+      poiAutosaveDebounceTimeoutRef.current = null;
+    }
     setDraftPoiIds(lastPersistedPoiIds);
     setLastSaveErrorCode(null);
     setSaveStatus('idle');
@@ -1142,6 +1160,15 @@ export default function TourDetailScreen() {
     setTourNameDraft(data?.tour.name ?? '');
     setIsEditMode(false);
   }, [data?.tour.name]);
+  useEffect(() => {
+    const wasEditMode = wasEditModeRef.current;
+    wasEditModeRef.current = isEditMode;
+    if (!wasEditMode || isEditMode) {
+      return;
+    }
+
+    void refetch();
+  }, [isEditMode, refetch]);
   const navigateBackToTours = useCallback(() => {
     if (router.canGoBack()) {
       router.back();
@@ -1331,7 +1358,7 @@ export default function TourDetailScreen() {
   }, [allMapItems, isSearchFocused, mapCenter, poiSearchQuery]);
 
   useEffect(() => {
-    if (!isMapReady) {
+    if (!isMapReady || isEditMode) {
       return;
     }
 
@@ -1364,7 +1391,7 @@ export default function TourDetailScreen() {
       edgePadding: MAP_EDGE_PADDING,
       animated: true,
     });
-  }, [allMapItems, isMapReady, routeCoordinates]);
+  }, [allMapItems, isEditMode, isMapReady, routeCoordinates]);
 
   const handleZoomBy = useCallback((factor: number) => {
     if (!mapRef.current) {
@@ -1424,7 +1451,10 @@ export default function TourDetailScreen() {
 
       try {
         const response = await updateTourMutation.mutateAsync({ poiIds });
-        setLivePathEntries(response.path ?? []);
+        const draftChangedSinceRequest = !arraysEqual(latestDraftPoiIdsRef.current, poiIds);
+        if (!draftChangedSinceRequest) {
+          setLivePathEntries(response.path ?? []);
+        }
         setLiveTourMetrics((current) =>
           updateMetricsFromResponse(
             current || createEmptyLiveTourMetrics(),
@@ -1432,16 +1462,23 @@ export default function TourDetailScreen() {
           )
         );
         setLastPersistedPoiIds(poiIds);
-        setSaveStatus('saved');
-        setStatusMessage('Alle Aenderungen gespeichert');
+        if (draftChangedSinceRequest) {
+          setSaveStatus('pending');
+          setStatusMessage('Aenderungen ausstehend...');
+        } else {
+          setSaveStatus('saved');
+          setStatusMessage('Alle Aenderungen gespeichert');
+        }
         setLastSaveErrorCode(null);
         const refreshed = await refetch();
         if (refreshed.data?.tour) {
           setLiveTourMetrics(createLiveTourMetrics(refreshed.data.tour));
-          setLivePathEntries(refreshed.data.path ?? []);
-          const refreshedPoiIds = derivePoiSequence(refreshed.data.path ?? []);
-          setDraftPoiIds(refreshedPoiIds);
-          setLastPersistedPoiIds(refreshedPoiIds);
+          if (!isEditMode) {
+            setLivePathEntries(refreshed.data.path ?? []);
+            const refreshedPoiIds = derivePoiSequence(refreshed.data.path ?? []);
+            setDraftPoiIds(refreshedPoiIds);
+            setLastPersistedPoiIds(refreshedPoiIds);
+          }
         }
         return true;
       } catch (nextError) {
@@ -1473,7 +1510,7 @@ export default function TourDetailScreen() {
         return false;
       }
     },
-    [editingBlocked, refetch, updateTourMutation]
+    [editingBlocked, isEditMode, refetch, updateTourMutation]
   );
 
   const triggerAutoSave = useCallback(
@@ -1523,6 +1560,10 @@ export default function TourDetailScreen() {
   useEffect(() => {
     if (!isEditMode) {
       queuedPoiIdsRef.current = null;
+      if (poiAutosaveDebounceTimeoutRef.current) {
+        clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+        poiAutosaveDebounceTimeoutRef.current = null;
+      }
       return;
     }
 
@@ -1531,15 +1572,37 @@ export default function TourDetailScreen() {
     }
 
     if (!hasPendingChanges) {
+      if (poiAutosaveDebounceTimeoutRef.current) {
+        clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+        poiAutosaveDebounceTimeoutRef.current = null;
+      }
       return;
     }
 
     if (draftPoiIds.length < 2) {
       setLastSaveErrorCode(null);
+      if (poiAutosaveDebounceTimeoutRef.current) {
+        clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+        poiAutosaveDebounceTimeoutRef.current = null;
+      }
       return;
     }
 
-    void triggerAutoSave(draftPoiIds);
+    if (poiAutosaveDebounceTimeoutRef.current) {
+      clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+    }
+
+    poiAutosaveDebounceTimeoutRef.current = setTimeout(() => {
+      poiAutosaveDebounceTimeoutRef.current = null;
+      void triggerAutoSave(draftPoiIds);
+    }, POI_AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (poiAutosaveDebounceTimeoutRef.current) {
+        clearTimeout(poiAutosaveDebounceTimeoutRef.current);
+        poiAutosaveDebounceTimeoutRef.current = null;
+      }
+    };
   }, [
     draftPoiIds,
     isEditMode,
@@ -1974,10 +2037,7 @@ export default function TourDetailScreen() {
             key={state.baseKey}
             onPress={() => focusMapItemOnMap(state.item)}
             tracksViewChanges={false}
-            zIndex={markerBaseZIndex(
-              state.kind,
-              normalizedSelectedMapItemId === state.id.toLowerCase()
-            )}
+            zIndex={markerBaseZIndex(state.kind)}
           />
         ))}
 
