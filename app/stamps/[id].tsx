@@ -6,7 +6,6 @@ import DateTimePicker, {
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as ExpoLinking from 'expo-linking';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -74,6 +73,7 @@ type CarouselImageItem = {
 const CAROUSEL_DOUBLE_TAP_DELAY_MS = 280;
 const CAROUSEL_ZOOM_SCALE = 2;
 const CAROUSEL_PAN_THRESHOLD = 2;
+const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
 
 function formatDistance(distanceKm: number | null) {
@@ -335,11 +335,17 @@ function StampDetailContent() {
       return;
     }
 
-    const deepLink = ExpoLinking.createURL(`/stamps/${detail.stamp.ID}`);
+    const shareParams = new URLSearchParams({
+      id: detail.stamp.ID,
+      title: `Stempelstelle ${detail.stamp.number || '--'} • ${detail.stamp.name}`,
+      description: detail.stamp.description?.trim() || 'Stempelstelle im Harz teilen.',
+      image: detail.stamp.heroImageUrl || detail.stamp.image || '',
+    });
+    const shareUrl = `${WEBSITE_BASE_URL}/share/stamp/?${shareParams.toString()}`;
 
     await Share.share({
-      message: `Stempel ${detail.stamp.number || '--'} • ${detail.stamp.name}\n${deepLink}`,
-      url: deepLink,
+      message: `Stempel ${detail.stamp.number || '--'} • ${detail.stamp.name}\n${shareUrl}`,
+      url: shareUrl,
       title: `Stempel ${detail.stamp.number || '--'} • ${detail.stamp.name}`,
     });
   }
@@ -366,7 +372,6 @@ function StampDetailContent() {
   }
 
   async function refreshAfterVisitMutation() {
-    await refetch();
     await queryClient.invalidateQueries({
       queryKey: queryKeys.stampsOverview(claims?.sub),
       exact: true,
@@ -378,6 +383,61 @@ function StampDetailContent() {
     await queryClient.invalidateQueries({
       queryKey: queryKeys.profileOverview(claims?.sub),
       exact: true,
+    });
+  }
+
+  function updateVisitDateCaches(stampingId: string, nextVisitedAt: string) {
+    const stampDetailKey = queryKeys.stampDetail(claims?.sub, stampId);
+    const profileOverviewKey = queryKeys.profileOverview(claims?.sub);
+
+    queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+      if (!currentDetail) {
+        return currentDetail;
+      }
+
+      return {
+        ...currentDetail,
+        myVisits: currentDetail.myVisits
+          .map((visit) =>
+            visit.ID === stampingId
+              ? {
+                  ...visit,
+                  visitedAt: nextVisitedAt,
+                  createdAt: visit.createdAt || nextVisitedAt,
+                }
+              : visit
+          )
+          .sort(
+            (left, right) =>
+              new Date(right.visitedAt || right.createdAt || 0).getTime() -
+              new Date(left.visitedAt || left.createdAt || 0).getTime()
+          ),
+      };
+    });
+
+    queryClient.setQueryData<ProfileOverviewData>(profileOverviewKey, (currentProfileOverview) => {
+      if (!currentProfileOverview) {
+        return currentProfileOverview;
+      }
+
+      const nextLatestVisits = currentProfileOverview.latestVisits
+        .map((visit) =>
+          visit.id === stampingId
+            ? {
+                ...visit,
+                visitedAt: nextVisitedAt,
+              }
+            : visit
+        )
+        .sort(
+          (left, right) =>
+            new Date(right.visitedAt || 0).getTime() - new Date(left.visitedAt || 0).getTime()
+        );
+
+      return {
+        ...currentProfileOverview,
+        latestVisits: nextLatestVisits,
+      };
     });
   }
 
@@ -758,7 +818,8 @@ function StampDetailContent() {
         ...current,
         [stampingId]: nextVisitedAt,
       }));
-      await updateStamping(accessToken, stampingId, nextVisitedAt);
+      const updatedStamping = await updateStamping(accessToken, stampingId, nextVisitedAt);
+      updateVisitDateCaches(stampingId, updatedStamping.visitedAt || nextVisitedAt);
       await refreshAfterVisitMutation();
     } catch (nextError) {
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {

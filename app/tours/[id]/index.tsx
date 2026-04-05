@@ -75,6 +75,7 @@ const MARKER_Z_INDEX_PARKING_BASE = 10;
 const MARKER_Z_INDEX_PARKING_BADGE = 13;
 const MARKER_Z_INDEX_PARKING_SELECTED_HALO = 12;
 const MARKER_Z_INDEX_PARKING_SELECTED_BADGE = 14;
+const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const DIGITS_ONLY_PATTERN = /^\d+$/;
 const STAMP_TOKEN_PATTERN = /\b(?:[A-Za-z]{1,3}\d{1,4}|\d{1,4}[A-Za-z]{1,3}|\d{1,4}|[A-Za-z]{1,3})\b/g;
 const STAMP_TOKEN_IGNORED = new Set(['P', 'POI']);
@@ -1242,14 +1243,20 @@ export default function TourDetailScreen() {
       return;
     }
 
-    const deepLink = ExpoLinking.createURL(`/tours/${encodeURIComponent(data.tour.ID)}`);
     const tourName = data.tour.name?.trim() || 'Tour';
+    const shareParams = new URLSearchParams({
+      id: data.tour.ID,
+      title: tourName,
+      description: `${tourName} in der Harzer Wanderbuddy App teilen.`,
+      image: 'assets/images/BuddyWithMap.webp',
+    });
+    const shareUrl = `${WEBSITE_BASE_URL}/share/tour/?${shareParams.toString()}`;
 
     try {
       await Share.share({
-        message: `${tourName}\n${deepLink}`,
+        message: `${tourName}\n${shareUrl}`,
         title: tourName,
-        url: deepLink,
+        url: shareUrl,
       });
     } catch (nextError) {
       Alert.alert('Teilen nicht moeglich', nextError instanceof Error ? nextError.message : 'Unknown error');

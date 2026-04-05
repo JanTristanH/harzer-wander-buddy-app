@@ -11,6 +11,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  Share,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,6 +22,7 @@ import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { useParkingDetailQuery } from '@/lib/queries';
 
+const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
 
 function formatDistance(distanceKm: number | null) {
@@ -174,6 +176,33 @@ function ParkingDetailContent() {
       pathname: '/(tabs)/map',
       params: { parkingId: detail.parking.ID },
     } as never);
+  }
+
+  async function handleShareParking() {
+    if (!detail?.parking.ID) {
+      return;
+    }
+
+    const shareParams = new URLSearchParams({
+      id: detail.parking.ID,
+      title: detail.parking.name?.trim() || 'Parkplatz',
+      description: detail.parking.description?.trim() || 'Parkplatz im Harz teilen.',
+      image: detail.parking.image?.trim() || '',
+    });
+    const shareUrl = `${WEBSITE_BASE_URL}/share/parking/?${shareParams.toString()}`;
+
+    try {
+      await Share.share({
+        message: `${detail.parking.name?.trim() || 'Parkplatz'}\n${shareUrl}`,
+        title: detail.parking.name?.trim() || 'Parkplatz',
+        url: shareUrl,
+      });
+    } catch (nextError) {
+      Alert.alert(
+        'Teilen nicht moeglich',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
   }
 
   if (isPending && !detail) {
@@ -399,6 +428,16 @@ function ParkingDetailContent() {
               </Pressable>
             ) : null}
           </View>
+          <Pressable
+            onPress={() => void handleShareParking()}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              styles.secondaryButtonWithIcon,
+              pressed && styles.secondaryButtonPressed,
+            ]}>
+            <Feather color="#2e3a2e" name="share-2" size={16} />
+            <Text style={styles.secondaryButtonLabel}>Parkplatz teilen</Text>
+          </Pressable>
           {isNavigationDisabled ? (
             <Text style={styles.navigationDisabledHint}>
               Verlinkungen zu anderen Stempeln und Parkplaetzen sind hier deaktiviert.
