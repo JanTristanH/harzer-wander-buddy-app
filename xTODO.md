@@ -7,7 +7,7 @@
 | In Progress | P0 | Samsung: keine Nutzung über mobile Daten | Sehr hoch | M-L | Stabilität | Outdoor-Use-Case blockiert |
 |  | P0 | Kein Offline-Modus (Basisfunktionalität) | Sehr hoch | L-XL | Core Feature | Kernanforderung für Wander-App |
 | In Progress | P1 | Bilder werden ständig neu geladen | Hoch | M | Performance/UX | Datenverbrauch + Akku |
-| In Progress | P1 | Suche nach Ortsnamen | Hoch | M | Core UX | Einstieg in Nutzung |
+| Fix Pushed | P1 | Suche nach Ortsnamen | Hoch | M | Core UX | Einstieg in Nutzung |
 |  | P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Schneller, spürbarer Gewinn |
 |  | P1 | Detailsansicht kollidiert mit Android-Navigation | Hoch | S-M | UX Bug | Hauptflow betroffen |
 |  | P1 | Entfernung + Höhenmeter zum Stempel | Hoch | M | Core Feature | Sehr relevant unterwegs |
@@ -21,3 +21,9 @@
 |  | P2 | Admin: neuer Parkplatz | Mittel | M | Betrieb | Pflege |
 |  | P3 | Detaillierte Routenansicht (optional) | Mittel | M-L | Feature | Nice-to-have |
 |  | P3 | Icons kleiner | Niedrig-Mittel | S | UI-Polish | Zusammenfassen |
+
+
+## Unsortiert:
+
+- Aktuelle Defektmeldungen aufnehmen (https://www.harzer-wandernadel.de/defektmeldungen/)
+- Defektmeldungen aus der App heraus machen
