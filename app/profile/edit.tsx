@@ -371,6 +371,7 @@ function ProfileEditContent() {
             <View style={styles.avatarSection}>
               {previewImage ? (
                 <Image
+                  cachePolicy="disk"
                   contentFit="cover"
                   source={buildAuthenticatedImageSource(previewImage, accessToken)}
                   style={styles.avatarPreview}

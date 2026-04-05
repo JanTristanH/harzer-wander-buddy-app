@@ -3,6 +3,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { type LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
+
 type MarkerKind = 'visited-stamp' | 'open-stamp' | 'parking';
 
 export function MapSelectionSheet({
@@ -29,7 +32,11 @@ export function MapSelectionSheet({
   onDetailsPress?: () => void;
   onHeightChange?: (height: number) => void;
 }) {
+  const { accessToken } = useAuth();
   const isInteractive = Boolean(onDetailsPress);
+  const imageSource = item.imageUrl
+    ? buildAuthenticatedImageSource(item.imageUrl, accessToken)
+    : null;
 
   return (
     <Pressable
@@ -41,8 +48,8 @@ export function MapSelectionSheet({
         pressed && isInteractive && styles.pressed,
       ]}>
       <View pointerEvents="none" style={styles.detailRow}>
-        {item.imageUrl ? (
-          <Image contentFit="cover" source={item.imageUrl} style={styles.detailArtwork} />
+        {imageSource ? (
+          <Image cachePolicy="disk" contentFit="cover" source={imageSource} style={styles.detailArtwork} />
         ) : (
           <LinearGradient
             colors={

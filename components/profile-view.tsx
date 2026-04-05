@@ -194,6 +194,7 @@ function HeaderAvatar({
   if (image) {
     return (
       <Image
+        cachePolicy="disk"
         contentFit="cover"
         source={buildAuthenticatedImageSource(image, accessToken)}
         style={[
@@ -234,6 +235,7 @@ function StampArtwork({
   if (imageUri) {
     return (
       <Image
+        cachePolicy="disk"
         contentFit="cover"
         source={buildAuthenticatedImageSource(imageUri, accessToken)}
         style={style}

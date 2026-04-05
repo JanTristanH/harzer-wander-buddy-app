@@ -5,6 +5,8 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Stampbox } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { buildAuthenticatedImageSource } from '@/lib/images';
 
 function cardGradient(index: number, visited: boolean) {
   if (visited) {
@@ -29,12 +31,14 @@ export function StampListItem({
   onPress: () => void;
   metaLabel?: string | null;
 }) {
+  const { accessToken } = useAuth();
   const artworkUri = item.heroImageUrl?.trim() || item.image?.trim() || '';
+  const artworkSource = artworkUri ? buildAuthenticatedImageSource(artworkUri, accessToken) : null;
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
-      {artworkUri ? (
-        <Image contentFit="cover" source={artworkUri} style={styles.cardArtwork} />
+      {artworkSource ? (
+        <Image cachePolicy="disk" contentFit="cover" source={artworkSource} style={styles.cardArtwork} />
       ) : (
         <LinearGradient colors={cardGradient(index, !!item.hasVisited)} style={styles.cardArtwork} />
       )}

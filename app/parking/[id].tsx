@@ -7,6 +7,7 @@ import {
   Alert,
   Linking,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -209,14 +210,27 @@ function ParkingDetailContent() {
   const { parking } = detail;
   const heroImageUri = parking.image?.trim();
   const showDeferredSkeletons = isFetching && isPlaceholderData;
+  const isPullRefreshing = isFetching && !isPending;
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            onRefresh={() => {
+              void refetch();
+            }}
+            refreshing={isPullRefreshing}
+            tintColor="#2f7dd7"
+          />
+        }
+        showsVerticalScrollIndicator={false}>
         <LinearGradient colors={['#4e88cc', '#78b2e8', '#ddeaf7']} style={styles.hero}>
           {heroImageUri ? (
             <>
               <Image
+                cachePolicy="disk"
                 contentFit="cover"
                 source={buildAuthenticatedImageSource(heroImageUri, accessToken)}
                 style={styles.heroImage}
@@ -269,6 +283,7 @@ function ParkingDetailContent() {
                   ]}>
                   {neighbor.heroImageUrl ? (
                     <Image
+                      cachePolicy="disk"
                       contentFit="cover"
                       source={buildAuthenticatedImageSource(neighbor.heroImageUrl, accessToken)}
                       style={styles.rowArtwork}

@@ -329,7 +329,7 @@ function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
 }
 
-function normalizeStampMarkerToken(value?: string | null) {
+function normalizeStampMarkerToken(value?: string | null): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -1345,6 +1345,14 @@ export default function MapScreen() {
     return isStamping || selectedItem.kind === 'visited-stamp' || !accessToken;
   }, [accessToken, isStamping, selectedItem]);
 
+  const handleManualRefresh = useCallback(() => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
+    ]);
+  }, [claims?.sub, queryClient]);
+
   return (
     <View style={styles.screen}>
       {showStartupLoading || isFetching ? (
@@ -1551,6 +1559,9 @@ export default function MapScreen() {
             <Feather color="#1e2a1e" name="sliders" size={14} />
             <Text style={styles.filterButtonLabel}>Filter</Text>
           </Pressable>
+          <Pressable onPress={handleManualRefresh} style={({ pressed }) => [styles.quickRefreshButton, pressed && styles.pressed]}>
+            <Feather color="#1e2a1e" name="refresh-cw" size={14} />
+          </Pressable>
         </View>
 
         {!isMapNorthUp ? (
@@ -1756,6 +1767,20 @@ const styles = StyleSheet.create({
     minHeight: 40,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 4,
+  },
+  quickRefreshButton: {
+    width: 44,
+    height: 40,
+    flexShrink: 0,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#141e14',
