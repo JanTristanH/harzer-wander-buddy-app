@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
@@ -6,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
+import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-native-markdown-display';
@@ -49,7 +51,7 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
-import { queryKeys, useStampDetailQuery } from '@/lib/queries';
+import { queryKeys, useRouteToStampFromPositionQuery, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
   sub?: string;
@@ -80,6 +82,14 @@ function formatDistance(distanceKm: number | null) {
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
+}
+
+function formatDistanceMeters(distanceMeters: number | null) {
+  if (distanceMeters === null) {
+    return 'Keine Distanz';
+  }
+
+  return formatDistance(distanceMeters / 1000);
 }
 
 function formatDuration(durationMinutes: number | null) {
@@ -248,6 +258,8 @@ function StampDetailContent() {
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
   const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
   const [carouselImageViewport, setCarouselImageViewport] = useState({ width: windowWidth, height: windowHeight });
+  const [locationState, setLocationState] = useState<'idle' | 'loading' | 'granted' | 'denied'>('idle');
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const carouselListRef = useRef<FlatList<CarouselImageItem> | null>(null);
   const lastCarouselTapRef = useRef<{ timestamp: number; imageId: string | null }>({
     timestamp: 0,
@@ -260,6 +272,11 @@ function StampDetailContent() {
     value: Date;
     mode: 'date' | 'time' | 'datetime';
   } | null>(null);
+  const routeToCurrentPositionQuery = useRouteToStampFromPositionQuery(
+    stampId,
+    userLocation?.latitude,
+    userLocation?.longitude
+  );
 
   function handleBack() {
     if (router.canGoBack()) {
@@ -279,6 +296,39 @@ function StampDetailContent() {
       Object.fromEntries(detail.myVisits.map((visit) => [visit.ID, getVisitTimestamp(visit) ?? '']))
     );
   }, [detail]);
+
+  async function handleRequestRouteToStamp() {
+    if (selectedStampLatitude === null || selectedStampLongitude === null) {
+      return;
+    }
+
+    try {
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted && permission.canAskAgain) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+
+      if (!permission.granted) {
+        setUserLocation(null);
+        setLocationState(permission.status === 'denied' ? 'denied' : 'idle');
+        return;
+      }
+
+      setLocationState('loading');
+      const currentPosition = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      setUserLocation({
+        latitude: currentPosition.coords.latitude,
+        longitude: currentPosition.coords.longitude,
+      });
+      setLocationState('granted');
+    } catch {
+      setUserLocation(null);
+      setLocationState('denied');
+    }
+  }
 
   async function handleShare() {
     if (!detail) {
@@ -779,6 +829,27 @@ function StampDetailContent() {
 
   const selectedStamp = detail?.stamp;
   const heroImageUri = selectedStamp?.heroImageUrl?.trim() || selectedStamp?.image?.trim() || '';
+  const selectedStampLatitude =
+    typeof selectedStamp?.latitude === 'number' && Number.isFinite(selectedStamp.latitude)
+      ? selectedStamp.latitude
+      : null;
+  const selectedStampLongitude =
+    typeof selectedStamp?.longitude === 'number' && Number.isFinite(selectedStamp.longitude)
+      ? selectedStamp.longitude
+      : null;
+  const hasSelectedStampCoordinates =
+    selectedStampLatitude !== null && selectedStampLongitude !== null;
+  const routeToCurrentPosition = routeToCurrentPositionQuery.data ?? null;
+  const isRouteToCurrentPositionLoading =
+    locationState === 'loading' ||
+    (hasSelectedStampCoordinates &&
+      locationState === 'granted' &&
+      routeToCurrentPositionQuery.isPending);
+  const routeToCurrentPositionError = routeToCurrentPositionQuery.error;
+  const routeToCurrentPositionErrorMessage =
+    routeToCurrentPositionError instanceof Error
+      ? routeToCurrentPositionError.message
+      : 'Route konnte nicht geladen werden.';
   const carouselImages = useMemo(() => {
     if (!detail || !selectedStamp) {
       return [] as CarouselImageItem[];
@@ -1258,6 +1329,97 @@ function StampDetailContent() {
               ))
             ) : (
               <Text style={styles.emptySectionText}>Keine Parkplätze in der Nähe gefunden.</Text>
+            )}
+          </Section>
+
+          <Section title="Von aktueller Position">
+            {!hasSelectedStampCoordinates ? (
+              <Text style={styles.emptySectionText}>
+                Für diese Stempelstelle liegen keine Koordinaten vor.
+              </Text>
+            ) : locationState === 'idle' ? (
+              <View style={styles.routePrompt}>
+                <Text style={styles.emptySectionText}>
+                  Tippe auf den Button, um die Distanz und Höhenmeter von deinem aktuellen Standort zur Stempelstelle zu berechnen.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void handleRequestRouteToStamp();
+                  }}
+                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
+                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
+                  <Text style={styles.routeActionButtonLabel}>Distanz berechnen</Text>
+                </Pressable>
+              </View>
+            ) : locationState === 'denied' ? (
+              <View style={styles.routePrompt}>
+                <Text style={styles.emptySectionText}>
+                  Standortfreigabe fehlt. Erlaube den Standortzugriff und berechne die Distanz erneut.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void handleRequestRouteToStamp();
+                  }}
+                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
+                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
+                  <Text style={styles.routeActionButtonLabel}>Erneut versuchen</Text>
+                </Pressable>
+              </View>
+            ) : isRouteToCurrentPositionLoading ? (
+              <>
+                <SkeletonLine width="72%" />
+                <SkeletonLine width="56%" />
+              </>
+            ) : routeToCurrentPositionError ? (
+              <Text style={styles.emptySectionText}>
+                {routeToCurrentPositionErrorMessage}
+              </Text>
+            ) : routeToCurrentPosition ? (
+              <View style={styles.routeSummaryCard}>
+                <View style={[styles.rowBadge, styles.rowBadgeRoute]}>
+                  <Feather color="#b56928" name="map-pin" size={14} />
+                </View>
+                <View style={styles.rowBody}>
+                  <Text style={styles.rowTitle}>Aktuelle Position</Text>
+                  <Text style={styles.rowMeta}>
+                    {formatDistanceMeters(routeToCurrentPosition.distanceMeters)}
+                    {formatElevationSummary(
+                      routeToCurrentPosition.elevationGainMeters,
+                      routeToCurrentPosition.elevationLossMeters
+                    )}
+                  </Text>
+                </View>
+                <Pressable
+                  disabled={routeToCurrentPositionQuery.isFetching}
+                  onPress={() => {
+                    void routeToCurrentPositionQuery.refetch();
+                  }}
+                  style={({ pressed }) => [
+                    styles.routeRefreshButton,
+                    routeToCurrentPositionQuery.isFetching && styles.routeRefreshButtonDisabled,
+                    pressed && !routeToCurrentPositionQuery.isFetching && styles.sectionActionPressed,
+                  ]}>
+                  <Feather
+                    color="#2e3a2e"
+                    name={routeToCurrentPositionQuery.isFetching ? 'refresh-cw' : 'rotate-cw'}
+                    size={14}
+                  />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.routePrompt}>
+                <Text style={styles.emptySectionText}>
+                  Route konnte noch nicht geladen werden.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void handleRequestRouteToStamp();
+                  }}
+                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
+                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
+                  <Text style={styles.routeActionButtonLabel}>Distanz berechnen</Text>
+                </Pressable>
+              </View>
             )}
           </Section>
 
@@ -1765,6 +1927,25 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '600',
   },
+  routePrompt: {
+    gap: 10,
+  },
+  routeActionButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    backgroundColor: '#eef4ef',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  routeActionButtonLabel: {
+    color: '#2e3a2e',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
   rowItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1791,6 +1972,9 @@ const styles = StyleSheet.create({
   rowBadgeParking: {
     backgroundColor: '#e3effc',
   },
+  rowBadgeRoute: {
+    backgroundColor: '#f7e8db',
+  },
   rowBadgeLabel: {
     fontSize: 12,
     lineHeight: 16,
@@ -1804,6 +1988,22 @@ const styles = StyleSheet.create({
   },
   rowBody: {
     flex: 1,
+  },
+  routeSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  routeRefreshButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#eef4ef',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeRefreshButtonDisabled: {
+    opacity: 0.55,
   },
   rowTitle: {
     color: '#111111',

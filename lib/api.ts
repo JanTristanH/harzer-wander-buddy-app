@@ -417,6 +417,13 @@ export type TourPathEntry = {
   };
 };
 
+export type RouteToStampFromPositionData = {
+  distanceMeters: number;
+  durationSeconds: number;
+  elevationGainMeters: number;
+  elevationLossMeters: number;
+};
+
 export type TourDetailResponse = {
   stampCount: number | null;
   newStampCountForUser: number | null;
@@ -2560,6 +2567,34 @@ export async function fetchParkingDetail(accessToken: string, parkingId: string)
     nearbyStamps,
     nearbyParking,
   } satisfies ParkingDetailData;
+}
+
+export async function fetchRouteToStampFromPosition(
+  accessToken: string,
+  payload: {
+    stampId: string;
+    latitude: number;
+    longitude: number;
+  }
+) {
+  const response = await mutateOData<unknown>(accessToken, buildUrl('getRouteToStampFromPosition'), {
+    method: 'POST',
+    body: JSON.stringify({
+      stampId: safeTrim(payload.stampId),
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+    }),
+  });
+
+  const parsed = parseODataFunctionResult<unknown>(response, 'getRouteToStampFromPosition');
+  const result = parsed as Partial<RouteToStampFromPositionData> | null;
+
+  return {
+    distanceMeters: Number(result?.distanceMeters) || 0,
+    durationSeconds: Number(result?.durationSeconds) || 0,
+    elevationGainMeters: Number(result?.elevationGainMeters) || 0,
+    elevationLossMeters: Number(result?.elevationLossMeters) || 0,
+  } satisfies RouteToStampFromPositionData;
 }
 
 export async function fetchProfileOverview(

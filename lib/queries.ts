@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   createTour,
@@ -9,6 +9,7 @@ import {
   fetchLatestVisitedStamp,
   fetchMapData,
   fetchStampDetail,
+  fetchRouteToStampFromPosition,
   fetchTourById,
   fetchTourPath,
   fetchTours,
@@ -23,6 +24,7 @@ import {
   type ParkingDetailData,
   type PointOfInterest,
   type ProfileOverviewData,
+  type RouteToStampFromPositionData,
   type StampDetailData,
   type Stampbox,
   type Tour,
@@ -75,6 +77,21 @@ export const queryKeys = {
     ['stamp-detail', userId ?? 'anonymous', stampId ?? 'unknown'] as const,
   parkingDetail: (userId: string | undefined, parkingId: string | undefined) =>
     ['parking-detail', userId ?? 'anonymous', parkingId ?? 'unknown'] as const,
+  routeToStampFromPosition: (
+    userId: string | undefined,
+    stampId: string | undefined,
+    latitude: number | undefined,
+    longitude: number | undefined
+  ) =>
+    [
+      'route-to-stamp-from-position',
+      userId ?? 'anonymous',
+      stampId ?? 'unknown',
+      typeof latitude === 'number' ? latitude.toFixed(4) : 'unknown',
+      typeof longitude === 'number' ? longitude.toFixed(4) : 'unknown',
+    ] as const,
+  routeToStampLastPosition: (userId: string | undefined) =>
+    ['route-to-stamp-last-position', userId ?? 'anonymous'] as const,
 };
 
 function getCachedUserProfileSummary(
@@ -420,6 +437,35 @@ export function useParkingDetailQuery(parkingId?: string) {
       } satisfies ParkingDetailData;
     },
     queryFn: () => authorizedRequest((token) => fetchParkingDetail(token, parkingId!)),
+  });
+}
+
+export function useRouteToStampFromPositionQuery(
+  stampId?: string,
+  latitude?: number,
+  longitude?: number
+) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useQuery<RouteToStampFromPositionData>({
+    queryKey: queryKeys.routeToStampFromPosition(claims?.sub, stampId, latitude, longitude),
+    enabled:
+      Boolean(accessToken && isAuthenticated && stampId) &&
+      typeof latitude === 'number' &&
+      Number.isFinite(latitude) &&
+      typeof longitude === 'number' &&
+      Number.isFinite(longitude),
+    placeholderData: keepPreviousData,
+    queryFn: () =>
+      authorizedRequest((token) =>
+        fetchRouteToStampFromPosition(token, {
+          stampId: stampId!,
+          latitude: latitude!,
+          longitude: longitude!,
+        })
+      ),
   });
 }
 
