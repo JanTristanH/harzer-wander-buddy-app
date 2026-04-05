@@ -38,8 +38,9 @@ export default function ProfileScreen() {
     const collectorSinceText = data.collectorSinceYear
       ? `Stempel-Sammler seit ${data.collectorSinceYear}`
       : 'Stempel-Sammler';
-    const profileName = data.name || matchingCurrentUserProfile?.name || claims?.name || claims?.sub || 'Profil';
-    const profilePicture = data.picture || matchingCurrentUserProfile?.picture || claims?.picture;
+    const profileName =
+      matchingCurrentUserProfile?.name || data.name || claims?.name || claims?.sub || 'Profil';
+    const profilePicture = matchingCurrentUserProfile?.picture || data.picture || claims?.picture;
 
     const filteredStamps = data.stamps.filter((stamp) => {
       if (activeStampFilter === 'visited') {

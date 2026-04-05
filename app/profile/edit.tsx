@@ -173,15 +173,15 @@ function ProfileEditContent() {
         nextPicture = uploadedImage.url;
       }
 
-      await updateCurrentUserProfile(accessToken, {
+      const updatedProfile = await updateCurrentUserProfile(accessToken, {
         name: nextName,
         picture: nextPicture,
       });
-      const refreshedProfile = await preloadCurrentUserProfile();
-      const resolvedProfile = refreshedProfile || {
+
+      const resolvedProfile = {
         id: profile.id,
-        name: nextName,
-        picture: nextPicture,
+        name: updatedProfile.name || nextName,
+        picture: updatedProfile.picture || nextPicture,
       };
 
       setCurrentUserProfile(resolvedProfile);
@@ -196,7 +196,7 @@ function ProfileEditContent() {
               }
             : currentProfileOverview
       );
-      await queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) });
 
       closeScreen();
     } catch (nextError) {
@@ -219,7 +219,6 @@ function ProfileEditContent() {
     hasChanges,
     logout,
     profile,
-    preloadCurrentUserProfile,
     queryClient,
     selectedImage,
     setCurrentUserProfile,

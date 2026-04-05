@@ -128,7 +128,6 @@ export default function OnboardingScreen() {
     completeOnboarding,
     isLoading,
     logout,
-    preloadCurrentUserProfile,
     setCurrentUserProfile,
   } = useAuth();
   const claims = useIdTokenClaims<LoginClaims>();
@@ -401,16 +400,15 @@ export default function OnboardingScreen() {
           nextPicture = uploadedImage.url;
         }
 
-        await updateCurrentUserProfile(accessToken, {
+        const updatedProfile = await updateCurrentUserProfile(accessToken, {
           name: nextName,
           picture: nextPicture,
         });
 
-        const refreshedProfile = await preloadCurrentUserProfile();
-        const resolvedProfile = refreshedProfile || {
+        const resolvedProfile = {
           id: matchingCurrentUserProfile?.id || claims?.sub || nextName,
-          name: nextName,
-          picture: nextPicture,
+          name: updatedProfile.name || nextName,
+          picture: updatedProfile.picture || nextPicture,
         };
 
         setCurrentUserProfile(resolvedProfile);
@@ -464,7 +462,6 @@ export default function OnboardingScreen() {
     matchingCurrentUserProfile?.id,
     isAuthenticated,
     logout,
-    preloadCurrentUserProfile,
     profileName,
     profilePicture,
     queryClient,
