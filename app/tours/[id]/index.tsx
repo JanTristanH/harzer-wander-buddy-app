@@ -24,7 +24,14 @@ import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SkeletonBlock } from '@/components/skeleton';
-import { HttpStatusError, type Tour, type TourPathEntry, type TourUpdateResponse } from '@/lib/api';
+import {
+  HttpStatusError,
+  type PlaceSearchResult,
+  type Tour,
+  type TourPathEntry,
+  type TourUpdateResponse,
+  searchPlacesByName,
+} from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import {
@@ -57,6 +64,7 @@ const MAP_EDGE_PADDING = {
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
 const SEARCH_RESULT_LIMIT = 5;
+const REMOTE_SEARCH_DEBOUNCE_MS = 350;
 const POI_AUTOSAVE_DEBOUNCE_MS = 300;
 const TOUR_NAME_AUTOSAVE_DEBOUNCE_MS = 2000;
 const MARKER_OVERLAY_TRACKS_VIEW_CHANGES_MS = 250;
@@ -104,6 +112,10 @@ type LiveTourMetrics = {
 type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
 type SearchCandidate = TourMapItem & {
+  distanceKm: number;
+};
+
+type ExternalPlaceSearchCandidate = PlaceSearchResult & {
   distanceKm: number;
 };
 
@@ -720,7 +732,7 @@ function resolveMapItemImageSource(
 export default function TourDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const { accessToken } = useAuth();
+  const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
   const normalizedCurrentUserId = normalizeUserId(currentUserId);
@@ -740,8 +752,12 @@ export default function TourDetailScreen() {
   const [lastPersistedPoiIds, setLastPersistedPoiIds] = useState<string[]>([]);
   const [hasInitialized, setHasInitialized] = useState(false);
   const [selectedMapItemId, setSelectedMapItemId] = useState<string | null>(null);
+  const [selectedExternalPlace, setSelectedExternalPlace] = useState<ExternalPlaceSearchCandidate | null>(null);
   const [poiSearchQuery, setPoiSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [remoteSearchResults, setRemoteSearchResults] = useState<ExternalPlaceSearchCandidate[]>([]);
+  const [isRemoteSearchLoading, setIsRemoteSearchLoading] = useState(false);
+  const [remoteSearchError, setRemoteSearchError] = useState<string | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
   const [mapCenter, setMapCenter] = useState<Coordinate>({
     latitude: HARZ_REGION.latitude,
@@ -808,6 +824,10 @@ export default function TourDetailScreen() {
     setStatusMessage(null);
     setSaveStatus('idle');
     setIsEditMode(false);
+    setSelectedExternalPlace(null);
+    setRemoteSearchResults([]);
+    setRemoteSearchError(null);
+    setIsRemoteSearchLoading(false);
     activeSaveRequestIdRef.current = 0;
     queuedPoiIdsRef.current = null;
     latestDraftPoiIdsRef.current = [];
@@ -1290,7 +1310,7 @@ export default function TourDetailScreen() {
     );
   });
 
-  const searchResults = useMemo<SearchCandidate[]>(() => {
+  const localSearchResults = useMemo<SearchCandidate[]>(() => {
     if (!isSearchFocused || allMapItems.length === 0) {
       return [];
     }
@@ -1358,6 +1378,74 @@ export default function TourDetailScreen() {
   }, [allMapItems, isSearchFocused, mapCenter, poiSearchQuery]);
 
   useEffect(() => {
+    if (!isSearchFocused) {
+      setRemoteSearchResults([]);
+      setRemoteSearchError(null);
+      setIsRemoteSearchLoading(false);
+      return;
+    }
+
+    const normalizedQuery = normalizeSearchValue(poiSearchQuery);
+    if (normalizedQuery.length < 3 || !accessToken) {
+      setRemoteSearchResults([]);
+      setRemoteSearchError(null);
+      setIsRemoteSearchLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsRemoteSearchLoading(true);
+    setRemoteSearchError(null);
+
+    const timeoutId = setTimeout(() => {
+      void (async () => {
+        try {
+          const places = await searchPlacesByName(accessToken, {
+            query: poiSearchQuery,
+            latitude: mapCenter.latitude,
+            longitude: mapCenter.longitude,
+            limit: SEARCH_RESULT_LIMIT,
+          });
+          if (isCancelled) {
+            return;
+          }
+
+          const withDistance = places.map((place) => ({
+            ...place,
+            distanceKm: haversineDistanceKm(mapCenter, {
+              latitude: place.latitude,
+              longitude: place.longitude,
+            }),
+          }));
+          setRemoteSearchResults(withDistance);
+          setRemoteSearchError(null);
+        } catch (nextError) {
+          if (isCancelled) {
+            return;
+          }
+
+          if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+            await logout();
+            return;
+          }
+
+          setRemoteSearchResults([]);
+          setRemoteSearchError('Orte konnten nicht geladen werden.');
+        } finally {
+          if (!isCancelled) {
+            setIsRemoteSearchLoading(false);
+          }
+        }
+      })();
+    }, REMOTE_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [accessToken, isSearchFocused, logout, mapCenter, poiSearchQuery]);
+
+  useEffect(() => {
     if (!isMapReady || isEditMode) {
       return;
     }
@@ -1420,6 +1508,7 @@ export default function TourDetailScreen() {
     };
 
     setSelectedMapItemId(item.ID);
+    setSelectedExternalPlace(null);
     if (options?.updateSearchQuery) {
       setPoiSearchQuery(item.name);
     }
@@ -1428,6 +1517,44 @@ export default function TourDetailScreen() {
     setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
     mapRef.current?.animateToRegion(nextRegion, 220);
   }, []);
+
+  const focusExternalPlaceOnMap = useCallback((place: ExternalPlaceSearchCandidate) => {
+    lastMarkerPressAtRef.current = Date.now();
+
+    const nextRegion: Region = {
+      latitude: place.latitude,
+      longitude: place.longitude,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    };
+
+    setSelectedMapItemId(null);
+    setSelectedExternalPlace(place);
+    setPoiSearchQuery(place.name);
+    setIsSearchFocused(false);
+    regionRef.current = nextRegion;
+    setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
+    mapRef.current?.animateToRegion(nextRegion, 220);
+  }, []);
+
+  const openExternalPlaceInGoogleMaps = useCallback(async () => {
+    if (!selectedExternalPlace) {
+      return;
+    }
+
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      `${selectedExternalPlace.latitude},${selectedExternalPlace.longitude}`
+    )}`;
+
+    try {
+      await Linking.openURL(url);
+    } catch (nextError) {
+      Alert.alert(
+        'Google Maps konnte nicht geoeffnet werden',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
+  }, [selectedExternalPlace]);
 
   const performSave = useCallback(
     async function saveDraft(poiIds: string[], options?: { manual?: boolean }) {
@@ -2014,6 +2141,7 @@ export default function TourDetailScreen() {
           }
 
           setSelectedMapItemId(null);
+          setSelectedExternalPlace(null);
           setIsSearchFocused(false);
         }}
         onRegionChangeComplete={(nextRegion) => {
@@ -2085,6 +2213,15 @@ export default function TourDetailScreen() {
             </Marker>
           );
         })}
+        {selectedExternalPlace ? (
+          <Marker
+            anchor={{ x: 0.5, y: 1 }}
+            coordinate={{ latitude: selectedExternalPlace.latitude, longitude: selectedExternalPlace.longitude }}
+            key={`external:${selectedExternalPlace.placeId}`}
+            pinColor="#8d5f34"
+            zIndex={70}
+          />
+        ) : null}
       </MapView>
 
       <View style={[styles.mapTopBar, isFullscreen && { top: insets.top + 10 }]}>
@@ -2109,9 +2246,14 @@ export default function TourDetailScreen() {
           </Pressable>
         </View>
 
-        {isSearchFocused && searchResults.length > 0 ? (
+        {isSearchFocused &&
+        (localSearchResults.length > 0 ||
+          remoteSearchResults.length > 0 ||
+          isRemoteSearchLoading ||
+          remoteSearchError) ? (
           <View style={styles.searchResultsPopover}>
-            {searchResults.map((item) => {
+            {localSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Kartenpunkte</Text> : null}
+            {localSearchResults.map((item) => {
               const stampNumber = getStampNumber(item);
               return (
                 <Pressable
@@ -2127,7 +2269,32 @@ export default function TourDetailScreen() {
                 </Pressable>
               );
             })}
+            {remoteSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Orte</Text> : null}
+            {remoteSearchResults.map((place) => (
+              <Pressable
+                key={`external:${place.placeId}`}
+                onPress={() => focusExternalPlaceOnMap(place)}
+                style={({ pressed }) => [styles.searchResultRow, pressed && styles.pressed]}>
+                <Text numberOfLines={1} style={styles.searchResultTitle}>
+                  {place.name}
+                </Text>
+                <Text numberOfLines={1} style={styles.searchResultMeta}>
+                  {`${place.formattedAddress || 'Ort'} • ${formatDistanceKm(place.distanceKm)}`}
+                </Text>
+              </Pressable>
+            ))}
+            {isRemoteSearchLoading ? (
+              <Text style={styles.searchStatusText}>Suche Orte...</Text>
+            ) : null}
+            {!isRemoteSearchLoading && remoteSearchError ? (
+              <Text style={styles.searchStatusText}>{remoteSearchError}</Text>
+            ) : null}
           </View>
+        ) : null}
+        {isEditMode ? (
+          <Text style={styles.externalSearchHint}>
+            Externe Orte sind nicht als Tourpunkt speicherbar.
+          </Text>
         ) : null}
       </View>
 
@@ -2207,6 +2374,29 @@ export default function TourDetailScreen() {
               ) : null}
             </View>
           ) : null}
+        </View>
+      ) : null}
+      {!selectedMapItem && selectedExternalPlace ? (
+        <View style={[styles.mapBottomSheet, isFullscreen && { bottom: insets.bottom + 12 }]}>
+          <View style={styles.mapBottomInfoRow}>
+            <LinearGradient
+              colors={['#9d7657', '#d5b18f']}
+              style={styles.mapBottomArtwork}
+            />
+            <View style={styles.mapBottomInfoCopy}>
+              <Text numberOfLines={1} style={styles.mapBottomTitle}>
+                {selectedExternalPlace.name}
+              </Text>
+              <Text numberOfLines={2} style={styles.mapBottomMeta}>
+                {selectedExternalPlace.formattedAddress || 'Externer Ort'}
+              </Text>
+            </View>
+          </View>
+          <Pressable
+            onPress={() => void openExternalPlaceInGoogleMaps()}
+            style={({ pressed }) => [styles.addButton, styles.mapBottomActionButton, pressed && styles.pressed]}>
+            <Text style={styles.addButtonLabel}>In Google Maps oeffnen</Text>
+          </Pressable>
         </View>
       ) : null}
     </View>
@@ -2987,6 +3177,17 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 4,
   },
+  searchSectionTitle: {
+    color: '#5f6f5f',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
   searchResultRow: {
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -2999,6 +3200,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   searchResultMeta: {
+    color: '#6b7a6b',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  searchStatusText: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  externalSearchHint: {
+    marginTop: 6,
+    marginLeft: 4,
     color: '#6b7a6b',
     fontSize: 11,
     lineHeight: 14,

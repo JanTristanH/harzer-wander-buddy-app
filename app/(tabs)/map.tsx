@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Linking,
   Modal,
   Pressable,
   StyleSheet,
@@ -22,10 +23,12 @@ import {
   createStamping,
   fetchRouteMetrics,
   fetchStampDetail,
+  searchPlacesByName,
   type LatestVisitedStamp,
   type MapData,
   type MapParkingSpot,
   type MapStamp,
+  type PlaceSearchResult,
   type ProfileOverviewData,
   type RouteMetrics,
   type Stampbox,
@@ -110,7 +113,8 @@ const MAX_ZOOM_DELTA = 1.2;
 const MAP_EDGE_PADDING = { top: 140, right: 64, bottom: 260, left: 64 };
 const ZOOM_CONTROLS_GAP = 16;
 const SEARCH_RESULT_LIMIT = 6;
-const SEARCH_TARGET_DELTA = 0.06;
+const REMOTE_SEARCH_DEBOUNCE_MS = 350;
+const SEARCH_TARGET_DELTA = 0.02;
 const SELECTION_TARGET_DELTA = 0.08;
 const LOCATE_ME_TARGET_DELTA = 0.05;
 const SELECTION_TARGET_VERTICAL_RATIO = 0.3;
@@ -329,7 +333,7 @@ function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
 }
 
-function normalizeStampMarkerToken(value?: string | null) {
+function normalizeStampMarkerToken(value?: string | null): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
     return null;
@@ -454,8 +458,12 @@ export default function MapScreen() {
   const { data, error, isFetching, isPending, isPlaceholderData } = useMapDataQuery();
   const [region, setRegion] = useState<Region>(initialRegion);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedExternalPlace, setSelectedExternalPlace] = useState<PlaceSearchResult | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [remoteSearchResults, setRemoteSearchResults] = useState<PlaceSearchResult[]>([]);
+  const [isRemoteSearchLoading, setIsRemoteSearchLoading] = useState(false);
+  const [remoteSearchError, setRemoteSearchError] = useState<string | null>(null);
   const [locationState, setLocationState] = useState<LocationState>('idle');
   const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
   const [visitFilter, setVisitFilter] = useState<VisitFilter>('all');
@@ -656,7 +664,7 @@ export default function MapScreen() {
     }
   }, [data, fitCoordinates, isMapReady, parkingItems, stampItems]);
 
-  const searchResults = useMemo(() => {
+  const localSearchResults = useMemo(() => {
     const normalizedQuery = normalizeSearchValue(searchQuery);
     if (!normalizedQuery) {
       return [];
@@ -694,6 +702,68 @@ export default function MapScreen() {
       .slice(0, SEARCH_RESULT_LIMIT)
       .map((entry) => entry.item);
   }, [searchQuery, visibleItems]);
+
+  useEffect(() => {
+    if (!isSearchFocused) {
+      setRemoteSearchResults([]);
+      setIsRemoteSearchLoading(false);
+      setRemoteSearchError(null);
+      return;
+    }
+
+    const normalizedQuery = normalizeSearchValue(searchQuery);
+    if (normalizedQuery.length < 3 || !accessToken) {
+      setRemoteSearchResults([]);
+      setIsRemoteSearchLoading(false);
+      setRemoteSearchError(null);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsRemoteSearchLoading(true);
+    setRemoteSearchError(null);
+
+    const timeoutId = setTimeout(() => {
+      void (async () => {
+        try {
+          const nextResults = await searchPlacesByName(accessToken, {
+            query: searchQuery,
+            latitude: regionRef.current.latitude,
+            longitude: regionRef.current.longitude,
+            limit: SEARCH_RESULT_LIMIT,
+          });
+
+          if (isCancelled) {
+            return;
+          }
+
+          setRemoteSearchResults(nextResults);
+          setRemoteSearchError(null);
+        } catch (nextError) {
+          if (isCancelled) {
+            return;
+          }
+
+          if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+            await logout();
+            return;
+          }
+
+          setRemoteSearchResults([]);
+          setRemoteSearchError('Orte konnten nicht geladen werden.');
+        } finally {
+          if (!isCancelled) {
+            setIsRemoteSearchLoading(false);
+          }
+        }
+      })();
+    }, REMOTE_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [accessToken, isSearchFocused, logout, searchQuery]);
 
   const nearestCounterpart = useMemo<NearestCounterpart | null>(() => {
     if (!selectedItem) {
@@ -826,9 +896,14 @@ export default function MapScreen() {
   }, [nearestCounterpart, nearestRouteMetrics]);
 
   const sheetBottomOffset = getMapSheetBottomOffset(insets.bottom);
+  const externalSheetHeight = selectedExternalPlace ? 136 : 0;
   const zoomControlsBottomOffset =
     sheetBottomOffset +
-    (selectedItem ? selectedSheetHeight + ZOOM_CONTROLS_GAP : ZOOM_CONTROLS_GAP);
+    (selectedItem
+      ? selectedSheetHeight + ZOOM_CONTROLS_GAP
+      : externalSheetHeight > 0
+        ? externalSheetHeight + ZOOM_CONTROLS_GAP
+        : ZOOM_CONTROLS_GAP);
   const filterPopoverWidth = useMemo(() => Math.min(300, Math.max(windowWidth - 32, 0)), [windowWidth]);
   const compassButtonTopOffset = insets.top + 64;
 
@@ -865,6 +940,7 @@ export default function MapScreen() {
   const handleMarkerPress = useCallback(
     (item: MarkerItem) => {
       lastMarkerPressAtRef.current = Date.now();
+      setSelectedExternalPlace(null);
       setSelectedItemId(item.id);
       const targetDelta = Math.min(regionRef.current.longitudeDelta, SELECTION_TARGET_DELTA);
       const shouldDelayParkingReveal =
@@ -1245,6 +1321,7 @@ export default function MapScreen() {
 
   const focusItemOnMap = useCallback((item: MarkerItem) => {
     lastMarkerPressAtRef.current = Date.now();
+    setSelectedExternalPlace(null);
     setSelectedItemId(item.id);
     setSearchQuery('');
     setIsSearchFocused(false);
@@ -1266,6 +1343,42 @@ export default function MapScreen() {
     updateMapRegion(nextRegion);
     mapRef.current?.animateToRegion(nextRegion, 260);
   }, [updateMapRegion]);
+
+  const focusExternalPlaceOnMap = useCallback((place: PlaceSearchResult) => {
+    lastMarkerPressAtRef.current = Date.now();
+    setSelectedItemId(null);
+    setSelectedExternalPlace(place);
+    setIsSearchFocused(false);
+    setSearchQuery(place.name);
+    searchInputRef.current?.blur();
+    setIsParkingRevealPending(false);
+    const nextRegion = createPointRegionAtVerticalRatio(
+      { latitude: place.latitude, longitude: place.longitude },
+      SEARCH_TARGET_DELTA,
+      SELECTION_TARGET_VERTICAL_RATIO
+    );
+    updateMapRegion(nextRegion);
+    mapRef.current?.animateToRegion(nextRegion, 260);
+  }, [updateMapRegion]);
+
+  const handleOpenExternalPlaceInGoogleMaps = useCallback(async () => {
+    if (!selectedExternalPlace) {
+      return;
+    }
+
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      `${selectedExternalPlace.latitude},${selectedExternalPlace.longitude}`
+    )}`;
+
+    try {
+      await Linking.openURL(url);
+    } catch (nextError) {
+      Alert.alert(
+        'Google Maps konnte nicht geoeffnet werden',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
+  }, [selectedExternalPlace]);
 
   useEffect(() => {
     if (!requestedStampId) {
@@ -1384,6 +1497,7 @@ export default function MapScreen() {
           }
 
           setSelectedItemId(null);
+          setSelectedExternalPlace(null);
           setIsSearchFocused(false);
         }}
         onRegionChangeComplete={handleRegionChangeComplete}
@@ -1510,6 +1624,18 @@ export default function MapScreen() {
             />
           );
         })}
+        {selectedExternalPlace ? (
+          <Marker
+            anchor={MARKER_ANCHOR}
+            coordinate={{
+              latitude: selectedExternalPlace.latitude,
+              longitude: selectedExternalPlace.longitude,
+            }}
+            key={`external-selected:${selectedExternalPlace.placeId}`}
+            pinColor="#8d5f34"
+            zIndex={40}
+          />
+        ) : null}
       </MapView>
 
       <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
@@ -1528,9 +1654,14 @@ export default function MapScreen() {
               />
             </View>
 
-            {isSearchFocused && searchResults.length > 0 ? (
+            {isSearchFocused &&
+            (localSearchResults.length > 0 ||
+              remoteSearchResults.length > 0 ||
+              isRemoteSearchLoading ||
+              remoteSearchError) ? (
               <View style={styles.searchResultsPopover}>
-                {searchResults.map((item) => (
+                {localSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Kartenpunkte</Text> : null}
+                {localSearchResults.map((item) => (
                   <Pressable
                     key={item.id}
                     onPress={() => focusItemOnMap(item)}
@@ -1543,6 +1674,26 @@ export default function MapScreen() {
                     </Text>
                   </Pressable>
                 ))}
+                {remoteSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Orte</Text> : null}
+                {remoteSearchResults.map((place) => (
+                  <Pressable
+                    key={`external:${place.placeId}`}
+                    onPress={() => focusExternalPlaceOnMap(place)}
+                    style={({ pressed }) => [styles.searchResultRow, pressed && styles.pressed]}>
+                    <Text numberOfLines={1} style={styles.searchResultTitle}>
+                      {place.name}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.searchResultMeta}>
+                      {place.formattedAddress || 'Ort'}
+                    </Text>
+                  </Pressable>
+                ))}
+                {isRemoteSearchLoading ? (
+                  <Text style={styles.searchStatusText}>Suche Orte...</Text>
+                ) : null}
+                {!isRemoteSearchLoading && remoteSearchError ? (
+                  <Text style={styles.searchStatusText}>{remoteSearchError}</Text>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -1607,6 +1758,21 @@ export default function MapScreen() {
             }
             onHeightChange={setSelectedSheetHeight}
           />
+        ) : null}
+        {!selectedItem && selectedExternalPlace ? (
+          <View style={[styles.externalPlaceSheet, { bottom: sheetBottomOffset }]}>
+            <Text numberOfLines={1} style={styles.externalPlaceTitle}>
+              {selectedExternalPlace.name}
+            </Text>
+            <Text numberOfLines={2} style={styles.externalPlaceMeta}>
+              {selectedExternalPlace.formattedAddress || 'Externer Ort'}
+            </Text>
+            <Pressable
+              onPress={() => void handleOpenExternalPlaceInGoogleMaps()}
+              style={({ pressed }) => [styles.externalPlaceButton, pressed && styles.pressed]}>
+              <Text style={styles.externalPlaceButtonLabel}>In Google Maps oeffnen</Text>
+            </Pressable>
+          </View>
         ) : null}
 
         {error && !data ? (
@@ -1797,6 +1963,17 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 4,
   },
+  searchSectionTitle: {
+    color: '#5f6f5f',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
   searchResultRow: {
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -1812,6 +1989,53 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 11,
     lineHeight: 14,
+  },
+  searchStatusText: {
+    color: '#6b7a6b',
+    fontSize: 12,
+    lineHeight: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  externalPlaceSheet: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(255,250,240,0.97)',
+    shadowColor: '#141e14',
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 5,
+    gap: 8,
+  },
+  externalPlaceTitle: {
+    color: '#1e2a1e',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  externalPlaceMeta: {
+    color: '#627262',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  externalPlaceButton: {
+    borderRadius: 12,
+    backgroundColor: '#f2e6d8',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  externalPlaceButtonLabel: {
+    color: '#6b4d31',
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '700',
   },
   filterButtonLabel: {
     color: '#1e2a1e',

@@ -185,14 +185,14 @@ export type ProfileOverviewData = {
   completionPercent: number;
   friendCount: number;
   collectorSinceYear: number | null;
-  latestVisits: Array<{
+  latestVisits: {
     id: string;
     stampId: string;
     stampNumber?: string;
     stampName: string;
     visitedAt?: string;
     heroImageUrl?: string;
-  }>;
+  }[];
   featuredFriend: {
     id: string;
     name: string;
@@ -208,11 +208,11 @@ export type ProfileOverviewData = {
     completionPercent: number;
   }[];
   stamps: Stampbox[];
-  achievements: Array<{
+  achievements: {
     id: string;
     label: string;
     value: string;
-  }>;
+  }[];
 };
 
 export type LatestVisitedStamp = {
@@ -227,27 +227,27 @@ export type FriendsOverviewData = {
   friendCount: number;
   incomingRequestCount: number;
   outgoingRequestCount: number;
-  friends: Array<{
+  friends: {
     id: string;
     name: string;
     picture?: string;
     visitedCount: number;
     completionPercent: number;
-  }>;
-  incomingRequests: Array<{
+  }[];
+  incomingRequests: {
     id: string;
     pendingRequestId: string;
     userId: string;
     name: string;
     picture?: string;
-  }>;
-  outgoingRequests: Array<{
+  }[];
+  outgoingRequests: {
     id: string;
     friendshipId: string;
     userId: string;
     name: string;
     picture?: string;
-  }>;
+  }[];
 };
 
 export type SearchUserResult = {
@@ -284,37 +284,37 @@ export type UserProfileOverviewData = {
   completionPercent: number;
   sharedVisitedCount: number;
   collectorSinceYear: number | null;
-  latestVisits: Array<{
+  latestVisits: {
     id: string;
     stampId: string;
     stampNumber?: string;
     stampName: string;
     visitedAt?: string;
     heroImageUrl?: string;
-  }>;
-  friends: Array<{
+  }[];
+  friends: {
     id: string;
     name: string;
     picture?: string;
     visitedCount: number;
     completionPercent: number;
-  }>;
-  achievements: Array<{
+  }[];
+  achievements: {
     id: string;
     label: string;
     value: string;
-  }>;
+  }[];
   stampBuckets: {
     shared: number;
     friendOnly: number;
     meOnly: number;
     neither: number;
   };
-  stampComparisons: Array<{
+  stampComparisons: {
     stamp: Stampbox;
     meVisited: boolean;
     userVisited: boolean;
-  }>;
+  }[];
 };
 
 export type StampDetailData = {
@@ -470,6 +470,15 @@ export type RouteMetrics = {
   durationMinutes: number | null;
   elevationGainMeters: number | null;
   elevationLossMeters: number | null;
+};
+
+export type PlaceSearchResult = {
+  placeId: string;
+  name: string;
+  formattedAddress: string;
+  latitude: number;
+  longitude: number;
+  provider: 'google';
 };
 
 function buildStringEqualsFilter(field: string, value: string) {
@@ -884,6 +893,32 @@ function normalizePointOfInterestRow(value: PointOfInterestRow) {
   } satisfies PointOfInterest;
 }
 
+function normalizePlaceSearchResultRow(value: unknown): PlaceSearchResult | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const row = value as Record<string, unknown>;
+  const placeId = safeTrim(row.placeId);
+  const name = safeTrim(row.name);
+  const formattedAddress = safeTrim(row.formattedAddress);
+  const latitude = toFiniteNumber(row.latitude);
+  const longitude = toFiniteNumber(row.longitude);
+
+  if (!placeId || !name || latitude === null || longitude === null) {
+    return null;
+  }
+
+  return {
+    placeId,
+    name,
+    formattedAddress,
+    latitude,
+    longitude,
+    provider: 'google',
+  } satisfies PlaceSearchResult;
+}
+
 function computeCompletionPercent(visitedCount: number, totalCount: number) {
   if (totalCount <= 0) {
     return 0;
@@ -1034,11 +1069,11 @@ async function fetchUsersProgress(
 
 async function buildFriendProgress(
   accessToken: string,
-  friends: Array<{
+  friends: {
     ID: string;
     name?: string;
     picture?: string;
-  }>,
+  }[],
   totalCount?: number
 ) {
   const progressByUserId = await fetchUsersProgress(
@@ -1063,7 +1098,7 @@ async function attachUserProgress<T extends { id: string }>(
   users: T[]
 ) {
   if (users.length === 0) {
-    return [] as Array<T & { visitedCount: number; completionPercent: number }>;
+    return [] as (T & { visitedCount: number; completionPercent: number })[];
   }
 
   const progressByUserId = await fetchUsersProgress(
@@ -1377,7 +1412,7 @@ function resolveRouteMetrics(routeRows: TravelTimeRow[], fallbackDistanceKm: num
 async function fetchRouteMetricsByTargets(
   accessToken: string,
   fromPoiId: string,
-  targets: Array<{ toPoiId: string; fallbackDistanceKm?: number | null }>
+  targets: { toPoiId: string; fallbackDistanceKm?: number | null }[]
 ) {
   const normalizedTargets = normalizeIdList(targets.map((target) => target.toPoiId));
   const fallbackDistanceByToPoi = new Map(
@@ -2868,6 +2903,39 @@ export async function acceptPendingFriendshipRequest(accessToken: string, pendin
       FriendshipID: pendingRequestId,
     }),
   });
+}
+
+export async function searchPlacesByName(
+  accessToken: string,
+  payload: {
+    query: string;
+    latitude?: number;
+    longitude?: number;
+    limit?: number;
+  }
+) {
+  const query = payload.query.trim();
+  if (!query) {
+    return [] as PlaceSearchResult[];
+  }
+
+  const response = await mutateOData<unknown>(accessToken, buildUrl('searchPlacesByName'), {
+    method: 'POST',
+    body: JSON.stringify({
+      query,
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      limit: payload.limit,
+    }),
+  });
+  const parsed = parseODataFunctionResult<{ value: PlaceSearchResult[] }>(response, 'searchPlacesByName').value;
+  if (!Array.isArray(parsed)) {
+    return [] as PlaceSearchResult[];
+  }
+
+  return parsed
+    .map((row) => normalizePlaceSearchResultRow(row))
+    .filter((row): row is PlaceSearchResult => Boolean(row));
 }
 
 export async function searchUsers(accessToken: string, rawQuery: string) {
