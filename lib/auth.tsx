@@ -140,6 +140,46 @@ function isMissingCurrentUserProfile(error: unknown) {
   );
 }
 
+function toAuthState(tokenResponse: AuthSession.TokenResponse): AuthState {
+  return {
+    accessToken: tokenResponse.accessToken,
+    idToken: tokenResponse.idToken,
+    refreshToken: tokenResponse.refreshToken,
+    issuedAt: tokenResponse.issuedAt,
+    expiresIn: tokenResponse.expiresIn,
+  };
+}
+
+function isUnauthorizedError(error: unknown) {
+  return error instanceof Error && error.name === 'UnauthorizedError';
+}
+
+function isInvalidGrantRefreshError(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const errorRecord = error as {
+    error?: unknown;
+    message?: unknown;
+    params?: {
+      error?: unknown;
+      error_description?: unknown;
+    };
+  };
+  const errorCode = typeof errorRecord.error === 'string' ? errorRecord.error : '';
+  const paramsErrorCode =
+    typeof errorRecord.params?.error === 'string' ? errorRecord.params.error : '';
+  const errorDescription =
+    typeof errorRecord.params?.error_description === 'string'
+      ? errorRecord.params.error_description
+      : '';
+  const message = typeof errorRecord.message === 'string' ? errorRecord.message : '';
+  const normalizedText = `${errorCode} ${paramsErrorCode} ${errorDescription} ${message}`.toLowerCase();
+
+  return normalizedText.includes('invalid_grant');
+}
+
 export function AuthProvider({ children }: React.PropsWithChildren) {
   const [authState, setAuthState] = useState<AuthState | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfileData | null>(null);
@@ -199,12 +239,6 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       }
 
       try {
-        const discovery = await resolveDiscovery();
-        if (!discovery) {
-          setAuthError('Could not load Auth0 discovery.');
-          return;
-        }
-
         const storedOnboardingState = await loadOnboardingState();
         if (isMounted) {
           setHasCompletedOnboarding(storedOnboardingState);
@@ -216,11 +250,20 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         }
 
         let nextTokenResponse = tokenResponse;
+        if (isMounted) {
+          setAuthState(toAuthState(tokenResponse));
+        }
+
         if (
           tokenResponse.shouldRefresh() &&
           tokenResponse.refreshToken &&
-          discovery.tokenEndpoint
+          appConfig.auth0ClientId
         ) {
+          const discovery = await resolveDiscovery();
+          if (!discovery?.tokenEndpoint) {
+            throw new Error('Could not load Auth0 discovery.');
+          }
+
           nextTokenResponse = await AuthSession.refreshAsync(
             {
               clientId: appConfig.auth0ClientId,
@@ -235,24 +278,24 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           return;
         }
 
-        setAuthState({
-          accessToken: nextTokenResponse.accessToken,
-          idToken: nextTokenResponse.idToken,
-          refreshToken: nextTokenResponse.refreshToken,
-          issuedAt: nextTokenResponse.issuedAt,
-          expiresIn: nextTokenResponse.expiresIn,
-        });
+        setAuthState(toAuthState(nextTokenResponse));
         await preloadCurrentUserProfileForToken(nextTokenResponse.accessToken);
         if (!isMounted) {
           return;
         }
       } catch (error) {
+        const shouldInvalidateSession =
+          isUnauthorizedError(error) || isInvalidGrantRefreshError(error);
+
         console.error('Failed to restore auth session', error);
         setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
-        await clearTokenResponse();
-        if (isMounted) {
-          setAuthState(null);
-          setCurrentUserProfile(null);
+
+        if (shouldInvalidateSession) {
+          await clearTokenResponse();
+          if (isMounted) {
+            setAuthState(null);
+            setCurrentUserProfile(null);
+          }
         }
       } finally {
         if (isMounted) {
