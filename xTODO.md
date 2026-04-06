@@ -27,5 +27,7 @@
 
 - Aktuelle Defektmeldungen aufnehmen (https://www.harzer-wandernadel.de/defektmeldungen/)
 - Defektmeldungen aus der App heraus machen
+- Code für defekte Stampel
+- Allgemeine Notzien wer dabei war
 - touren / stempel per whatsapp vesenden geht nicht - DONE
 
