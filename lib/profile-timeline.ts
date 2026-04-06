@@ -31,17 +31,12 @@ function formatDayKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function startOfWeek(date: Date) {
-  const normalized = new Date(date);
-  normalized.setHours(0, 0, 0, 0);
-  const weekday = normalized.getDay();
-  const diffToMonday = weekday === 0 ? 6 : weekday - 1;
-  normalized.setDate(normalized.getDate() - diffToMonday);
-  return normalized;
-}
-
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+}
+
+function startOfLastSevenDays(date: Date) {
+  return new Date(date.getTime() - 7 * 24 * 60 * 60 * 1000);
 }
 
 function compareEntriesDescending(left: ProfileVisitEntry, right: ProfileVisitEntry) {
@@ -95,14 +90,14 @@ export function replaceTimelineEntry(
 
 export function buildTimelinePreview(entries?: ProfileVisitEntry[] | null, now = new Date()) {
   const all = trimTimelineEntries(entries);
-  const weekStart = startOfWeek(now).getTime();
+  const lastSevenDaysStart = startOfLastSevenDays(now).getTime();
   const monthStart = startOfMonth(now).getTime();
 
   return {
     all,
     thisWeek: all.filter((entry) => {
       const timestamp = entryTimestamp(entry);
-      return Number.isFinite(timestamp) && timestamp >= weekStart;
+      return Number.isFinite(timestamp) && timestamp >= lastSevenDaysStart;
     }),
     thisMonth: all.filter((entry) => {
       const timestamp = entryTimestamp(entry);
