@@ -1,8 +1,10 @@
 import { Feather } from '@expo/vector-icons';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -40,6 +42,55 @@ function formatVisitDate(value?: string) {
   return `${dd}.${mm}.${yyyy} • ${hh}:${min}`;
 }
 
+function toDayKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dayKeyToDate(dayKey: string) {
+  const [yearRaw, monthRaw, dayRaw] = dayKey.split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatJumpDate(date: Date) {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  return `${dd}.${mm}.${yyyy}`;
+}
+
+function findClosestDayKey(targetDate: Date, keys: string[]) {
+  let closestKey = '';
+  let closestDistance = Number.POSITIVE_INFINITY;
+  const targetTime = targetDate.getTime();
+
+  for (const key of keys) {
+    const keyDate = dayKeyToDate(key);
+    if (!keyDate) {
+      continue;
+    }
+
+    const distance = Math.abs(keyDate.getTime() - targetTime);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestKey = key;
+    }
+  }
+
+  return closestKey || null;
+}
+
 export default function ProfileTimelineScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ userId?: string | string[] }>();
@@ -67,6 +118,92 @@ export default function ProfileTimelineScreen() {
     () => groupTimelineEntriesByDay(timelineEntries),
     [timelineEntries]
   );
+  const groupedDayKeys = useMemo(() => groupedTimeline.map((group) => group.dayKey), [groupedTimeline]);
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [jumpHint, setJumpHint] = useState('');
+  const [pendingJumpDayKey, setPendingJumpDayKey] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null);
+  const dayOffsetMapRef = useRef<Record<string, number>>({});
+
+  const dateRange = useMemo(() => {
+    if (groupedDayKeys.length === 0) {
+      return { min: undefined, max: undefined };
+    }
+
+    const parsedDates = groupedDayKeys
+      .map((key) => dayKeyToDate(key))
+      .filter((value): value is Date => value instanceof Date);
+
+    if (parsedDates.length === 0) {
+      return { min: undefined, max: undefined };
+    }
+
+    const sortedByTime = [...parsedDates].sort((a, b) => a.getTime() - b.getTime());
+    return {
+      min: sortedByTime[0],
+      max: sortedByTime[sortedByTime.length - 1],
+    };
+  }, [groupedDayKeys]);
+
+  const scrollToDayKey = useCallback((dayKey: string) => {
+    const y = dayOffsetMapRef.current[dayKey];
+    if (!Number.isFinite(y)) {
+      return false;
+    }
+
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 6), animated: true });
+    return true;
+  }, []);
+
+  const jumpToDate = useCallback(
+    (nextDate: Date) => {
+      if (groupedDayKeys.length === 0) {
+        setJumpHint('Keine Besuche vorhanden.');
+        return;
+      }
+
+      const requestedDayKey = toDayKey(nextDate);
+      const exactMatch = groupedDayKeys.includes(requestedDayKey) ? requestedDayKey : null;
+      const targetDayKey = exactMatch || findClosestDayKey(nextDate, groupedDayKeys);
+      if (!targetDayKey) {
+        setJumpHint('Kein passender Eintrag gefunden.');
+        return;
+      }
+
+      if (!scrollToDayKey(targetDayKey)) {
+        setPendingJumpDayKey(targetDayKey);
+      }
+
+      if (targetDayKey === requestedDayKey) {
+        setJumpHint(`Gesprungen zu ${formatJumpDate(nextDate)}.`);
+      } else {
+        const resolvedDate = dayKeyToDate(targetDayKey);
+        setJumpHint(
+          `Kein Eintrag am ${formatJumpDate(nextDate)}. Gesprungen zu ${
+            resolvedDate ? formatJumpDate(resolvedDate) : targetDayKey
+          }.`
+        );
+      }
+    },
+    [groupedDayKeys, scrollToDayKey]
+  );
+
+  const handleDateChange = useCallback(
+    (event: DateTimePickerEvent, value?: Date) => {
+      if (Platform.OS === 'android') {
+        setShowDatePicker(false);
+      }
+
+      if (event.type === 'dismissed' || !value) {
+        return;
+      }
+
+      setSelectedDate(value);
+      jumpToDate(value);
+    },
+    [jumpToDate]
+  );
 
   if (!requestedUserId) {
     return (
@@ -93,6 +230,7 @@ export default function ProfileTimelineScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
@@ -112,14 +250,53 @@ export default function ProfileTimelineScreen() {
           </Pressable>
           <View style={styles.headerBody}>
             <Text style={styles.title}>Timeline</Text>
-            <Text style={styles.subtitle}>{profileName} • Alle Besuche (max. 250)</Text>
+            <Text style={styles.subtitle}>{profileName} • Alle Besuche</Text>
           </View>
+        </View>
+
+        <View style={styles.jumpCard}>
+          <Text style={styles.jumpTitle}>Zu einem Datum springen</Text>
+          <Pressable
+            disabled={groupedTimeline.length === 0}
+            onPress={() => setShowDatePicker((current) => !current)}
+            style={({ pressed }) => [
+              styles.jumpButton,
+              groupedTimeline.length === 0 && styles.jumpButtonDisabled,
+              pressed && groupedTimeline.length > 0 && styles.pressed,
+            ]}>
+            <View style={styles.jumpButtonContent}>
+              <Feather color="#2e6b4b" name="calendar" size={15} />
+              <Text style={styles.jumpButtonLabel}>{formatJumpDate(selectedDate)}</Text>
+            </View>
+            <Feather color="#2e6b4b" name={showDatePicker ? 'chevron-up' : 'chevron-down'} size={16} />
+          </Pressable>
+          {showDatePicker ? (
+            <DateTimePicker
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              maximumDate={dateRange.max}
+              minimumDate={dateRange.min}
+              mode="date"
+              onChange={handleDateChange}
+              value={selectedDate}
+            />
+          ) : null}
+          {jumpHint ? <Text style={styles.jumpHint}>{jumpHint}</Text> : null}
         </View>
 
         {groupedTimeline.length > 0 ? (
           groupedTimeline.map((group) => (
-            <View key={group.dayKey} style={styles.daySection}>
-              <Text style={styles.dayLabel}>{group.title}</Text>
+            <View
+              key={group.dayKey}
+              onLayout={(event) => {
+                dayOffsetMapRef.current[group.dayKey] = event.nativeEvent.layout.y;
+                if (pendingJumpDayKey === group.dayKey && scrollToDayKey(group.dayKey)) {
+                  setPendingJumpDayKey(null);
+                }
+              }}
+              style={styles.daySection}>
+              <Text style={styles.dayLabel}>
+                {group.title} {'\u2022'} {group.items.length} {group.items.length === 1 ? 'Besuch' : 'Besuche'}
+              </Text>
               {group.items.map((visit) => {
                 const disabled = !visit.stampId;
                 return (
@@ -207,6 +384,54 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   subtitle: {
+    color: '#4d6d56',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  jumpCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+    shadowColor: '#141e14',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  jumpTitle: {
+    color: '#1e2a1e',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  jumpButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    backgroundColor: '#f0e9dd',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  jumpButtonDisabled: {
+    opacity: 0.65,
+  },
+  jumpButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  jumpButtonLabel: {
+    color: '#2e6b4b',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  jumpHint: {
     color: '#4d6d56',
     fontSize: 12,
     lineHeight: 16,

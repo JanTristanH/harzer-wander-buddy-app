@@ -17,11 +17,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FriendsList } from '@/components/friends-list';
+import { ProfileTimelineSummarySection } from '@/components/profile-timeline-summary-section';
 import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import type { ProfileVisitEntry, Stampbox } from '@/lib/api';
-import { groupTimelineEntriesByDay } from '@/lib/profile-timeline';
 
 type HeaderAction =
   | {
@@ -557,14 +557,6 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
 
   const hiddenStampCount = Math.max(0, filteredStamps.length - DEFAULT_VISIBLE_ITEMS);
   const hasStampSearchQuery = normalizedStampSearchQuery.length > 0;
-  const weekTimelineGroups = useMemo(
-    () => groupTimelineEntriesByDay(data.timeline?.thisWeek ?? []),
-    [data.timeline?.thisWeek]
-  );
-  const monthTimelineGroups = useMemo(
-    () => groupTimelineEntriesByDay(data.timeline?.thisMonth ?? []),
-    [data.timeline?.thisMonth]
-  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -755,48 +747,11 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
         </ProfileSection>
 
         {data.timeline ? (
-          <ProfileSection title="Diese Woche">
-            {weekTimelineGroups.length > 0 ? (
-              weekTimelineGroups.map((group) => (
-                <View key={group.dayKey} style={styles.timelineDayBlock}>
-                  <Text style={styles.timelineDayLabel}>{group.title}</Text>
-                  {group.items.map((visit, index) => (
-                    <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
-                  ))}
-                </View>
-              ))
-            ) : (
-              <Text style={styles.emptyText}>
-                {data.timeline.weekEmptyText || 'Keine Besuche in dieser Woche.'}
-              </Text>
-            )}
-          </ProfileSection>
-        ) : null}
-
-        {data.timeline ? (
-          <ProfileSection title="Dieser Monat">
-            {monthTimelineGroups.length > 0 ? (
-              monthTimelineGroups.map((group) => (
-                <View key={group.dayKey} style={styles.timelineDayBlock}>
-                  <Text style={styles.timelineDayLabel}>{group.title}</Text>
-                  {group.items.map((visit, index) => (
-                    <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
-                  ))}
-                </View>
-              ))
-            ) : (
-              <Text style={styles.emptyText}>
-                {data.timeline.monthEmptyText || 'Keine Besuche in diesem Monat.'}
-              </Text>
-            )}
-            {data.timeline.onOpenAll ? (
-              <Pressable
-                onPress={data.timeline.onOpenAll}
-                style={({ pressed }) => [styles.expandListButton, pressed && styles.pressed]}>
-                <Text style={styles.expandListLabel}>Alle anzeigen (max. 250)</Text>
-              </Pressable>
-            ) : null}
-          </ProfileSection>
+          <ProfileTimelineSummarySection
+            onOpenAll={data.timeline.onOpenAll}
+            thisMonthCount={data.timeline.thisMonth.length}
+            thisWeekCount={data.timeline.thisWeek.length}
+          />
         ) : null}
 
         {data.friendSummary ? (
@@ -1392,17 +1347,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 10,
     paddingVertical: 10,
-  },
-  timelineDayBlock: {
-    gap: 6,
-    marginTop: 4,
-  },
-  timelineDayLabel: {
-    color: '#4d6d56',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-    paddingHorizontal: 2,
   },
   rowArtwork: {
     width: 42,

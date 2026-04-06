@@ -108,7 +108,7 @@ export default function FriendProfileScreen() {
     });
 
     const firstName = data.name.split(' ')[0] || data.name;
-    const timelinePreview = buildTimelinePreview(data.stampings);
+    const timelinePreview = buildTimelinePreview(data.stampings ?? []);
     const subtitleBase = data.collectorSinceYear
       ? `Wandert seit ${data.collectorSinceYear}`
       : 'Harz Wanderbuddy';

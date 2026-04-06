@@ -8,6 +8,10 @@ export type TimelineDayGroup = {
   items: ProfileVisitEntry[];
 };
 
+function normalizeEntries(entries?: ProfileVisitEntry[] | null) {
+  return Array.isArray(entries) ? entries : [];
+}
+
 function parseTimestamp(value?: string) {
   if (!value) {
     return Number.NaN;
@@ -44,30 +48,30 @@ function compareEntriesDescending(left: ProfileVisitEntry, right: ProfileVisitEn
   return entryTimestamp(right) - entryTimestamp(left);
 }
 
-export function sortTimelineEntries(entries: ProfileVisitEntry[]) {
-  return entries.slice().sort(compareEntriesDescending);
+export function sortTimelineEntries(entries?: ProfileVisitEntry[] | null) {
+  return normalizeEntries(entries).slice().sort(compareEntriesDescending);
 }
 
-export function trimTimelineEntries(entries: ProfileVisitEntry[], limit = PROFILE_TIMELINE_LIMIT) {
+export function trimTimelineEntries(entries?: ProfileVisitEntry[] | null, limit = PROFILE_TIMELINE_LIMIT) {
   return sortTimelineEntries(entries).slice(0, limit);
 }
 
 export function upsertTimelineEntry(
-  entries: ProfileVisitEntry[],
+  entries: ProfileVisitEntry[] | undefined | null,
   entry: ProfileVisitEntry,
   limit = PROFILE_TIMELINE_LIMIT
 ) {
-  const withoutExisting = entries.filter((item) => item.id !== entry.id);
+  const withoutExisting = normalizeEntries(entries).filter((item) => item.id !== entry.id);
   return trimTimelineEntries([entry, ...withoutExisting], limit);
 }
 
 export function updateTimelineEntryTimestamp(
-  entries: ProfileVisitEntry[],
+  entries: ProfileVisitEntry[] | undefined | null,
   visitId: string,
   visitedAt: string,
   limit = PROFILE_TIMELINE_LIMIT
 ) {
-  const nextEntries = entries.map((item) =>
+  const nextEntries = normalizeEntries(entries).map((item) =>
     item.id === visitId
       ? {
           ...item,
@@ -80,16 +84,16 @@ export function updateTimelineEntryTimestamp(
 }
 
 export function replaceTimelineEntry(
-  entries: ProfileVisitEntry[],
+  entries: ProfileVisitEntry[] | undefined | null,
   optimisticId: string,
   persistedEntry: ProfileVisitEntry,
   limit = PROFILE_TIMELINE_LIMIT
 ) {
-  const withoutOptimistic = entries.filter((item) => item.id !== optimisticId);
+  const withoutOptimistic = normalizeEntries(entries).filter((item) => item.id !== optimisticId);
   return upsertTimelineEntry(withoutOptimistic, persistedEntry, limit);
 }
 
-export function buildTimelinePreview(entries: ProfileVisitEntry[], now = new Date()) {
+export function buildTimelinePreview(entries?: ProfileVisitEntry[] | null, now = new Date()) {
   const all = trimTimelineEntries(entries);
   const weekStart = startOfWeek(now).getTime();
   const monthStart = startOfMonth(now).getTime();
@@ -107,7 +111,7 @@ export function buildTimelinePreview(entries: ProfileVisitEntry[], now = new Dat
   };
 }
 
-export function groupTimelineEntriesByDay(entries: ProfileVisitEntry[], locale = 'de-DE') {
+export function groupTimelineEntriesByDay(entries?: ProfileVisitEntry[] | null, locale = 'de-DE') {
   const groups = new Map<string, { date: Date; items: ProfileVisitEntry[] }>();
   const entriesWithoutDate: ProfileVisitEntry[] = [];
 

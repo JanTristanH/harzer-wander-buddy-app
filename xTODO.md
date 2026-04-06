@@ -15,7 +15,7 @@
 |  | P1 | Vom Parkplatz direkt starten (Bottom Sheet) | Mittel-Hoch | S | UX | Verkürzt Flow |
 |  | P1 | Nerviges Autofit des Karten-Kameraraums | Hoch | S-M | UX Bug | Kamera springt/zoomt unerwartet und stört die Kartenbedienung |
 |  | P2 | Fortschritt Wanderabzeichen | Mittel-Hoch | M | Engagement | Motivation |
-| In Progress | P2 | Timeline letzte Besuche | Mittel | M-L | Engagement | Social/Tracking |
+| Pushed | P2 | Timeline letzte Besuche | Mittel | M-L | Engagement | Social/Tracking |
 |  | P2 | Benachrichtigungen Freundschaftsanfragen | Mittel | M | Engagement | Social |
 |  | P2 | Admin: Stempelstelle verlegt | Hoch (indirekt) | M-L | Betrieb | Datenkonsistenz kritisch |
 |  | P2 | Admin: neuer Parkplatz | Mittel | M | Betrieb | Pflege |
