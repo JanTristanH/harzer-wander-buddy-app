@@ -1,5 +1,4 @@
 import { Feather } from '@expo/vector-icons';
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
@@ -36,6 +35,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { AuthGuard } from '@/components/auth-guard';
 import { FriendsList } from '@/components/friends-list';
 import { SkeletonBlock } from '@/components/skeleton';
+import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
@@ -234,17 +234,11 @@ function StampDetailContent() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     id?: string | string[];
-    disableNavigation?: string | string[];
   }>();
   const { accessToken, logout } = useAuth();
   const claims = useIdTokenClaims<IdClaims>();
   const queryClient = useQueryClient();
   const stampId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const disableNavigationParam = Array.isArray(params.disableNavigation)
-    ? params.disableNavigation[0]
-    : params.disableNavigation;
-  const isNavigationDisabled =
-    disableNavigationParam === '1' || disableNavigationParam === 'true';
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useStampDetailQuery(stampId);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -1303,15 +1297,9 @@ function StampDetailContent() {
             ) : detail.nearbyStamps.length > 0 ? (
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
-                  disabled={isNavigationDisabled}
                   key={neighbor.ID}
-                  onPress={
-                    isNavigationDisabled ? undefined : () => router.push(`/stamps/${neighbor.ID}` as never)
-                  }
-                  style={({ pressed }) => [
-                    styles.rowItem,
-                    pressed && !isNavigationDisabled && styles.rowItemPressed,
-                  ]}>
+                  onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
+                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   {neighbor.heroImageUrl ? (
                     <Image
                       cachePolicy="disk"
@@ -1334,9 +1322,7 @@ function StampDetailContent() {
                       {formatElevationSummary(neighbor.elevationGainMeters, neighbor.elevationLossMeters)}
                     </Text>
                   </View>
-                  {!isNavigationDisabled ? (
-                    <Feather color="#8b957f" name="chevron-right" size={18} />
-                  ) : null}
+                  <Feather color="#8b957f" name="chevron-right" size={18} />
                 </Pressable>
               ))
             ) : (
@@ -1363,15 +1349,9 @@ function StampDetailContent() {
             ) : detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((parking) => (
                 <Pressable
-                  disabled={isNavigationDisabled}
                   key={parking.ID}
-                  onPress={
-                    isNavigationDisabled ? undefined : () => router.push(`/parking/${parking.ID}` as never)
-                  }
-                  style={({ pressed }) => [
-                    styles.rowItem,
-                    pressed && !isNavigationDisabled && styles.rowItemPressed,
-                  ]}>
+                  onPress={() => router.push(`/parking/${parking.ID}` as never)}
+                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   <View style={[styles.rowBadge, styles.rowBadgeParking]}>
                     <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelParking]}>P</Text>
                   </View>
@@ -1383,9 +1363,7 @@ function StampDetailContent() {
                       {formatElevationSummary(parking.elevationGainMeters, parking.elevationLossMeters)}
                     </Text>
                   </View>
-                  {!isNavigationDisabled ? (
-                    <Feather color="#8b957f" name="chevron-right" size={18} />
-                  ) : null}
+                  <Feather color="#8b957f" name="chevron-right" size={18} />
                 </Pressable>
               ))
             ) : (
@@ -1393,49 +1371,33 @@ function StampDetailContent() {
             )}
           </Section>
 
-          <Section title="Von aktueller Position">
-            {!hasSelectedStampCoordinates ? (
-              <Text style={styles.emptySectionText}>
-                Für diese Stempelstelle liegen keine Koordinaten vor.
-              </Text>
-            ) : locationState === 'idle' ? (
-              <View style={styles.routePrompt}>
-                <Text style={styles.emptySectionText}>
-                  Tippe auf den Button, um die Distanz und Höhenmeter von deinem aktuellen Standort zur Stempelstelle zu berechnen.
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    void handleRequestRouteToStamp();
-                  }}
-                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
-                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
-                  <Text style={styles.routeActionButtonLabel}>Distanz berechnen</Text>
-                </Pressable>
-              </View>
-            ) : locationState === 'denied' ? (
-              <View style={styles.routePrompt}>
-                <Text style={styles.emptySectionText}>
-                  Standortfreigabe fehlt. Erlaube den Standortzugriff und berechne die Distanz erneut.
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    void handleRequestRouteToStamp();
-                  }}
-                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
-                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
-                  <Text style={styles.routeActionButtonLabel}>Erneut versuchen</Text>
-                </Pressable>
-              </View>
-            ) : isRouteToCurrentPositionLoading ? (
-              <>
-                <SkeletonLine width="72%" />
-                <SkeletonLine width="56%" />
-              </>
-            ) : routeToCurrentPositionError ? (
-              <Text style={styles.emptySectionText}>
-                {routeToCurrentPositionErrorMessage}
-              </Text>
-            ) : routeToCurrentPosition ? (
+          <CurrentPositionDistanceSection
+            actionLabel="Distanz berechnen"
+            errorText={routeToCurrentPositionErrorMessage}
+            loadingLineWidths={['72%', '56%']}
+            noCoordinatesText="Für diese Stempelstelle liegen keine Koordinaten vor."
+            onRequestDistance={() => {
+              void handleRequestRouteToStamp();
+            }}
+            promptText="Tippe auf den Button, um die Distanz und Höhenmeter von deinem aktuellen Standort zur Stempelstelle zu berechnen."
+            retryLabel="Erneut versuchen"
+            title="Von aktueller Position"
+            status={
+              !hasSelectedStampCoordinates
+                ? 'no-coordinates'
+                : locationState === 'idle'
+                  ? 'idle'
+                  : locationState === 'denied'
+                    ? 'denied'
+                    : isRouteToCurrentPositionLoading
+                      ? 'loading'
+                      : routeToCurrentPositionError
+                        ? 'error'
+                        : routeToCurrentPosition
+                          ? 'ready'
+                          : 'error'
+            }>
+            {routeToCurrentPosition ? (
               <View style={styles.routeSummaryCard}>
                 <View style={[styles.rowBadge, styles.rowBadgeRoute]}>
                   <Feather color="#b56928" name="map-pin" size={14} />
@@ -1467,22 +1429,8 @@ function StampDetailContent() {
                   />
                 </Pressable>
               </View>
-            ) : (
-              <View style={styles.routePrompt}>
-                <Text style={styles.emptySectionText}>
-                  Route konnte noch nicht geladen werden.
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    void handleRequestRouteToStamp();
-                  }}
-                  style={({ pressed }) => [styles.routeActionButton, pressed && styles.sectionActionPressed]}>
-                  <MaterialCommunityIcons color="black" name="map-marker-distance" size={16} />
-                  <Text style={styles.routeActionButtonLabel}>Distanz berechnen</Text>
-                </Pressable>
-              </View>
-            )}
-          </Section>
+            ) : null}
+          </CurrentPositionDistanceSection>
 
           <Section title="Freunde hier gewesen">
             {showDeferredSkeletons ? (
@@ -1496,7 +1444,7 @@ function StampDetailContent() {
                   id: visit.id,
                   name: visit.name,
                   image: visit.picture,
-                  subtitle: `Zuletzt besucht: ${formatVisitDate(visit.createdAt)}`,
+                  subtitle: `Zuletzt besucht: ${formatVisitDate(getVisitTimestamp(visit))}`,
                 }))}
               />
             ) : (
@@ -1586,25 +1534,18 @@ function StampDetailContent() {
               <Feather color="#2e3a2e" name="navigation" size={16} />
               <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
             </Pressable>
-            {!isNavigationDisabled ? (
-              <Pressable
-                onPress={handleShowOnMap}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  styles.secondaryButtonHalf,
-                  styles.secondaryButtonWithIcon,
-                  pressed && styles.secondaryButtonPressed,
-                ]}>
-                <Feather color="#2e3a2e" name="map-pin" size={16} />
-                <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
-              </Pressable>
-            ) : null}
+            <Pressable
+              onPress={handleShowOnMap}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                styles.secondaryButtonHalf,
+                styles.secondaryButtonWithIcon,
+                pressed && styles.secondaryButtonPressed,
+              ]}>
+              <Feather color="#2e3a2e" name="map-pin" size={16} />
+              <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
+            </Pressable>
           </View>
-          {isNavigationDisabled ? (
-            <Text style={styles.navigationDisabledHint}>
-              Verlinkungen zu anderen Stempeln und Parkplaetzen sind hier deaktiviert.
-            </Text>
-          ) : null}
           <Pressable
             disabled={isStamping}
             onPress={handleStampVisit}
@@ -1988,25 +1929,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '600',
   },
-  routePrompt: {
-    gap: 10,
-  },
-  routeActionButton: {
-    minHeight: 42,
-    borderRadius: 12,
-    backgroundColor: '#eef4ef',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-  },
-  routeActionButtonLabel: {
-    color: '#2e3a2e',
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '600',
-  },
   rowItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2195,12 +2117,6 @@ const styles = StyleSheet.create({
     color: '#2e3a2e',
     fontSize: 13,
     lineHeight: 16,
-    textAlign: 'center',
-  },
-  navigationDisabledHint: {
-    color: '#7c8779',
-    fontSize: 11,
-    lineHeight: 14,
     textAlign: 'center',
   },
   primaryButton: {

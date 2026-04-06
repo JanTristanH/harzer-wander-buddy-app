@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import {
@@ -9,14 +10,15 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
-  Share,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
+import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
 import { SkeletonBlock } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
@@ -24,6 +26,28 @@ import { useParkingDetailQuery } from '@/lib/queries';
 
 const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
+
+function haversineDistanceKm(
+  from: { latitude: number; longitude: number },
+  to: { latitude?: number; longitude?: number }
+) {
+  if (typeof to.latitude !== 'number' || typeof to.longitude !== 'number') {
+    return null;
+  }
+
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRad(to.latitude - from.latitude);
+  const deltaLng = toRad(to.longitude - from.longitude);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRad(from.latitude)) *
+      Math.cos(toRad(to.latitude)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
@@ -136,17 +160,18 @@ function ParkingDetailContent() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     id?: string | string[];
-    disableNavigation?: string | string[];
   }>();
   const { accessToken } = useAuth();
   const parkingId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const disableNavigationParam = Array.isArray(params.disableNavigation)
-    ? params.disableNavigation[0]
-    : params.disableNavigation;
-  const isNavigationDisabled =
-    disableNavigationParam === '1' || disableNavigationParam === 'true';
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useParkingDetailQuery(parkingId);
+  const [locationState, setLocationState] = React.useState<'idle' | 'loading' | 'granted' | 'denied'>(
+    'idle'
+  );
+  const [userLocation, setUserLocation] = React.useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
 
   function handleBack() {
     if (router.canGoBack()) {
@@ -165,6 +190,39 @@ function ParkingDetailContent() {
 
     const url = `https://www.google.com/maps/search/?api=1&query=${detail.parking.latitude},${detail.parking.longitude}`;
     await Linking.openURL(url);
+  }
+
+  async function handleRequestRouteToParking() {
+    if (!detail?.parking.latitude || !detail?.parking.longitude) {
+      return;
+    }
+
+    try {
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted && permission.canAskAgain) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+
+      if (!permission.granted) {
+        setUserLocation(null);
+        setLocationState(permission.status === 'denied' ? 'denied' : 'idle');
+        return;
+      }
+
+      setLocationState('loading');
+      const currentPosition = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      setUserLocation({
+        latitude: currentPosition.coords.latitude,
+        longitude: currentPosition.coords.longitude,
+      });
+      setLocationState('granted');
+    } catch {
+      setUserLocation(null);
+      setLocationState('denied');
+    }
   }
 
   function handleShowOnMap() {
@@ -240,6 +298,14 @@ function ParkingDetailContent() {
   const heroImageUri = parking.image?.trim();
   const showDeferredSkeletons = isFetching && isPlaceholderData;
   const isPullRefreshing = isFetching && !isPending;
+  const hasParkingCoordinates =
+    typeof parking.latitude === 'number' &&
+    Number.isFinite(parking.latitude) &&
+    typeof parking.longitude === 'number' &&
+    Number.isFinite(parking.longitude);
+  const distanceToCurrentPositionKm =
+    userLocation && hasParkingCoordinates ? haversineDistanceKm(userLocation, parking) : null;
+  const isRouteToCurrentPositionLoading = locationState === 'loading';
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
@@ -301,15 +367,9 @@ function ParkingDetailContent() {
             ) : detail.nearbyStamps.length > 0 ? (
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
-                  disabled={isNavigationDisabled}
                   key={neighbor.ID}
-                  onPress={
-                    isNavigationDisabled ? undefined : () => router.push(`/stamps/${neighbor.ID}` as never)
-                  }
-                  style={({ pressed }) => [
-                    styles.rowItem,
-                    pressed && !isNavigationDisabled && styles.rowItemPressed,
-                  ]}>
+                  onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
+                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   {neighbor.heroImageUrl ? (
                     <Image
                       cachePolicy="disk"
@@ -334,9 +394,7 @@ function ParkingDetailContent() {
                       {formatElevationSummary(neighbor.elevationGainMeters, neighbor.elevationLossMeters)}
                     </Text>
                   </View>
-                  {!isNavigationDisabled ? (
-                    <Feather color="#8b957f" name="chevron-right" size={18} />
-                  ) : null}
+                  <Feather color="#8b957f" name="chevron-right" size={18} />
                 </Pressable>
               ))
             ) : (
@@ -363,17 +421,9 @@ function ParkingDetailContent() {
             ) : detail.nearbyParking.length > 0 ? (
               detail.nearbyParking.map((nearbyParking) => (
                 <Pressable
-                  disabled={isNavigationDisabled}
                   key={nearbyParking.ID}
-                  onPress={
-                    isNavigationDisabled
-                      ? undefined
-                      : () => router.push(`/parking/${nearbyParking.ID}` as never)
-                  }
-                  style={({ pressed }) => [
-                    styles.rowItem,
-                    pressed && !isNavigationDisabled && styles.rowItemPressed,
-                  ]}>
+                  onPress={() => router.push(`/parking/${nearbyParking.ID}` as never)}
+                  style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   <View style={[styles.rowBadge, styles.rowBadgeParking]}>
                     <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelParking]}>P</Text>
                   </View>
@@ -388,15 +438,60 @@ function ParkingDetailContent() {
                       )}
                     </Text>
                   </View>
-                  {!isNavigationDisabled ? (
-                    <Feather color="#8b957f" name="chevron-right" size={18} />
-                  ) : null}
+                  <Feather color="#8b957f" name="chevron-right" size={18} />
                 </Pressable>
               ))
             ) : (
               <Text style={styles.emptySectionText}>Keine Parkplätze in der Nähe gefunden.</Text>
             )}
           </Section>
+
+          <CurrentPositionDistanceSection
+            actionLabel="Distanz berechnen"
+            errorText="Route konnte noch nicht geladen werden."
+            loadingLineWidths={['72%', '56%']}
+            noCoordinatesText="Für diesen Parkplatz liegen keine Koordinaten vor."
+            onRequestDistance={() => {
+              void handleRequestRouteToParking();
+            }}
+            promptText="Tippe auf den Button, um die Distanz von deinem aktuellen Standort zum Parkplatz zu berechnen."
+            retryLabel="Erneut versuchen"
+            title="Von aktueller Position"
+            status={
+              !hasParkingCoordinates
+                ? 'no-coordinates'
+                : locationState === 'idle'
+                  ? 'idle'
+                  : locationState === 'denied'
+                    ? 'denied'
+                    : isRouteToCurrentPositionLoading
+                      ? 'loading'
+                      : userLocation && distanceToCurrentPositionKm !== null
+                        ? 'ready'
+                        : 'error'
+            }>
+            {userLocation && distanceToCurrentPositionKm !== null ? (
+              <View style={styles.routeSummaryCard}>
+                <View style={[styles.rowBadge, styles.rowBadgeRoute]}>
+                  <Feather color="#b56928" name="map-pin" size={14} />
+                </View>
+                <View style={styles.rowBody}>
+                  <Text style={styles.rowTitle}>Aktuelle Position</Text>
+                  <Text style={styles.rowMeta}>{formatDistance(distanceToCurrentPositionKm)}</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    void handleRequestRouteToParking();
+                  }}
+                  style={({ pressed }) => [
+                    styles.routeRefreshButton,
+                    pressed && styles.sectionActionPressed,
+                  ]}>
+                  <Feather color="#2e3a2e" name="rotate-cw" size={14} />
+                </Pressable>
+              </View>
+            ) : null}
+          </CurrentPositionDistanceSection>
         </View>
       </ScrollView>
 
@@ -414,19 +509,17 @@ function ParkingDetailContent() {
               <Feather color="#2e3a2e" name="navigation" size={16} />
               <Text style={styles.secondaryButtonLabel}>Navigation starten</Text>
             </Pressable>
-            {!isNavigationDisabled ? (
-              <Pressable
-                onPress={handleShowOnMap}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  styles.secondaryButtonHalf,
-                  styles.secondaryButtonWithIcon,
-                  pressed && styles.secondaryButtonPressed,
-                ]}>
-                <Feather color="#2e3a2e" name="map-pin" size={16} />
-                <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
-              </Pressable>
-            ) : null}
+            <Pressable
+              onPress={handleShowOnMap}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                styles.secondaryButtonHalf,
+                styles.secondaryButtonWithIcon,
+                pressed && styles.secondaryButtonPressed,
+              ]}>
+              <Feather color="#2e3a2e" name="map-pin" size={16} />
+              <Text style={styles.secondaryButtonLabel}>Auf Karte anzeigen</Text>
+            </Pressable>
           </View>
           <Pressable
             onPress={() => void handleShareParking()}
@@ -438,11 +531,6 @@ function ParkingDetailContent() {
             <Feather color="#2e3a2e" name="share-2" size={16} />
             <Text style={styles.secondaryButtonLabel}>Parkplatz teilen</Text>
           </Pressable>
-          {isNavigationDisabled ? (
-            <Text style={styles.navigationDisabledHint}>
-              Verlinkungen zu anderen Stempeln und Parkplaetzen sind hier deaktiviert.
-            </Text>
-          ) : null}
         </View>
       </View>
     </SafeAreaView>
@@ -622,6 +710,9 @@ const styles = StyleSheet.create({
   rowBadgeParking: {
     backgroundColor: '#e3effc',
   },
+  rowBadgeRoute: {
+    backgroundColor: '#d9e8d3',
+  },
   rowBadgeLabel: {
     fontSize: 12,
     lineHeight: 16,
@@ -650,6 +741,30 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 13,
     lineHeight: 18,
+  },
+  sectionActionPressed: {
+    opacity: 0.85,
+  },
+  routeSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    padding: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  routeRefreshButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eef2ea',
   },
   emptyNearbyStampsState: {
     alignItems: 'center',
@@ -712,12 +827,6 @@ const styles = StyleSheet.create({
     color: '#2e3a2e',
     fontSize: 13,
     lineHeight: 16,
-    textAlign: 'center',
-  },
-  navigationDisabledHint: {
-    color: '#7c8779',
-    fontSize: 11,
-    lineHeight: 14,
     textAlign: 'center',
   },
 });

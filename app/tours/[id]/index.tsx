@@ -1811,8 +1811,6 @@ export default function TourDetailScreen() {
           pathname: '/parking/[id]',
           params: {
             id: item.ID,
-            disableNavigation: '1',
-            source: 'tour',
           },
         } as never);
         return;
@@ -1828,8 +1826,6 @@ export default function TourDetailScreen() {
           pathname: '/stamps/[id]',
           params: {
             id: item.ID,
-            disableNavigation: '1',
-            source: 'tour',
           },
         } as never);
         return;
