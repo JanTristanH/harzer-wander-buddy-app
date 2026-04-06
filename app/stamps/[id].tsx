@@ -50,6 +50,11 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import {
+  replaceTimelineEntry,
+  updateTimelineEntryTimestamp,
+  upsertTimelineEntry,
+} from '@/lib/profile-timeline';
 import { queryKeys, useRouteToStampFromPositionQuery, useStampDetailQuery } from '@/lib/queries';
 
 type IdClaims = {
@@ -128,6 +133,13 @@ function formatVisitDate(value?: string) {
 
 function getVisitTimestamp(visit: { visitedAt?: string; createdAt?: string }) {
   return visit.visitedAt || visit.createdAt;
+}
+
+function getProfileTimelineEntries(profile: ProfileOverviewData) {
+  const profileWithTimeline = profile as ProfileOverviewData & { stampings?: ProfileOverviewData['latestVisits'] };
+  return Array.isArray(profileWithTimeline.stampings)
+    ? profileWithTimeline.stampings
+    : profile.latestVisits;
 }
 
 function formatEditableVisitDate(value?: string) {
@@ -414,23 +426,16 @@ function StampDetailContent() {
         return currentProfileOverview;
       }
 
-      const nextLatestVisits = currentProfileOverview.latestVisits
-        .map((visit) =>
-          visit.id === stampingId
-            ? {
-                ...visit,
-                visitedAt: nextVisitedAt,
-              }
-            : visit
-        )
-        .sort(
-          (left, right) =>
-            new Date(right.visitedAt || 0).getTime() - new Date(left.visitedAt || 0).getTime()
-        );
+      const nextStampings = updateTimelineEntryTimestamp(
+        getProfileTimelineEntries(currentProfileOverview),
+        stampingId,
+        nextVisitedAt
+      );
 
       return {
         ...currentProfileOverview,
-        latestVisits: nextLatestVisits,
+        stampings: nextStampings,
+        latestVisits: nextStampings.slice(0, 3),
       };
     });
   }
@@ -608,6 +613,14 @@ function StampDetailContent() {
           currentProfileOverview.totalCount > 0
             ? Math.round((nextVisitedCount / currentProfileOverview.totalCount) * 100)
             : 0;
+        const nextStampings = upsertTimelineEntry(getProfileTimelineEntries(currentProfileOverview), {
+          id: optimisticVisitId,
+          stampId,
+          stampNumber: stampSnapshot?.number,
+          stampName: stampSnapshot?.name || 'Stempelstelle',
+          visitedAt: nowIsoTimestamp,
+          heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+        });
 
         return {
           ...currentProfileOverview,
@@ -615,17 +628,8 @@ function StampDetailContent() {
           openCount: nextOpenCount,
           completionPercent: nextCompletionPercent,
           stamps: nextStamps,
-          latestVisits: [
-            {
-              id: optimisticVisitId,
-              stampId,
-              stampNumber: stampSnapshot?.number,
-              stampName: stampSnapshot?.name || 'Stempelstelle',
-              visitedAt: nowIsoTimestamp,
-              heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
-            },
-            ...currentProfileOverview.latestVisits,
-          ],
+          stampings: nextStampings,
+          latestVisits: nextStampings.slice(0, 3),
         };
       });
 
@@ -706,29 +710,23 @@ function StampDetailContent() {
           return currentProfileOverview;
         }
 
-        const latestVisitsWithoutOptimistic = currentProfileOverview.latestVisits.filter(
-          (visit) => visit.id !== optimisticVisitId
+        const nextStampings = replaceTimelineEntry(
+          getProfileTimelineEntries(currentProfileOverview),
+          optimisticVisitId,
+          {
+            id: persistedVisit.ID,
+            stampId,
+            stampNumber: stampSnapshot?.number,
+            stampName: stampSnapshot?.name || 'Stempelstelle',
+            visitedAt: persistedVisit.visitedAt,
+            heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+          }
         );
-        const hasPersistedVisit = latestVisitsWithoutOptimistic.some(
-          (visit) => visit.id === persistedVisit.ID
-        );
-        const nextLatestVisits = hasPersistedVisit
-          ? latestVisitsWithoutOptimistic
-          : [
-              {
-                id: persistedVisit.ID,
-                stampId,
-                stampNumber: stampSnapshot?.number,
-                stampName: stampSnapshot?.name || 'Stempelstelle',
-                visitedAt: persistedVisit.visitedAt,
-                heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
-              },
-              ...latestVisitsWithoutOptimistic,
-            ];
 
         return {
           ...currentProfileOverview,
-          latestVisits: nextLatestVisits,
+          stampings: nextStampings,
+          latestVisits: nextStampings.slice(0, 3),
         };
       });
 

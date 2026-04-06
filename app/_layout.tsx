@@ -78,6 +78,7 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="profile/edit" />
               <Stack.Screen name="profile/[userId]" />
+              <Stack.Screen name="profile/timeline/[userId]" />
               <Stack.Screen name="tours/[id]/index" />
               <Stack.Screen name="tours/[id]/edit" />
               <Stack.Screen name="stamps/[id]" />

@@ -37,6 +37,7 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
+import { replaceTimelineEntry, upsertTimelineEntry } from '@/lib/profile-timeline';
 import { queryKeys, useMapDataQuery } from '@/lib/queries';
 import { getMapSheetBottomOffset } from '@/lib/tab-bar-layout';
 
@@ -155,6 +156,13 @@ function formatVisitDate(value?: string) {
     month: '2-digit',
     year: 'numeric',
   }).format(date);
+}
+
+function getProfileTimelineEntries(profile: ProfileOverviewData) {
+  const profileWithTimeline = profile as ProfileOverviewData & { stampings?: ProfileOverviewData['latestVisits'] };
+  return Array.isArray(profileWithTimeline.stampings)
+    ? profileWithTimeline.stampings
+    : profile.latestVisits;
 }
 
 function markerColors(kind: MarkerKind) {
@@ -1134,6 +1142,7 @@ export default function MapScreen() {
           visitedAt: nowIsoTimestamp,
           heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
         };
+        const nextStampings = upsertTimelineEntry(getProfileTimelineEntries(currentProfileOverview), nextLatestVisit);
 
         return {
           ...currentProfileOverview,
@@ -1141,7 +1150,8 @@ export default function MapScreen() {
           openCount: nextOpenCount,
           completionPercent: nextCompletionPercent,
           stamps: nextStamps,
-          latestVisits: [nextLatestVisit, ...currentProfileOverview.latestVisits],
+          stampings: nextStampings,
+          latestVisits: nextStampings.slice(0, 3),
         };
       });
 
@@ -1229,29 +1239,23 @@ export default function MapScreen() {
           return currentProfileOverview;
         }
 
-        const latestVisitsWithoutOptimistic = currentProfileOverview.latestVisits.filter(
-          (visit) => visit.id !== optimisticVisitId
+        const nextStampings = replaceTimelineEntry(
+          getProfileTimelineEntries(currentProfileOverview),
+          optimisticVisitId,
+          {
+            id: persistedVisit.ID,
+            stampId,
+            stampNumber: stampSnapshot?.number,
+            stampName: stampSnapshot?.name || selectedItem.title,
+            visitedAt: persistedVisit.visitedAt,
+            heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
+          }
         );
-        const hasPersistedVisit = latestVisitsWithoutOptimistic.some(
-          (visit) => visit.id === persistedVisit.ID
-        );
-        const nextLatestVisits = hasPersistedVisit
-          ? latestVisitsWithoutOptimistic
-          : [
-              {
-                id: persistedVisit.ID,
-                stampId,
-                stampNumber: stampSnapshot?.number,
-                stampName: stampSnapshot?.name || selectedItem.title,
-                visitedAt: persistedVisit.visitedAt,
-                heroImageUrl: stampSnapshot?.heroImageUrl || stampSnapshot?.image,
-              },
-              ...latestVisitsWithoutOptimistic,
-            ];
 
         return {
           ...currentProfileOverview,
-          latestVisits: nextLatestVisits,
+          stampings: nextStampings,
+          latestVisits: nextStampings.slice(0, 3),
         };
       });
 

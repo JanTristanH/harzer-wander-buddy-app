@@ -261,6 +261,7 @@ function getCachedSelfProfileOverview(
     friendCount: friendsOverview?.friendCount ?? 0,
     collectorSinceYear: null,
     latestVisits: [],
+    stampings: [],
     featuredFriend: null,
     friends: friendsOverview?.friends ?? [],
     stamps,
@@ -501,6 +502,7 @@ export function useUserProfileOverviewQuery(targetUserId?: string) {
         sharedVisitedCount: 0,
         collectorSinceYear: null,
         latestVisits: [],
+        stampings: [],
         friends: [],
         achievements: [],
         stampBuckets: {

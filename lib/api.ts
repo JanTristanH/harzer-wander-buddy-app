@@ -185,14 +185,8 @@ export type ProfileOverviewData = {
   completionPercent: number;
   friendCount: number;
   collectorSinceYear: number | null;
-  latestVisits: {
-    id: string;
-    stampId: string;
-    stampNumber?: string;
-    stampName: string;
-    visitedAt?: string;
-    heroImageUrl?: string;
-  }[];
+  latestVisits: ProfileVisitEntry[];
+  stampings: ProfileVisitEntry[];
   featuredFriend: {
     id: string;
     name: string;
@@ -213,6 +207,15 @@ export type ProfileOverviewData = {
     label: string;
     value: string;
   }[];
+};
+
+export type ProfileVisitEntry = {
+  id: string;
+  stampId: string;
+  stampNumber?: string;
+  stampName: string;
+  visitedAt?: string;
+  heroImageUrl?: string;
 };
 
 export type LatestVisitedStamp = {
@@ -284,14 +287,8 @@ export type UserProfileOverviewData = {
   completionPercent: number;
   sharedVisitedCount: number;
   collectorSinceYear: number | null;
-  latestVisits: {
-    id: string;
-    stampId: string;
-    stampNumber?: string;
-    stampName: string;
-    visitedAt?: string;
-    heroImageUrl?: string;
-  }[];
+  latestVisits: ProfileVisitEntry[];
+  stampings: ProfileVisitEntry[];
   friends: {
     id: string;
     name: string;
@@ -2622,7 +2619,7 @@ export async function fetchProfileOverview(
           select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
           filter: buildStringEqualsFilter('createdBy', resolvedCurrentUserId),
           orderBy: 'visitedAt desc,createdAt desc',
-          top: 100,
+          top: 250,
         })
       : Promise.resolve([] as Stamping[]),
     fetchCollection<MyFriend>(accessToken, 'MyFriends', {
@@ -2640,7 +2637,7 @@ export async function fetchProfileOverview(
       const rightTime = getVisitTimestamp(right);
       return new Date(rightTime || 0).getTime() - new Date(leftTime || 0).getTime();
     });
-  const latestVisits = sortedVisits.slice(0, 3).map((visit) => {
+  const timelineVisits = sortedVisits.slice(0, 250).map((visit) => {
     const stamp = visit.stamp_ID ? stampMap.get(visit.stamp_ID) : undefined;
     return {
       id: visit.ID,
@@ -2651,6 +2648,7 @@ export async function fetchProfileOverview(
       heroImageUrl: stamp?.heroImageUrl || stamp?.image,
     };
   });
+  const latestVisits = timelineVisits.slice(0, 3);
 
   const earliestVisit = sortedVisits[sortedVisits.length - 1];
   const visitedCount = stamps.filter((stamp) => stamp.hasVisited).length;
@@ -2677,6 +2675,7 @@ export async function fetchProfileOverview(
     friendCount: friends.length,
     collectorSinceYear: earliestVisit ? new Date(getVisitTimestamp(earliestVisit) || '').getFullYear() : null,
     latestVisits,
+    stampings: timelineVisits,
     featuredFriend,
     friends: mappedFriends,
     stamps,
@@ -2709,7 +2708,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
         select: ['ID', 'visitedAt', 'createdAt', 'createdBy', 'stamp_ID'],
         filter: buildStringEqualsFilter('createdBy', targetUserId),
         orderBy: 'visitedAt desc,createdAt desc',
-        top: 200,
+        top: 250,
       }),
       fetchCollection<MyFriend>(accessToken, 'MyFriends', {
         select: [
@@ -2746,6 +2745,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       sharedVisitedCount: 0,
       collectorSinceYear: null,
       latestVisits: [],
+      stampings: [],
       friends: [],
       achievements: [],
       stampBuckets: { shared: 0, friendOnly: 0, meOnly: 0, neither: 0 },
@@ -2789,7 +2789,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
         new Date(getVisitTimestamp(right) || 0).getTime() -
         new Date(getVisitTimestamp(left) || 0).getTime()
     );
-  const latestVisitsFromStampings = sortedTargetStampings.slice(0, 3).map((visit) => {
+  const stampings = sortedTargetStampings.slice(0, 250).map((visit) => {
     const stamp = visit.stamp_ID ? stamps.find((item) => item.ID === visit.stamp_ID) : undefined;
     return {
       id: visit.ID,
@@ -2800,6 +2800,7 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
       heroImageUrl: stamp?.heroImageUrl || stamp?.image,
     };
   });
+  const latestVisitsFromStampings = stampings.slice(0, 3);
   const fallbackLatestVisits =
     latestVisitsFromStampings.length > 0
       ? latestVisitsFromStampings
@@ -2847,8 +2848,9 @@ export async function fetchUserProfileOverview(accessToken: string, targetUserId
     visitedCount: targetVisitedCount,
     completionPercent: totalCount > 0 ? Math.round((targetVisitedCount / totalCount) * 100) : 0,
     sharedVisitedCount,
-    collectorSinceYear: earliestVisit ? new Date(earliestVisit.createdAt || '').getFullYear() : null,
+    collectorSinceYear: earliestVisit ? new Date(getVisitTimestamp(earliestVisit) || '').getFullYear() : null,
     latestVisits,
+    stampings,
     friends: mappedVisibleFriends,
     achievements: [
       {

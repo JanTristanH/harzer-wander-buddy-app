@@ -20,7 +20,8 @@ import { FriendsList } from '@/components/friends-list';
 import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
-import type { Stampbox } from '@/lib/api';
+import type { ProfileVisitEntry, Stampbox } from '@/lib/api';
+import { groupTimelineEntriesByDay } from '@/lib/profile-timeline';
 
 type HeaderAction =
   | {
@@ -88,16 +89,16 @@ export type ProfileViewModel = {
     label: string;
     value: string;
   }[];
-  latestVisits: {
-    id: string;
-    stampId?: string;
-    stampNumber?: string;
-    stampName: string;
-    visitedAt?: string;
-    heroImageUrl?: string;
-  }[];
+  latestVisits: ProfileVisitEntry[];
   latestVisitsEmptyText: string;
   onVisitPress?: (stampId: string) => void;
+  timeline?: {
+    thisWeek: ProfileVisitEntry[];
+    thisMonth: ProfileVisitEntry[];
+    weekEmptyText?: string;
+    monthEmptyText?: string;
+    onOpenAll?: () => void;
+  };
   friendSummary?: {
     name: string;
     subtitle: string;
@@ -556,6 +557,14 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
 
   const hiddenStampCount = Math.max(0, filteredStamps.length - DEFAULT_VISIBLE_ITEMS);
   const hasStampSearchQuery = normalizedStampSearchQuery.length > 0;
+  const weekTimelineGroups = useMemo(
+    () => groupTimelineEntriesByDay(data.timeline?.thisWeek ?? []),
+    [data.timeline?.thisWeek]
+  );
+  const monthTimelineGroups = useMemo(
+    () => groupTimelineEntriesByDay(data.timeline?.thisMonth ?? []),
+    [data.timeline?.thisMonth]
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -744,6 +753,51 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
             <Text style={styles.emptyText}>{data.latestVisitsEmptyText}</Text>
           )}
         </ProfileSection>
+
+        {data.timeline ? (
+          <ProfileSection title="Diese Woche">
+            {weekTimelineGroups.length > 0 ? (
+              weekTimelineGroups.map((group) => (
+                <View key={group.dayKey} style={styles.timelineDayBlock}>
+                  <Text style={styles.timelineDayLabel}>{group.title}</Text>
+                  {group.items.map((visit, index) => (
+                    <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
+                  ))}
+                </View>
+              ))
+            ) : (
+              <Text style={styles.emptyText}>
+                {data.timeline.weekEmptyText || 'Keine Besuche in dieser Woche.'}
+              </Text>
+            )}
+          </ProfileSection>
+        ) : null}
+
+        {data.timeline ? (
+          <ProfileSection title="Dieser Monat">
+            {monthTimelineGroups.length > 0 ? (
+              monthTimelineGroups.map((group) => (
+                <View key={group.dayKey} style={styles.timelineDayBlock}>
+                  <Text style={styles.timelineDayLabel}>{group.title}</Text>
+                  {group.items.map((visit, index) => (
+                    <VisitRow key={visit.id} index={index} onPress={data.onVisitPress} visit={visit} />
+                  ))}
+                </View>
+              ))
+            ) : (
+              <Text style={styles.emptyText}>
+                {data.timeline.monthEmptyText || 'Keine Besuche in diesem Monat.'}
+              </Text>
+            )}
+            {data.timeline.onOpenAll ? (
+              <Pressable
+                onPress={data.timeline.onOpenAll}
+                style={({ pressed }) => [styles.expandListButton, pressed && styles.pressed]}>
+                <Text style={styles.expandListLabel}>Alle anzeigen (max. 250)</Text>
+              </Pressable>
+            ) : null}
+          </ProfileSection>
+        ) : null}
 
         {data.friendSummary ? (
           <ProfileSection title="Freunde">
@@ -1338,6 +1392,17 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 10,
     paddingVertical: 10,
+  },
+  timelineDayBlock: {
+    gap: 6,
+    marginTop: 4,
+  },
+  timelineDayLabel: {
+    color: '#4d6d56',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    paddingHorizontal: 2,
   },
   rowArtwork: {
     width: 42,

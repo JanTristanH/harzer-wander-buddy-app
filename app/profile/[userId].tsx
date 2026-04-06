@@ -16,6 +16,7 @@ import {
   updateFriendshipPermission,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { queryKeys, useUserProfileOverviewQuery } from '@/lib/queries';
 
 type ComparisonFilter = 'visited' | 'shared' | 'friendOnly' | 'meOnly' | 'neither';
@@ -107,6 +108,7 @@ export default function FriendProfileScreen() {
     });
 
     const firstName = data.name.split(' ')[0] || data.name;
+    const timelinePreview = buildTimelinePreview(data.stampings);
     const subtitleBase = data.collectorSinceYear
       ? `Wandert seit ${data.collectorSinceYear}`
       : 'Harz Wanderbuddy';
@@ -295,6 +297,13 @@ export default function FriendProfileScreen() {
       latestVisits: data.latestVisits,
       latestVisitsEmptyText: 'Dieses Profil hat noch keine Besuche.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),
+      timeline: {
+        thisWeek: timelinePreview.thisWeek,
+        thisMonth: timelinePreview.thisMonth,
+        weekEmptyText: 'Diese Woche gab es noch keine Besuche.',
+        monthEmptyText: 'In diesem Monat gab es noch keine Besuche.',
+        onOpenAll: () => router.push(`/profile/timeline/${encodeURIComponent(data.userId)}` as never),
+      },
       friendsList: {
         items: data.friends.map((friend) => ({
           id: friend.id,

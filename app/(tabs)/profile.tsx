@@ -8,6 +8,7 @@ import {
   type ProfileViewModel,
 } from '@/components/profile-view';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { useProfileOverviewQuery } from '@/lib/queries';
 
 type StampFilter = 'visited' | 'missing' | 'all';
@@ -54,6 +55,8 @@ export default function ProfileScreen() {
       return true;
     });
     const isVisitedEmptyState = activeStampFilter === 'visited' && data.visitedCount === 0;
+    const timelinePreview = buildTimelinePreview(data.stampings);
+    const timelineTargetUserId = claims?.sub || 'self';
 
     return {
       mode: 'self',
@@ -74,6 +77,14 @@ export default function ProfileScreen() {
       latestVisits: data.latestVisits,
       latestVisitsEmptyText: 'Noch keine Besuche.',
       onVisitPress: (stampId) => router.push(`/stamps/${stampId}` as never),
+      timeline: {
+        thisWeek: timelinePreview.thisWeek,
+        thisMonth: timelinePreview.thisMonth,
+        weekEmptyText: 'Diese Woche gab es noch keine Besuche.',
+        monthEmptyText: 'In diesem Monat gab es noch keine Besuche.',
+        onOpenAll: () =>
+          router.push(`/profile/timeline/${encodeURIComponent(timelineTargetUserId)}` as never),
+      },
       friendsList: {
         items: data.friends.map((friend) => ({
           id: friend.id,
