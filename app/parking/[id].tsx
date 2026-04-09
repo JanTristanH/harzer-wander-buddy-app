@@ -15,7 +15,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
 import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
@@ -161,6 +161,7 @@ function ParkingDetailContent() {
   const params = useLocalSearchParams<{
     id?: string | string[];
   }>();
+  const insets = useSafeAreaInsets();
   const { accessToken } = useAuth();
   const parkingId = Array.isArray(params.id) ? params.id[0] : params.id;
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
@@ -306,11 +307,12 @@ function ParkingDetailContent() {
   const distanceToCurrentPositionKm =
     userLocation && hasParkingCoordinates ? haversineDistanceKm(userLocation, parking) : null;
   const isRouteToCurrentPositionLoading = locationState === 'loading';
+  const bottomInset = Math.max(insets.bottom, 0);
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 180 + bottomInset }]}
         refreshControl={
           <RefreshControl
             onRefresh={() => {
@@ -495,7 +497,7 @@ function ParkingDetailContent() {
         </View>
       </ScrollView>
 
-      <View pointerEvents="box-none" style={styles.bottomDock}>
+      <View pointerEvents="box-none" style={[styles.bottomDock, { bottom: 18 + bottomInset }]}>
         <View style={styles.bottomActions}>
           <View style={styles.secondaryButtonRow}>
             <Pressable
