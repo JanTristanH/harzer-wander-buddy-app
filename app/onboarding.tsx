@@ -35,6 +35,11 @@ import {
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { type UploadableImage } from '@/lib/image-upload';
+import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 import { fetchStampsOverviewData, queryKeys } from '@/lib/queries';
 
 const bearIllustration = require('@/assets/images/onboarding-bear.png');
@@ -119,9 +124,11 @@ export default function OnboardingScreen() {
   const {
     accessToken,
     authError,
+    canPerformWrites,
     configError,
     currentUserProfile,
     hasCompletedOnboarding,
+    isOffline,
     isAuthenticated,
     login,
     signup,
@@ -259,7 +266,10 @@ export default function OnboardingScreen() {
       return;
     }
 
-    if (!accessToken) {
+    if (!accessToken || isOffline) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchLoading(false);
       return;
     }
 
@@ -300,7 +310,7 @@ export default function OnboardingScreen() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [accessToken, isSearchModalVisible, logout, searchQuery]);
+  }, [accessToken, isOffline, isSearchModalVisible, logout, searchQuery]);
 
   useEffect(() => {
     if (!accessToken || !isAuthenticated || hasPrefetchedListRef.current) {
@@ -334,6 +344,11 @@ export default function OnboardingScreen() {
   }, [accessToken, claims?.sub, isAuthenticated, logout, queryClient]);
 
   const handlePickProfileImage = useCallback(async () => {
+    if (!canPerformWrites) {
+      Alert.alert('Offline', 'Profilbilder koennen nur online geaendert werden.');
+      return;
+    }
+
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
       Alert.alert(
@@ -361,7 +376,7 @@ export default function OnboardingScreen() {
       fileName: asset.fileName || `profile-${Date.now()}.jpg`,
       mimeType: asset.mimeType || 'image/jpeg',
     });
-  }, []);
+  }, [canPerformWrites]);
 
   const handleSaveProfile = useCallback((options: SaveProfileOptions = {}): Promise<boolean> => {
     if (profileSavePromiseRef.current) {
@@ -389,10 +404,20 @@ export default function OnboardingScreen() {
         return true;
       }
 
+      if (!canPerformWrites) {
+        setProfileSaveError(OFFLINE_REFRESH_MESSAGE);
+        if (showErrorAlert) {
+          Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+        }
+        return false;
+      }
+
       setProfileSaveError(null);
       setIsProfileSaving(true);
 
       try {
+        requireOnlineForWrite(canPerformWrites, 'Profil kann nur online gespeichert werden.');
+
         let nextPicture = nextPictureFromState;
 
         if (selectedProfileImage) {
@@ -430,6 +455,14 @@ export default function OnboardingScreen() {
         setProfileSaveError(null);
         return true;
       } catch (error) {
+        if (isNetworkUnavailableError(error)) {
+          setProfileSaveError(error.message);
+          if (showErrorAlert) {
+            Alert.alert('Offline', error.message);
+          }
+          return false;
+        }
+
         if (error instanceof Error && error.name === 'UnauthorizedError') {
           await logout();
           return false;
@@ -462,6 +495,7 @@ export default function OnboardingScreen() {
     matchingCurrentUserProfile?.id,
     isAuthenticated,
     logout,
+    canPerformWrites,
     profileName,
     profilePicture,
     queryClient,
@@ -554,9 +588,9 @@ export default function OnboardingScreen() {
         return;
       }
 
-      setSubmittingUserId(userId);
-
       try {
+        requireOnlineForWrite(canPerformWrites);
+        setSubmittingUserId(userId);
         await createFriendRequest(accessToken, userId);
         const matchedUser = searchResults.find((result) => result.id === userId);
         setSentRequests((current) => {
@@ -574,6 +608,11 @@ export default function OnboardingScreen() {
           ];
         });
       } catch (error) {
+        if (isNetworkUnavailableError(error)) {
+          Alert.alert('Offline', error.message);
+          return;
+        }
+
         if (error instanceof Error && error.name === 'UnauthorizedError') {
           await logout();
           return;
@@ -587,7 +626,7 @@ export default function OnboardingScreen() {
         setSubmittingUserId(null);
       }
     },
-    [accessToken, logout, searchResults]
+    [accessToken, canPerformWrites, logout, searchResults]
   );
   const searchListItems = useMemo<FriendsListItem[]>(
     () =>
@@ -605,11 +644,11 @@ export default function OnboardingScreen() {
           actionLabel:
             status === 'sent' ? 'Gesendet' : status === 'friend' ? 'Verbunden' : 'Anfrage',
           actionMuted: status !== 'request',
-          actionDisabled: status !== 'request' || submittingUserId === result.id,
+          actionDisabled: status !== 'request' || submittingUserId === result.id || !canPerformWrites,
           onActionPress: () => void handleCreateRequest(result.id),
         };
       }),
-    [handleCreateRequest, searchResults, sentRequestIdSet, submittingUserId]
+    [canPerformWrites, handleCreateRequest, searchResults, sentRequestIdSet, submittingUserId]
   );
   const sentRequestItems = useMemo<FriendsListItem[]>(
     () =>
@@ -678,7 +717,7 @@ export default function OnboardingScreen() {
 
                 <View style={styles.profileEditor}>
                   <Pressable
-                    disabled={isProfileSaving}
+                    disabled={isProfileSaving || !canPerformWrites}
                     onPress={() => void handlePickProfileImage()}
                     style={({ pressed }) => [styles.profileAvatarButton, pressed && styles.actionButtonPressed]}>
                     {effectiveProfilePicture ? (
@@ -701,7 +740,7 @@ export default function OnboardingScreen() {
                     </Text>
                     <TextInput
                       autoCapitalize="words"
-                      editable={!isProfileSaving}
+                      editable={!isProfileSaving && canPerformWrites}
                       onChangeText={(value) => {
                         setProfileName(value);
                         setProfileSaveError(null);
@@ -713,7 +752,7 @@ export default function OnboardingScreen() {
                     />
                     <View style={styles.row}>
                       <ActionButton
-                        disabled={isProfileSaving}
+                        disabled={isProfileSaving || !canPerformWrites}
                         label="Profilbild waehlen"
                         onPress={() => void handlePickProfileImage()}
                       />
@@ -771,7 +810,7 @@ export default function OnboardingScreen() {
               Suche direkt nach Freunden und sende schon jetzt Anfragen.
             </Text>
             <ActionButton
-              disabled={!isAuthenticated || !accessToken}
+              disabled={!isAuthenticated || !accessToken || !canPerformWrites}
               label="Freunde hinzufügen"
               onPress={() => setIsSearchModalVisible(true)}
               style={styles.fullWidthButton}

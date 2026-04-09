@@ -30,6 +30,7 @@ import {
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { type UploadableImage } from '@/lib/image-upload';
+import { isNetworkUnavailableError, requireOnlineForWrite } from '@/lib/offline-write';
 import { queryKeys } from '@/lib/queries';
 
 type SelectedImage = UploadableImage;
@@ -44,7 +45,7 @@ function ProfileEditContent() {
   const router = useRouter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { accessToken, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
+  const { accessToken, canPerformWrites, logout, preloadCurrentUserProfile, setCurrentUserProfile } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims>();
   const queryClient = useQueryClient();
   const [profile, setProfile] = useState<CurrentUserProfileData | null>(null);
@@ -119,6 +120,11 @@ function ProfileEditContent() {
   }, [router]);
 
   const handlePickImage = useCallback(async () => {
+    if (!canPerformWrites) {
+      Alert.alert('Offline', 'Profilbilder koennen nur online geaendert werden.');
+      return;
+    }
+
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
       Alert.alert(
@@ -145,7 +151,7 @@ function ProfileEditContent() {
       fileName: asset.fileName || `profile-${Date.now()}.jpg`,
       mimeType: asset.mimeType || 'image/jpeg',
     });
-  }, []);
+  }, [canPerformWrites]);
 
   const handleSave = useCallback(async () => {
     if (!accessToken || !profile) {
@@ -166,6 +172,8 @@ function ProfileEditContent() {
     setIsSaving(true);
 
     try {
+      requireOnlineForWrite(canPerformWrites, 'Profil kann nur online gespeichert werden.');
+
       let nextPicture = profile.picture;
 
       if (selectedImage) {
@@ -200,6 +208,11 @@ function ProfileEditContent() {
 
       closeScreen();
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -223,6 +236,7 @@ function ProfileEditContent() {
     selectedImage,
     setCurrentUserProfile,
     trimmedName,
+    canPerformWrites,
   ]);
 
   const showLeaveDialog = useCallback((onDiscard: () => void, onSave: () => void) => {
@@ -381,10 +395,10 @@ function ProfileEditContent() {
                 </View>
               )}
 
-              <Pressable
-                disabled={isSaving}
-                onPress={() => void handlePickImage()}
-                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                  <Pressable
+                    disabled={isSaving || !canPerformWrites}
+                    onPress={() => void handlePickImage()}
+                    style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
                 <Text style={styles.secondaryButtonLabel}>Profilbild auswaehlen</Text>
               </Pressable>
             </View>
@@ -395,7 +409,7 @@ function ProfileEditContent() {
                 autoCapitalize="words"
                 autoComplete="off"
                 autoCorrect={false}
-                editable={!isSaving}
+                editable={!isSaving && canPerformWrites}
                 onChangeText={setName}
                 placeholder="Dein Name"
                 placeholderTextColor="#8A968A"
@@ -406,11 +420,11 @@ function ProfileEditContent() {
             </View>
 
             <Pressable
-              disabled={isSaving || !hasChanges}
+              disabled={isSaving || !hasChanges || !canPerformWrites}
               onPress={() => void handleSave()}
               style={({ pressed }) => [
                 styles.primaryButton,
-                (isSaving || !hasChanges) && styles.primaryButtonDisabled,
+                (isSaving || !hasChanges || !canPerformWrites) && styles.primaryButtonDisabled,
                 pressed && styles.pressed,
               ]}>
               {isSaving ? (

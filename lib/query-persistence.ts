@@ -13,7 +13,7 @@ export const queryPersister = createAsyncStoragePersister({
 export const queryPersistOptions = {
   persister: queryPersister,
   maxAge: QUERY_PERSISTENCE_MAX_AGE_MS,
-  buster: 'v1',
+  buster: 'v2-offline-core-sync',
 };
 
 export async function clearPersistedQueryCache() {

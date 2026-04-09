@@ -5,11 +5,11 @@
 | Fix Pushed | P0 | Speichern überholt sich (Race Conditions) | Sehr hoch | M-L | Stabilität | App aktuell unbenutzbar |
 | Fix Pushed | P0 | Logout bei App-Neustart | Sehr hoch | M | Stabilität | Vertrauensbruch, besonders kritisch offline |
 | In Progress | P0 | Samsung: keine Nutzung über mobile Daten | Sehr hoch | M-L | Stabilität | Outdoor-Use-Case blockiert |
-|  | P0 | Kein Offline-Modus (Basisfunktionalität) | Sehr hoch | L-XL | Core Feature | Kernanforderung für Wander-App |
+| Pushed | P0 | Kein Offline-Modus (Basisfunktionalität) | Sehr hoch | L-XL | Core Feature | Kernanforderung für Wander-App |
 | Fix Pushed(Full Update) | P1 | Bilder werden ständig neu geladen | Hoch | M | Performance/UX | Datenverbrauch + Akku |
 | Fix Pushed | P1 | Suche nach Ortsnamen | Hoch | M | Core UX | Einstieg in Nutzung |
 |  | P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Schneller, spürbarer Gewinn |
-|  | P1 | Detailsansicht kollidiert mit Android-Navigation | Hoch | S-M | UX Bug | Hauptflow betroffen |
+| Pushed | P1 | Detailsansicht kollidiert mit Android-Navigation | Hoch | S-M | UX Bug | Hauptflow betroffen |
 | Fix Pushed | P1 | Entfernung + Höhenmeter zum Stempel | Hoch | M | Core Feature | Sehr relevant unterwegs |
 |  | P1 | Bottom Sheet kleiner beim Kartenbewegen | Mittel-Hoch | S-M | UX | Kartenbedienung |
 |  | P1 | Vom Parkplatz direkt starten (Bottom Sheet) | Mittel-Hoch | S | UX | Verkürzt Flow |

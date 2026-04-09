@@ -51,6 +51,11 @@ import {
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
+import {
   replaceTimelineEntry,
   updateTimelineEntryTimestamp,
   upsertTimelineEntry,
@@ -117,6 +122,43 @@ function formatElevationSummary(elevationGainMeters: number | null, elevationLos
   }
 
   return parts.length > 0 ? ` • ${parts.join(' ')}` : '';
+}
+
+function haversineDistanceKm(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number }
+) {
+  const EARTH_RADIUS_KM = 6371;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const deltaLat = toRadians(to.latitude - from.latitude);
+  const deltaLng = toRadians(to.longitude - from.longitude);
+  const lat1 = toRadians(from.latitude);
+  const lat2 = toRadians(to.latitude);
+  const haversine =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+  const centralAngle = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return EARTH_RADIUS_KM * centralAngle;
+}
+
+function estimateDurationMinutes(distanceKm: number) {
+  const WALKING_SPEED_KMH = 4.6;
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.round((distanceKm / WALKING_SPEED_KMH) * 60));
+}
+
+function createOfflineRouteToStampMetrics(distanceKm: number) {
+  const safeDistanceKm = Number.isFinite(distanceKm) ? Math.max(distanceKm, 0) : 0;
+  const durationMinutes = estimateDurationMinutes(safeDistanceKm);
+  return {
+    distanceMeters: Math.round(safeDistanceKm * 1000),
+    durationSeconds: Math.max(60, durationMinutes * 60),
+    elevationGainMeters: 0,
+    elevationLossMeters: 0,
+  };
 }
 
 function formatVisitDate(value?: string) {
@@ -247,7 +289,7 @@ function StampDetailContent() {
   const params = useLocalSearchParams<{
     id?: string | string[];
   }>();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, canPerformWrites, isOffline, logout } = useAuth();
   const claims = useIdTokenClaims<IdClaims>();
   const queryClient = useQueryClient();
   const stampId = Array.isArray(params.id) ? params.id[0] : params.id;
@@ -474,6 +516,8 @@ function StampDetailContent() {
     setIsStamping(true);
 
     try {
+      requireOnlineForWrite(canPerformWrites, 'Stempeln ist nur online verfuegbar.');
+
       await Promise.all([
         queryClient.cancelQueries({ queryKey: mapDataKey }),
         queryClient.cancelQueries({ queryKey: stampsOverviewKey }),
@@ -735,6 +779,11 @@ function StampDetailContent() {
       setIsStampSuccessToastVisible(true);
     } catch (nextError) {
       rollbackOptimisticUpdates();
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -754,12 +803,17 @@ function StampDetailContent() {
       return;
     }
 
-    setBusyVisitId(stampingId);
-
     try {
+      requireOnlineForWrite(canPerformWrites, 'Besuche koennen nur online geloescht werden.');
+      setBusyVisitId(stampingId);
       await deleteStamping(accessToken, stampingId);
       await refreshAfterVisitMutation();
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -775,6 +829,11 @@ function StampDetailContent() {
   }
 
   function confirmDeleteVisit(stampingId: string) {
+    if (!canPerformWrites) {
+      Alert.alert('Offline', 'Besuche koennen nur online geloescht werden.');
+      return;
+    }
+
     Alert.alert(
       'Besuch löschen?',
       'Dieser Besuchseintrag wird dauerhaft entfernt.',
@@ -805,6 +864,7 @@ function StampDetailContent() {
     }
 
     try {
+      requireOnlineForWrite(canPerformWrites, 'Besuche koennen nur online bearbeitet werden.');
       setBusyVisitId(stampingId);
       setVisitDrafts((current) => ({
         ...current,
@@ -814,6 +874,11 @@ function StampDetailContent() {
       updateVisitDateCaches(stampingId, updatedStamping.visitedAt || nextVisitedAt);
       await refreshAfterVisitMutation();
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -829,6 +894,11 @@ function StampDetailContent() {
   }
 
   function handleToggleVisitEditing() {
+    if (!canPerformWrites && !isEditingVisits) {
+      Alert.alert('Offline', 'Besuche koennen nur online bearbeitet werden.');
+      return;
+    }
+
     setIsEditingVisits((current) => !current);
   }
 
@@ -892,13 +962,32 @@ function StampDetailContent() {
       : null;
   const hasSelectedStampCoordinates =
     selectedStampLatitude !== null && selectedStampLongitude !== null;
-  const routeToCurrentPosition = routeToCurrentPositionQuery.data ?? null;
+  const offlineRouteToCurrentPosition = useMemo(() => {
+    if (
+      !isOffline ||
+      !userLocation ||
+      selectedStampLatitude === null ||
+      selectedStampLongitude === null
+    ) {
+      return null;
+    }
+
+    const distanceKm = haversineDistanceKm(userLocation, {
+      latitude: selectedStampLatitude,
+      longitude: selectedStampLongitude,
+    });
+
+    return createOfflineRouteToStampMetrics(distanceKm);
+  }, [isOffline, selectedStampLatitude, selectedStampLongitude, userLocation]);
+  const routeToCurrentPosition = routeToCurrentPositionQuery.data ?? offlineRouteToCurrentPosition;
+  const hasOfflineRouteFallback = routeToCurrentPositionQuery.data == null && offlineRouteToCurrentPosition !== null;
   const isRouteToCurrentPositionLoading =
     locationState === 'loading' ||
     (hasSelectedStampCoordinates &&
       locationState === 'granted' &&
-      routeToCurrentPositionQuery.isPending);
-  const routeToCurrentPositionError = routeToCurrentPositionQuery.error;
+      routeToCurrentPositionQuery.isPending &&
+      !hasOfflineRouteFallback);
+  const routeToCurrentPositionError = hasOfflineRouteFallback ? null : routeToCurrentPositionQuery.error;
   const routeToCurrentPositionErrorMessage =
     routeToCurrentPositionError instanceof Error
       ? routeToCurrentPositionError.message
@@ -1198,6 +1287,11 @@ function StampDetailContent() {
         refreshControl={
           <RefreshControl
             onRefresh={() => {
+              if (isOffline) {
+                Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+                return;
+              }
+
               void refetch();
             }}
             refreshing={isPullRefreshing}
@@ -1411,14 +1505,22 @@ function StampDetailContent() {
                   </Text>
                 </View>
                 <Pressable
-                  disabled={routeToCurrentPositionQuery.isFetching}
+                  disabled={routeToCurrentPositionQuery.isFetching || isOffline}
                   onPress={() => {
+                    if (isOffline) {
+                      Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+                      return;
+                    }
+
                     void routeToCurrentPositionQuery.refetch();
                   }}
                   style={({ pressed }) => [
                     styles.routeRefreshButton,
-                    routeToCurrentPositionQuery.isFetching && styles.routeRefreshButtonDisabled,
-                    pressed && !routeToCurrentPositionQuery.isFetching && styles.sectionActionPressed,
+                    (routeToCurrentPositionQuery.isFetching || isOffline) && styles.routeRefreshButtonDisabled,
+                    pressed &&
+                    !routeToCurrentPositionQuery.isFetching &&
+                    !isOffline &&
+                    styles.sectionActionPressed,
                   ]}>
                   <Feather
                     color="#2e3a2e"
@@ -1455,12 +1557,12 @@ function StampDetailContent() {
             action={
               detail.myVisits.length > 0 ? (
                 <Pressable
-                  disabled={!!busyVisitId}
+                  disabled={!!busyVisitId || !canPerformWrites}
                   onPress={handleToggleVisitEditing}
                   style={({ pressed }) => [
                     styles.sectionAction,
-                    busyVisitId && styles.visitActionDisabled,
-                    pressed && styles.sectionActionPressed,
+                    (busyVisitId || !canPerformWrites) && styles.visitActionDisabled,
+                    pressed && canPerformWrites && styles.sectionActionPressed,
                   ]}>
                   <Text style={styles.sectionActionLabel}>
                     {isEditingVisits ? 'Fertig' : 'Bearbeiten'}
@@ -1479,10 +1581,15 @@ function StampDetailContent() {
                   {isEditingVisits ? (
                     <View style={styles.visitInlineRow}>
                       <Pressable
+                        disabled={busyVisitId === visit.ID || !canPerformWrites}
                         onPress={() => openVisitPicker(visit.ID, visitDrafts[visit.ID])}
                         style={({ pressed }) => [
                           styles.visitPickerButton,
-                          pressed && styles.sectionActionPressed,
+                          (busyVisitId === visit.ID || !canPerformWrites) && styles.visitActionDisabled,
+                          pressed &&
+                          busyVisitId !== visit.ID &&
+                          canPerformWrites &&
+                          styles.sectionActionPressed,
                         ]}>
                         <Text style={styles.visitPickerLabel}>
                           {visitDrafts[visit.ID]
@@ -1492,14 +1599,17 @@ function StampDetailContent() {
                         <Feather color="#637062" name="calendar" size={16} />
                       </Pressable>
                       <Pressable
-                        disabled={busyVisitId === visit.ID}
+                        disabled={busyVisitId === visit.ID || !canPerformWrites}
                         onPress={() => confirmDeleteVisit(visit.ID)}
                         style={({ pressed }) => [
                           styles.visitActionButton,
                           styles.visitDeleteButton,
                           styles.visitInlineAction,
-                          pressed && busyVisitId !== visit.ID && styles.sectionActionPressed,
-                          busyVisitId === visit.ID && styles.visitActionDisabled,
+                          pressed &&
+                          busyVisitId !== visit.ID &&
+                          canPerformWrites &&
+                          styles.sectionActionPressed,
+                          (busyVisitId === visit.ID || !canPerformWrites) && styles.visitActionDisabled,
                         ]}>
                         <Text style={styles.visitDeleteLabel}>Löschen</Text>
                       </Pressable>
@@ -1545,13 +1655,13 @@ function StampDetailContent() {
             </Pressable>
           </View>
           <Pressable
-            disabled={isStamping}
+            disabled={isStamping || !canPerformWrites}
             onPress={handleStampVisit}
             style={({ pressed }) => [
               styles.primaryButton,
               styles.primaryButtonWithIcon,
-              isStamping && styles.primaryButtonDisabled,
-              pressed && !isStamping && styles.primaryButtonPressed,
+              (isStamping || !canPerformWrites) && styles.primaryButtonDisabled,
+              pressed && !isStamping && canPerformWrites && styles.primaryButtonPressed,
             ]}>
             <Feather color="#f5f3ee" name={visited ? 'refresh-cw' : 'check-circle'} size={16} />
             <Text style={styles.primaryButtonLabel}>

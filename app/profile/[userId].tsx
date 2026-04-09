@@ -16,6 +16,11 @@ import {
   updateFriendshipPermission,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { queryKeys, useUserProfileOverviewQuery } from '@/lib/queries';
 
@@ -26,7 +31,7 @@ export default function FriendProfileScreen() {
   const params = useLocalSearchParams<{ userId?: string | string[] }>();
   const userIdParam = Array.isArray(params.userId) ? params.userId[0] : params.userId;
   const userId = userIdParam ? decodeURIComponent(userIdParam) : '';
-  const { accessToken, logout } = useAuth();
+  const { accessToken, canPerformWrites, isOffline, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<ComparisonFilter>('visited');
@@ -44,6 +49,11 @@ export default function FriendProfileScreen() {
 
   const handleMutationError = useCallback(
     async (nextError: unknown, title: string) => {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
         return;
@@ -143,16 +153,16 @@ export default function FriendProfileScreen() {
               statusLabel: 'Verbunden',
               toggleLabel: 'Darf fuer mich stempeln',
               value: data.isAllowedToStampForMe,
-              busy: isMutating,
+              busy: isMutating || !canPerformWrites,
               onToggle: (value) => {
                 void (async () => {
                   if (!accessToken || !data.friendshipId) {
                     return;
                   }
 
-                  setIsMutating(true);
-
                   try {
+                    requireOnlineForWrite(canPerformWrites);
+                    setIsMutating(true);
                     await updateFriendshipPermission(accessToken, data.friendshipId, value);
                     await refetch();
                     await invalidateRelationshipQueries();
@@ -182,9 +192,9 @@ export default function FriendProfileScreen() {
                       style: 'destructive',
                       onPress: () => {
                         void (async () => {
-                          setIsMutating(true);
-
                           try {
+                            requireOnlineForWrite(canPerformWrites);
+                            setIsMutating(true);
                             await removeFriendship(accessToken, data.friendshipId!);
                             await refetch();
                             await invalidateRelationshipQueries();
@@ -205,15 +215,16 @@ export default function FriendProfileScreen() {
                 type: 'button',
                 label: 'Anfrage annehmen',
                 busy: isMutating,
+                disabled: !canPerformWrites,
                 onPress: () => {
                   void (async () => {
                     if (!accessToken || !data.pendingRequestId) {
                       return;
                     }
 
-                    setIsMutating(true);
-
                     try {
+                      requireOnlineForWrite(canPerformWrites);
+                      setIsMutating(true);
                       await acceptPendingFriendshipRequest(accessToken, data.pendingRequestId);
                       await refetch();
                       await invalidateRelationshipQueries();
@@ -231,6 +242,7 @@ export default function FriendProfileScreen() {
                   label: 'Zurueckrufen',
                   muted: true,
                   busy: isMutating,
+                  disabled: !canPerformWrites,
                   onPress: () => {
                     if (!accessToken || !data.friendshipId) {
                       return;
@@ -249,9 +261,9 @@ export default function FriendProfileScreen() {
                           style: 'destructive',
                           onPress: () => {
                             void (async () => {
-                              setIsMutating(true);
-
                               try {
+                                requireOnlineForWrite(canPerformWrites);
+                                setIsMutating(true);
                                 await removeFriendship(accessToken, data.friendshipId!);
                                 await refetch();
                                 await invalidateRelationshipQueries();
@@ -274,15 +286,16 @@ export default function FriendProfileScreen() {
                   type: 'button',
                   label: 'Als Freund hinzufuegen',
                   busy: isMutating,
+                  disabled: !canPerformWrites,
                   onPress: () => {
                     void (async () => {
                       if (!accessToken) {
                         return;
                       }
 
-                      setIsMutating(true);
-
                       try {
+                        requireOnlineForWrite(canPerformWrites);
+                        setIsMutating(true);
                         await createFriendRequest(accessToken, data.userId);
                         await refetch();
                         await invalidateRelationshipQueries();
@@ -335,6 +348,10 @@ export default function FriendProfileScreen() {
         void (async () => {
           setIsPullRefreshing(true);
           try {
+            if (isOffline) {
+              Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+              return;
+            }
             await refetch();
           } finally {
             setIsPullRefreshing(false);
@@ -346,7 +363,7 @@ export default function FriendProfileScreen() {
         isFetching && !isPending ? 'Aktualisiere Profildaten im Hintergrund...' : undefined,
       showDeferredSkeletons: isPlaceholderData,
     };
-  }, [accessToken, activeFilter, data, handleMutationError, invalidateRelationshipQueries, isFetching, isMutating, isPending, isPlaceholderData, isPullRefreshing, refetch, router]);
+  }, [accessToken, activeFilter, canPerformWrites, data, handleMutationError, invalidateRelationshipQueries, isFetching, isMutating, isOffline, isPending, isPlaceholderData, isPullRefreshing, refetch, router]);
 
   if (!userId) {
     return <ProfileErrorState body="Keine Benutzer-ID uebergeben." title="Profil konnte nicht geladen werden" />;

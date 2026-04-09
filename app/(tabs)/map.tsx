@@ -36,7 +36,13 @@ import {
   type VisitStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useConnectivity } from '@/lib/connectivity';
 import { getPreGeneratedMapMarkerImageSource } from '@/lib/map-marker-images.generated';
+import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 import { replaceTimelineEntry, upsertTimelineEntry } from '@/lib/profile-timeline';
 import { queryKeys, useMapDataQuery } from '@/lib/queries';
 import { getMapSheetBottomOffset } from '@/lib/tab-bar-layout';
@@ -329,6 +335,23 @@ function formatElevationSummary(elevationGainMeters: number | null, elevationLos
   return parts.length > 0 ? ` • ${parts.join(' ')}` : '';
 }
 
+function estimateDurationMinutes(distanceKm: number | null) {
+  if (distanceKm === null || !Number.isFinite(distanceKm)) {
+    return null;
+  }
+
+  return Math.max(1, Math.round((distanceKm / 4) * 60));
+}
+
+function createOfflineRouteMetrics(distanceKm: number | null) {
+  return {
+    distanceKm,
+    durationMinutes: estimateDurationMinutes(distanceKm),
+    elevationGainMeters: null,
+    elevationLossMeters: null,
+  } satisfies RouteMetrics;
+}
+
 function zoomRegion(region: Region, factor: number) {
   return {
     ...region,
@@ -450,7 +473,8 @@ export default function MapScreen() {
     stampId?: string | string[];
     parkingId?: string | string[];
   }>();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, canPerformWrites, logout } = useAuth();
+  const { isOnline } = useConnectivity();
   const claims = useIdTokenClaims<AuthClaims>();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -721,7 +745,7 @@ export default function MapScreen() {
     }
 
     const normalizedQuery = normalizeSearchValue(searchQuery);
-    if (normalizedQuery.length < 3 || !accessToken) {
+    if (!isOnline || normalizedQuery.length < 3 || !accessToken) {
       setRemoteSearchResults([]);
       setIsRemoteSearchLoading(false);
       setRemoteSearchError(null);
@@ -772,7 +796,7 @@ export default function MapScreen() {
       isCancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [accessToken, isSearchFocused, logout, searchQuery]);
+  }, [accessToken, isOnline, isSearchFocused, logout, searchQuery]);
 
   const nearestCounterpart = useMemo<NearestCounterpart | null>(() => {
     if (!selectedItem) {
@@ -840,27 +864,43 @@ export default function MapScreen() {
     let isMounted = true;
     setNearestRouteMetrics(null);
 
-    if (!accessToken || !selectedItem || !nearestCounterpart) {
+    if (!selectedItem || !nearestCounterpart) {
       return () => {
         isMounted = false;
       };
     }
+
+    if (!isOnline || !accessToken) {
+      setNearestRouteMetrics(createOfflineRouteMetrics(nearestCounterpart.distanceKm));
+      return () => {
+        isMounted = false;
+      };
+    }
+
     const authToken: string = accessToken;
     const counterpart: NearestCounterpart = nearestCounterpart;
 
     async function loadNearestRouteMetrics() {
-      const metrics = await fetchRouteMetrics(
-        authToken,
-        counterpart.fromPoiId,
-        counterpart.toPoiId,
-        counterpart.distanceKm
-      );
+      try {
+        const metrics = await fetchRouteMetrics(
+          authToken,
+          counterpart.fromPoiId,
+          counterpart.toPoiId,
+          counterpart.distanceKm
+        );
 
-      if (!isMounted) {
-        return;
+        if (!isMounted) {
+          return;
+        }
+
+        setNearestRouteMetrics(metrics);
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+
+        setNearestRouteMetrics(createOfflineRouteMetrics(counterpart.distanceKm));
       }
-
-      setNearestRouteMetrics(metrics);
     }
 
     void loadNearestRouteMetrics();
@@ -868,7 +908,7 @@ export default function MapScreen() {
     return () => {
       isMounted = false;
     };
-  }, [accessToken, nearestCounterpart, selectedItem]);
+  }, [accessToken, isOnline, nearestCounterpart, selectedItem]);
 
   const nearestCounterpartMeta = useMemo(() => {
     if (!nearestCounterpart) {
@@ -1016,9 +1056,10 @@ export default function MapScreen() {
     };
     let rollbackOptimisticUpdates = () => undefined;
 
-    setIsStamping(true);
-
     try {
+      requireOnlineForWrite(canPerformWrites);
+      setIsStamping(true);
+
       await Promise.all([
         queryClient.cancelQueries({ queryKey: mapDataKey }),
         queryClient.cancelQueries({ queryKey: stampsOverviewKey }),
@@ -1309,6 +1350,11 @@ export default function MapScreen() {
         .catch(() => undefined);
       setIsStampSuccessToastVisible(true);
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       rollbackOptimisticUpdates();
       if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
         await logout();
@@ -1322,7 +1368,7 @@ export default function MapScreen() {
     } finally {
       setIsStamping(false);
     }
-  }, [accessToken, claims?.sub, data?.stamps, isStamping, logout, queryClient, selectedItem]);
+  }, [accessToken, canPerformWrites, claims?.sub, data?.stamps, isStamping, logout, queryClient, selectedItem]);
 
   const focusItemOnMap = useCallback((item: MarkerItem) => {
     lastMarkerPressAtRef.current = Date.now();
@@ -1460,16 +1506,24 @@ export default function MapScreen() {
       return true;
     }
 
-    return isStamping || selectedItem.kind === 'visited-stamp' || !accessToken;
-  }, [accessToken, isStamping, selectedItem]);
+    return isStamping || selectedItem.kind === 'visited-stamp' || !accessToken || !canPerformWrites;
+  }, [accessToken, canPerformWrites, isStamping, selectedItem]);
 
   const handleManualRefresh = useCallback(() => {
+    if (!isOnline) {
+      Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+      return;
+    }
+
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.stampsOverview(claims?.sub) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.mapData(claims?.sub) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
     ]);
-  }, [claims?.sub, queryClient]);
+  }, [claims?.sub, isOnline, queryClient]);
+
+  const showOfflineSearchHint =
+    isSearchFocused && !isOnline && normalizeSearchValue(searchQuery).length >= 3;
 
   return (
     <View style={styles.screen}>
@@ -1671,7 +1725,8 @@ export default function MapScreen() {
             (localSearchResults.length > 0 ||
               remoteSearchResults.length > 0 ||
               isRemoteSearchLoading ||
-              remoteSearchError) ? (
+              remoteSearchError ||
+              showOfflineSearchHint) ? (
               <View style={styles.searchResultsPopover}>
                 {localSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Kartenpunkte</Text> : null}
                 {localSearchResults.map((item) => (
@@ -1703,6 +1758,9 @@ export default function MapScreen() {
                 ))}
                 {isRemoteSearchLoading ? (
                   <Text style={styles.searchStatusText}>Suche Orte...</Text>
+                ) : null}
+                {showOfflineSearchHint ? (
+                  <Text style={styles.searchStatusText}>Offline: nur lokale Treffer werden angezeigt.</Text>
                 ) : null}
                 {!isRemoteSearchLoading && remoteSearchError ? (
                   <Text style={styles.searchStatusText}>{remoteSearchError}</Text>

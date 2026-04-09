@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
+import { Alert } from 'react-native';
 
 import {
   ProfileErrorState,
@@ -8,6 +9,7 @@ import {
   type ProfileViewModel,
 } from '@/components/profile-view';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { OFFLINE_REFRESH_MESSAGE } from '@/lib/offline-write';
 import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { useProfileOverviewQuery } from '@/lib/queries';
 
@@ -22,7 +24,7 @@ const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.pn
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { currentUserProfile, logout, resetApp } = useAuth();
+  const { currentUserProfile, isOffline, logout, resetApp } = useAuth();
   const claims = useIdTokenClaims<ProfileClaims & { sub?: string }>();
   const matchingCurrentUserProfile =
     claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
@@ -112,6 +114,10 @@ export default function ProfileScreen() {
         void (async () => {
           setIsPullRefreshing(true);
           try {
+            if (isOffline) {
+              Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+              return;
+            }
             await refetch();
           } finally {
             setIsPullRefreshing(false);
@@ -147,6 +153,7 @@ export default function ProfileScreen() {
     matchingCurrentUserProfile?.picture,
     data,
     isFetching,
+    isOffline,
     isPending,
     isPlaceholderData,
     isPullRefreshing,

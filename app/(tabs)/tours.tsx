@@ -19,7 +19,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { SkeletonBlock } from '@/components/skeleton';
 import type { Tour } from '@/lib/api';
-import { useIdTokenClaims } from '@/lib/auth';
+import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 import { getFloatingActionBottomOffset } from '@/lib/tab-bar-layout';
 import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
 
@@ -169,6 +174,7 @@ export default function ToursTabScreen() {
   const insets = useSafeAreaInsets();
   const floatingActionBottom = getFloatingActionBottomOffset(insets.bottom);
   const { width: windowWidth } = useWindowDimensions();
+  const { canPerformWrites, isOffline } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
   const normalizedCurrentUserId = useMemo(() => normalizeUserId(currentUserId), [currentUserId]);
@@ -179,6 +185,7 @@ export default function ToursTabScreen() {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const { data, error, isPending, isFetching, refetch } = useToursOverviewQuery();
   const createTourMutation = useCreateTourMutation();
+  const isCreateDisabled = createTourMutation.isPending || !canPerformWrites;
   const tours = useMemo(() => data ?? [], [data]);
   const sortPopoverWidth = useMemo(() => Math.min(300, Math.max(windowWidth - 32, 0)), [windowWidth]);
 
@@ -277,6 +284,7 @@ export default function ToursTabScreen() {
 
   const handleQuickstart = async (options?: { startInEditMode?: boolean }) => {
     try {
+      requireOnlineForWrite(canPerformWrites);
       const created = await createTourMutation.mutateAsync({
         name: 'Neue Tour',
         idListTravelTimes: '',
@@ -289,6 +297,11 @@ export default function ToursTabScreen() {
 
       handleOpenTour(created);
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       Alert.alert(
         'Tour konnte nicht erstellt werden',
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
@@ -309,10 +322,10 @@ export default function ToursTabScreen() {
             <Pressable
               accessibilityLabel="Neue Tour planen"
               accessibilityRole="button"
-              disabled={createTourMutation.isPending}
+              disabled={isCreateDisabled}
               onPress={() => void handleQuickstart({ startInEditMode: true })}
               style={({ pressed }) => [
-                createTourMutation.isPending && styles.quickstartCardDisabled,
+                isCreateDisabled && styles.quickstartCardDisabled,
                 pressed && styles.pressed,
               ]}>
               <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
@@ -416,10 +429,10 @@ export default function ToursTabScreen() {
             <Pressable
               accessibilityLabel="Neue Tour planen"
               accessibilityRole="button"
-              disabled={createTourMutation.isPending}
+              disabled={isCreateDisabled}
               onPress={() => void handleQuickstart({ startInEditMode: true })}
               style={({ pressed }) => [
-                createTourMutation.isPending && styles.quickstartCardDisabled,
+                isCreateDisabled && styles.quickstartCardDisabled,
                 pressed && styles.pressed,
               ]}>
               <LinearGradient colors={['#3f8158', '#60926f', '#d2c18f']} style={styles.quickstartCard}>
@@ -478,13 +491,17 @@ export default function ToursTabScreen() {
           <RefreshControl
             onRefresh={() => {
               void (async () => {
-                setIsPullRefreshing(true);
-                try {
-                  await refetch();
-                } finally {
-                  setIsPullRefreshing(false);
-                }
-              })();
+                  setIsPullRefreshing(true);
+                  try {
+                    if (isOffline) {
+                      Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+                      return;
+                    }
+                    await refetch();
+                  } finally {
+                    setIsPullRefreshing(false);
+                  }
+                })();
             }}
             refreshing={isPullRefreshing}
             tintColor="#2e6b4b"
@@ -504,12 +521,12 @@ export default function ToursTabScreen() {
 
       <Pressable
         accessibilityLabel="Neue Tour erstellen"
-        disabled={createTourMutation.isPending}
+        disabled={isCreateDisabled}
         onPress={() => void handleQuickstart({ startInEditMode: true })}
         style={({ pressed }) => [
           styles.floatingAddButton,
           { bottom: floatingActionBottom },
-          createTourMutation.isPending && styles.floatingAddButtonDisabled,
+          isCreateDisabled && styles.floatingAddButtonDisabled,
           pressed && styles.pressed,
         ]}>
         <Feather color="#F5F3EE" name="plus" size={24} />

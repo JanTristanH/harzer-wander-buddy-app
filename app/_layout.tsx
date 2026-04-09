@@ -11,9 +11,12 @@ import { AppState, type AppStateStatus, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
+import { OfflineBanner } from '@/components/offline-banner';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { AuthProvider, useAuth } from '@/lib/auth';
-import { clearPersistedQueryCache, queryPersistOptions } from '@/lib/query-persistence';
+import { AuthProvider, useAuth, useIdTokenClaims } from '@/lib/auth';
+import { ConnectivityProvider, configureQueryOnlineManager, useConnectivity } from '@/lib/connectivity';
+import { runCoreOfflineSync } from '@/lib/core-offline-sync';
+import { queryPersistOptions } from '@/lib/query-persistence';
 import { queryClient } from '@/lib/query-client';
 
 function QueryFocusBridge() {
@@ -34,31 +37,42 @@ function QueryFocusBridge() {
   return null;
 }
 
-function QueryAuthBridge() {
+function CoreOfflineSyncBridge() {
   const queryClient = useQueryClient();
-  const { accessToken, isAuthenticated, isLoading } = useAuth();
-  const hasBeenAuthenticatedRef = useRef(false);
+  const { accessToken, currentUserProfile, isAuthenticated } = useAuth();
+  const { isOnline } = useConnectivity();
+  const claims = useIdTokenClaims<{ sub?: string }>();
+  const syncSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (isLoading) {
+    if (!isAuthenticated || !accessToken || !isOnline) {
       return;
     }
 
-    const isCurrentlyAuthenticated = Boolean(accessToken && isAuthenticated);
-
-    if (!isCurrentlyAuthenticated) {
-      if (hasBeenAuthenticatedRef.current || queryClient.getQueryCache().getAll().length > 0) {
-        queryClient.clear();
-        void clearPersistedQueryCache();
-      }
-      hasBeenAuthenticatedRef.current = false;
+    const signature = `${claims?.sub ?? 'anonymous'}:${accessToken.slice(-10)}`;
+    if (syncSignatureRef.current === signature) {
       return;
     }
 
-    if (isCurrentlyAuthenticated) {
-      hasBeenAuthenticatedRef.current = true;
-    }
-  }, [accessToken, isAuthenticated, isLoading, queryClient]);
+    syncSignatureRef.current = signature;
+
+    void runCoreOfflineSync({
+      queryClient,
+      accessToken,
+      userId: claims?.sub,
+      currentUserProfile:
+        claims?.sub && currentUserProfile?.id === claims.sub
+          ? {
+              id: currentUserProfile.id,
+              name: currentUserProfile.name,
+              picture: currentUserProfile.picture,
+            }
+          : null,
+    }).catch((error) => {
+      syncSignatureRef.current = null;
+      console.warn('Failed to run core offline sync', error);
+    });
+  }, [accessToken, claims?.sub, currentUserProfile, isAuthenticated, isOnline, queryClient]);
 
   return null;
 }
@@ -66,30 +80,37 @@ function QueryAuthBridge() {
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
+  useEffect(() => {
+    configureQueryOnlineManager();
+  }, []);
+
   return (
     <PersistQueryClientProvider client={queryClient} persistOptions={queryPersistOptions}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <AuthProvider>
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="index" />
-              <Stack.Screen name="onboarding" />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="profile/edit" />
-              <Stack.Screen name="profile/[userId]" />
-              <Stack.Screen name="profile/timeline/[userId]" />
-              <Stack.Screen name="tours/[id]/index" />
-              <Stack.Screen name="tours/[id]/edit" />
-              <Stack.Screen name="stamps/[id]" />
-              <Stack.Screen name="parking/[id]" />
-            </Stack>
-            <StatusBar style="light" />
-          </ThemeProvider>
-          <QueryFocusBridge />
-          <QueryAuthBridge />
-        </AuthProvider>
-      </GestureHandlerRootView>
+      <ConnectivityProvider>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <AuthProvider>
+            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="onboarding" />
+                <Stack.Screen name="login" />
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="profile/edit" />
+                <Stack.Screen name="profile/[userId]" />
+                <Stack.Screen name="profile/timeline/[userId]" />
+                <Stack.Screen name="tours/[id]/index" />
+                <Stack.Screen name="tours/[id]/edit" />
+                <Stack.Screen name="stamps/[id]" />
+                <Stack.Screen name="parking/[id]" />
+              </Stack>
+              <StatusBar style="light" />
+            </ThemeProvider>
+            <QueryFocusBridge />
+            <CoreOfflineSyncBridge />
+            <OfflineBanner />
+          </AuthProvider>
+        </GestureHandlerRootView>
+      </ConnectivityProvider>
     </PersistQueryClientProvider>
   );
 }

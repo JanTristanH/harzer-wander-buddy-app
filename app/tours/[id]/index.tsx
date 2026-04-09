@@ -45,6 +45,10 @@ import {
   useUpdateTourByPOIListMutation,
   useUpdateTourNameMutation,
 } from '@/lib/queries';
+import {
+  isNetworkUnavailableError,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 
 const HARZ_REGION: Region = {
   latitude: 51.7544,
@@ -729,7 +733,7 @@ function resolveMapItemImageSource(
 export default function TourDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, canPerformWrites, isOffline, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const currentUserId = claims?.sub;
   const normalizedCurrentUserId = normalizeUserId(currentUserId);
@@ -1052,7 +1056,11 @@ export default function TourDetailScreen() {
   const normalizedTourOwnerId = normalizeUserId(data?.tour.createdBy);
   const ownershipResolved = Boolean(normalizedCurrentUserId && normalizedTourOwnerId);
   const canEnterEditMode = ownershipResolved && normalizedTourOwnerId === normalizedCurrentUserId;
-  const editingBlocked = !isEditMode || blockingErrorCode === 403 || blockingErrorCode === 404;
+  const editingBlocked =
+    !isEditMode ||
+    !canPerformWrites ||
+    blockingErrorCode === 403 ||
+    blockingErrorCode === 404;
   const selectedItemInTourCount = selectedMapItem
     ? (draftPoiStats.positionsById.get(selectedMapItem.ID.toLowerCase()) ?? []).length
     : 0;
@@ -1142,13 +1150,18 @@ export default function TourDetailScreen() {
       return;
     }
 
+    if (!canPerformWrites) {
+      Alert.alert('Offline', 'Touren koennen nur online bearbeitet werden.');
+      return;
+    }
+
     setDraftPoiIds(lastPersistedPoiIds);
     setTourNameDraft(data?.tour.name ?? '');
     setLastSaveErrorCode(null);
     setSaveStatus('idle');
     setStatusMessage(null);
     setIsEditMode(true);
-  }, [canEnterEditMode, data?.tour.name, isEditMode, lastPersistedPoiIds]);
+  }, [canEnterEditMode, canPerformWrites, data?.tour.name, isEditMode, lastPersistedPoiIds]);
   useEffect(() => {
     if (hasAppliedAutoStartEditModeRef.current) {
       return;
@@ -1379,6 +1392,10 @@ export default function TourDetailScreen() {
         distanceKm: entry.distanceKm,
       }));
   }, [allMapItems, isSearchFocused, mapCenter, poiSearchQuery]);
+  const normalizedSearchQuery = useMemo(
+    () => normalizeSearchValue(poiSearchQuery),
+    [poiSearchQuery]
+  );
 
   useEffect(() => {
     if (!isSearchFocused) {
@@ -1388,8 +1405,7 @@ export default function TourDetailScreen() {
       return;
     }
 
-    const normalizedQuery = normalizeSearchValue(poiSearchQuery);
-    if (normalizedQuery.length < 3 || !accessToken) {
+    if (normalizedSearchQuery.length < 3 || !accessToken || isOffline) {
       setRemoteSearchResults([]);
       setRemoteSearchError(null);
       setIsRemoteSearchLoading(false);
@@ -1427,6 +1443,12 @@ export default function TourDetailScreen() {
             return;
           }
 
+          if (isOffline || isNetworkUnavailableError(nextError) || nextError instanceof TypeError) {
+            setRemoteSearchResults([]);
+            setRemoteSearchError(null);
+            return;
+          }
+
           if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
             await logout();
             return;
@@ -1446,7 +1468,7 @@ export default function TourDetailScreen() {
       isCancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [accessToken, isSearchFocused, logout, mapCenter, poiSearchQuery]);
+  }, [accessToken, isOffline, isSearchFocused, logout, mapCenter, normalizedSearchQuery, poiSearchQuery]);
 
   useEffect(() => {
     if (!isMapReady || isEditMode) {
@@ -1580,6 +1602,7 @@ export default function TourDetailScreen() {
       setLastSaveErrorCode(null);
 
       try {
+        requireOnlineForWrite(canPerformWrites, 'Tour kann nur online gespeichert werden.');
         const response = await updateTourMutation.mutateAsync({ poiIds });
         const draftChangedSinceRequest = !arraysEqual(latestDraftPoiIdsRef.current, poiIds);
         if (!draftChangedSinceRequest) {
@@ -1614,6 +1637,11 @@ export default function TourDetailScreen() {
       } catch (nextError) {
         setSaveStatus('error');
 
+        if (isNetworkUnavailableError(nextError)) {
+          setStatusMessage(nextError.message);
+          return false;
+        }
+
         if (nextError instanceof HttpStatusError) {
           if (nextError.status === 403) {
             setBlockingErrorCode(403);
@@ -1640,7 +1668,7 @@ export default function TourDetailScreen() {
         return false;
       }
     },
-    [editingBlocked, isEditMode, refetch, updateTourMutation]
+    [canPerformWrites, editingBlocked, isEditMode, refetch, updateTourMutation]
   );
 
   const triggerAutoSave = useCallback(
@@ -1749,6 +1777,11 @@ export default function TourDetailScreen() {
 
     void (async () => {
       if (hasPendingChanges) {
+        if (!canPerformWrites) {
+          Alert.alert('Offline', 'Tour kann nur online gespeichert werden.');
+          return;
+        }
+
         const didSave = await performSave(draftPoiIds, { manual: true });
         if (!didSave) {
           return;
@@ -1762,6 +1795,7 @@ export default function TourDetailScreen() {
     exitEditMode,
     hasPendingChanges,
     isEditMode,
+    canPerformWrites,
     performSave,
     updateTourMutation.isPending,
     updateTourNameMutation.isPending,
@@ -1911,9 +1945,29 @@ export default function TourDetailScreen() {
       return;
     }
 
+    try {
+      requireOnlineForWrite(canPerformWrites, 'Touren koennen nur online geloescht werden.');
+    } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
+      Alert.alert(
+        'Tour konnte nicht geloescht werden',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+      return;
+    }
+
     router.replace('/(tabs)/tours' as never);
 
     void deleteTourMutation.mutateAsync().catch((nextError) => {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       if (nextError instanceof HttpStatusError && nextError.status === 404) {
         return;
       }
@@ -1923,7 +1977,7 @@ export default function TourDetailScreen() {
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
       );
     });
-  }, [canEnterEditMode, deleteTourMutation, router]);
+  }, [canEnterEditMode, canPerformWrites, deleteTourMutation, router]);
 
   const handleCloseViewOverflowMenu = useCallback(() => {
     setIsViewOverflowOpen(false);
@@ -1994,18 +2048,24 @@ export default function TourDetailScreen() {
     }
 
     try {
+      requireOnlineForWrite(canPerformWrites, 'Tourname kann nur online gespeichert werden.');
       setTourNameDraft(normalizedName);
       await updateTourNameMutation.mutateAsync({ name: normalizedName });
       setStatusMessage('Tourname aktualisiert');
       setSaveStatus((current) => (current === 'saving' ? current : 'saved'));
       await refetch();
     } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return;
+      }
+
       Alert.alert(
         'Name konnte nicht gespeichert werden',
         nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
       );
     }
-  }, [clearRenameDebounce, data, editingBlocked, refetch, tourNameDraft, updateTourNameMutation]);
+  }, [canPerformWrites, clearRenameDebounce, data, editingBlocked, refetch, tourNameDraft, updateTourNameMutation]);
 
   const handleTourNameChange = useCallback(
     (nextValue: string) => {
@@ -2245,12 +2305,11 @@ export default function TourDetailScreen() {
           </Pressable>
         </View>
 
-        {isSearchFocused &&
-        (localSearchResults.length > 0 ||
-          remoteSearchResults.length > 0 ||
-          isRemoteSearchLoading ||
-          remoteSearchError) ? (
+        {showSearchPopover ? (
           <View style={styles.searchResultsPopover}>
+            {isOffline ? (
+              <Text style={styles.searchStatusText}>Offline: nur lokale Treffer werden angezeigt.</Text>
+            ) : null}
             {localSearchResults.length > 0 ? <Text style={styles.searchSectionTitle}>Kartenpunkte</Text> : null}
             {localSearchResults.map((item) => {
               const stampNumber = getStampNumber(item);
@@ -2403,8 +2462,16 @@ export default function TourDetailScreen() {
 
   const footerActionsDisabled =
     updateTourMutation.isPending || updateTourNameMutation.isPending || deleteTourMutation.isPending;
+  const footerEditActionsDisabled = footerActionsDisabled || !canPerformWrites;
   const footerBottomInset = Math.max(insets.bottom, 12);
   const footerReservedHeight = 88 + footerBottomInset;
+  const showSearchPopover =
+    isSearchFocused &&
+    (localSearchResults.length > 0 ||
+      remoteSearchResults.length > 0 ||
+      isRemoteSearchLoading ||
+      remoteSearchError !== null ||
+      (isOffline && normalizedSearchQuery.length > 0));
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -2429,14 +2496,18 @@ export default function TourDetailScreen() {
                 </Pressable>
                 {canEnterEditMode ? (
                 <Pressable
-                  disabled={deleteTourMutation.isPending}
+                  disabled={deleteTourMutation.isPending || !canPerformWrites}
                   onPress={handleOpenViewOverflowMenu}
                   style={({ pressed }) => [
                     styles.overflowHeaderButton,
-                    deleteTourMutation.isPending && styles.overflowHeaderButtonDisabled,
-                    pressed && !deleteTourMutation.isPending && styles.pressed,
+                    (deleteTourMutation.isPending || !canPerformWrites) && styles.overflowHeaderButtonDisabled,
+                    pressed && !deleteTourMutation.isPending && canPerformWrites && styles.pressed,
                   ]}>
-                  <Feather color={deleteTourMutation.isPending ? '#9ba59a' : '#2e3a2e'} name="more-horizontal" size={16} />
+                  <Feather
+                    color={deleteTourMutation.isPending || !canPerformWrites ? '#9ba59a' : '#2e3a2e'}
+                    name="more-horizontal"
+                    size={16}
+                  />
                 </Pressable>
                 ) : null}
               </View>
@@ -2667,24 +2738,24 @@ export default function TourDetailScreen() {
 
           {isEditMode ? (
             <Pressable
-              disabled={footerActionsDisabled}
+              disabled={footerEditActionsDisabled}
               onPress={handleFinishEditMode}
               style={({ pressed }) => [
                 styles.footerPrimaryButton,
                 styles.footerPrimaryButtonSecondary,
-                footerActionsDisabled && styles.footerPrimaryButtonDisabled,
-                pressed && !footerActionsDisabled && styles.pressed,
+                footerEditActionsDisabled && styles.footerPrimaryButtonDisabled,
+                pressed && !footerEditActionsDisabled && styles.pressed,
               ]}>
               <Text style={[styles.footerPrimaryButtonLabel, styles.footerPrimaryButtonLabelSecondary]}>Fertig</Text>
             </Pressable>
           ) : (
             <Pressable
-              disabled={!canEnterEditMode || footerActionsDisabled}
+              disabled={!canEnterEditMode || footerEditActionsDisabled}
               onPress={handleEnterEditMode}
               style={({ pressed }) => [
                 styles.footerPrimaryButton,
-                (!canEnterEditMode || footerActionsDisabled) && styles.footerPrimaryButtonDisabled,
-                pressed && canEnterEditMode && !footerActionsDisabled && styles.pressed,
+                (!canEnterEditMode || footerEditActionsDisabled) && styles.footerPrimaryButtonDisabled,
+                pressed && canEnterEditMode && !footerEditActionsDisabled && styles.pressed,
               ]}>
               <Text style={styles.footerPrimaryButtonLabel}>Bearbeiten</Text>
             </Pressable>
@@ -2704,20 +2775,24 @@ export default function TourDetailScreen() {
 
             {canEnterEditMode ? (
               <Pressable
-                disabled={deleteTourMutation.isPending}
+                disabled={deleteTourMutation.isPending || !canPerformWrites}
                 onPress={handleConfirmDeleteTour}
                 style={({ pressed }) => [
                   styles.overflowActionButton,
                   styles.overflowActionDanger,
-                  deleteTourMutation.isPending && styles.overflowActionButtonDisabled,
-                  pressed && !deleteTourMutation.isPending && styles.pressed,
+                  (deleteTourMutation.isPending || !canPerformWrites) && styles.overflowActionButtonDisabled,
+                  pressed && !deleteTourMutation.isPending && canPerformWrites && styles.pressed,
                 ]}>
-                <Feather color={deleteTourMutation.isPending ? '#b89b9b' : '#a34e4e'} name="trash-2" size={14} />
+                <Feather
+                  color={deleteTourMutation.isPending || !canPerformWrites ? '#b89b9b' : '#a34e4e'}
+                  name="trash-2"
+                  size={14}
+                />
                 <Text
                   style={[
                     styles.overflowActionLabel,
                     styles.overflowActionLabelDanger,
-                    deleteTourMutation.isPending && styles.overflowActionLabelDisabled,
+                    (deleteTourMutation.isPending || !canPerformWrites) && styles.overflowActionLabelDisabled,
                   ]}>
                   Tour loeschen
                 </Text>

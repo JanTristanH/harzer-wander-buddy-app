@@ -8,6 +8,9 @@ import { AppState, type AppStateStatus } from 'react-native';
 
 import { fetchCurrentUserProfile, type CurrentUserProfileData } from '@/lib/api';
 import { appConfig, getMissingConfig } from '@/lib/config';
+import { useConnectivity } from '@/lib/connectivity';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
+import { queryClient } from '@/lib/query-client';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -32,12 +35,22 @@ type StoredTokenState = {
   expiresIn?: number;
 };
 
+type SessionMode = 'online' | 'offline_grace';
+
+type ResolveValidTokenResponseResult = {
+  tokenResponse: AuthSession.TokenResponse | null;
+  sessionMode: SessionMode;
+};
+
 type AuthContextValue = {
   accessToken: string | null;
   idToken: string | null;
   refreshToken: string | null;
   issuedAt: number | null;
   expiresIn: number | null;
+  sessionMode: SessionMode;
+  isOffline: boolean;
+  canPerformWrites: boolean;
   currentUserProfile: CurrentUserProfileData | null;
   hasCompletedOnboarding: boolean;
   isAuthenticated: boolean;
@@ -203,13 +216,33 @@ function mergeTokenResponse(
   });
 }
 
+function isNetworkRefreshError(error: unknown) {
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('network') ||
+    message.includes('offline') ||
+    message.includes('timed out') ||
+    message.includes('fetch')
+  );
+}
+
 export function AuthProvider({ children }: React.PropsWithChildren) {
+  const { isOffline } = useConnectivity();
   const [authState, setAuthState] = useState<AuthState | null>(null);
+  const [sessionMode, setSessionMode] = useState<SessionMode>('online');
   const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfileData | null>(null);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  const refreshPromiseRef = useRef<Promise<AuthSession.TokenResponse | null> | null>(null);
+  const refreshPromiseRef = useRef<Promise<ResolveValidTokenResponseResult> | null>(null);
 
   const missingConfig = getMissingConfig().filter((key) => key !== 'auth0LogoutReturnPath');
   const configError =
@@ -258,34 +291,57 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       const forceRefresh = options?.forceRefresh ?? false;
       const tokenResponse = await loadTokenResponse();
       if (!tokenResponse) {
-        return null;
+        return {
+          tokenResponse: null,
+          sessionMode: 'online',
+        } satisfies ResolveValidTokenResponseResult;
       }
 
       if (!forceRefresh && !tokenResponse.shouldRefresh()) {
-        return tokenResponse;
+        return {
+          tokenResponse,
+          sessionMode: 'online',
+        } satisfies ResolveValidTokenResponseResult;
       }
 
       if (!tokenResponse.refreshToken || !appConfig.auth0ClientId) {
-        return tokenResponse;
+        return {
+          tokenResponse,
+          sessionMode: isOffline ? 'offline_grace' : 'online',
+        } satisfies ResolveValidTokenResponseResult;
       }
 
-      const discovery = await resolveDiscovery();
-      if (!discovery?.tokenEndpoint) {
-        throw new Error('Could not load Auth0 discovery.');
-      }
+      try {
+        const discovery = await resolveDiscovery();
+        if (!discovery?.tokenEndpoint) {
+          throw new Error('Could not load Auth0 discovery.');
+        }
 
-      const refreshedTokenResponse = await AuthSession.refreshAsync(
-        {
-          clientId: appConfig.auth0ClientId,
-          refreshToken: tokenResponse.refreshToken,
-        },
-        discovery
-      );
-      const mergedTokenResponse = mergeTokenResponse(tokenResponse, refreshedTokenResponse);
-      await saveTokenResponse(mergedTokenResponse);
-      return mergedTokenResponse;
+        const refreshedTokenResponse = await AuthSession.refreshAsync(
+          {
+            clientId: appConfig.auth0ClientId,
+            refreshToken: tokenResponse.refreshToken,
+          },
+          discovery
+        );
+        const mergedTokenResponse = mergeTokenResponse(tokenResponse, refreshedTokenResponse);
+        await saveTokenResponse(mergedTokenResponse);
+        return {
+          tokenResponse: mergedTokenResponse,
+          sessionMode: 'online',
+        } satisfies ResolveValidTokenResponseResult;
+      } catch (error) {
+        if (isOffline || isNetworkRefreshError(error)) {
+          return {
+            tokenResponse,
+            sessionMode: 'offline_grace',
+          } satisfies ResolveValidTokenResponseResult;
+        }
+
+        throw error;
+      }
     },
-    [resolveDiscovery]
+    [isOffline, resolveDiscovery]
   );
 
   const getValidAccessToken = useCallback(async () => {
@@ -300,13 +356,15 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         });
       }
 
-      const tokenResponse = await refreshPromiseRef.current;
-      if (tokenResponse) {
-        setAuthState(toAuthState(tokenResponse));
-        return tokenResponse.accessToken;
+      const resolved = await refreshPromiseRef.current;
+      if (resolved.tokenResponse) {
+        setAuthState(toAuthState(resolved.tokenResponse));
+        setSessionMode(resolved.sessionMode);
+        return resolved.tokenResponse.accessToken;
       }
 
       setAuthState(null);
+      setSessionMode('online');
       return null;
     } catch (error) {
       const shouldInvalidateSession =
@@ -315,6 +373,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       if (shouldInvalidateSession) {
         await clearTokenResponse();
         setAuthState(null);
+        setSessionMode('online');
         setCurrentUserProfile(null);
         return null;
       }
@@ -338,20 +397,25 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           setHasCompletedOnboarding(storedOnboardingState);
         }
 
-        const tokenResponse = await resolveValidTokenResponse();
-        if (!tokenResponse) {
+        const resolved = await resolveValidTokenResponse();
+        if (!resolved.tokenResponse) {
           return;
         }
 
         if (isMounted) {
-          setAuthState(toAuthState(tokenResponse));
+          setAuthState(toAuthState(resolved.tokenResponse));
+          setSessionMode(resolved.sessionMode);
         }
 
         if (!isMounted) {
           return;
         }
 
-        await preloadCurrentUserProfileForToken(tokenResponse.accessToken);
+        if (resolved.sessionMode === 'offline_grace') {
+          return;
+        }
+
+        await preloadCurrentUserProfileForToken(resolved.tokenResponse.accessToken);
         if (!isMounted) {
           return;
         }
@@ -366,6 +430,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           await clearTokenResponse();
           if (isMounted) {
             setAuthState(null);
+            setSessionMode('online');
             setCurrentUserProfile(null);
           }
         }
@@ -454,6 +519,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
 
       await saveTokenResponse(tokenResponse);
       setCurrentUserProfile(null);
+      setSessionMode('online');
       setAuthState({
         accessToken: tokenResponse.accessToken,
         idToken: tokenResponse.idToken,
@@ -486,7 +552,10 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const logout = useCallback(async () => {
     setAuthError(null);
     await clearTokenResponse();
+    await clearPersistedQueryCache();
+    queryClient.clear();
     setAuthState(null);
+    setSessionMode('online');
     setCurrentUserProfile(null);
 
     try {
@@ -516,6 +585,9 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       refreshToken: authState?.refreshToken ?? null,
       issuedAt: authState?.issuedAt ?? null,
       expiresIn: authState?.expiresIn ?? null,
+      sessionMode,
+      isOffline,
+      canPerformWrites: !!authState?.accessToken && !isOffline,
       currentUserProfile,
       hasCompletedOnboarding,
       isAuthenticated: !!authState?.accessToken,
@@ -538,10 +610,12 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       authState?.idToken,
       authState?.issuedAt,
       authState?.refreshToken,
+      sessionMode,
       configError,
       completeOnboarding,
       currentUserProfile,
       getValidAccessToken,
+      isOffline,
       login,
       hasCompletedOnboarding,
       isLoading,

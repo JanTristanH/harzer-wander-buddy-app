@@ -29,6 +29,11 @@ import {
   type SearchUserResult,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import {
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
 import { getFloatingActionBottomOffset } from '@/lib/tab-bar-layout';
 import { queryKeys, useFriendsOverviewQuery } from '@/lib/queries';
 
@@ -99,7 +104,7 @@ function EmptyState({
 export default function FriendsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { accessToken, logout } = useAuth();
+  const { accessToken, canPerformWrites, isOffline, logout } = useAuth();
   const claims = useIdTokenClaims<{ sub?: string }>();
   const queryClient = useQueryClient();
   const [activeFilter, setActiveFilter] = useState<FriendFilter>('friends');
@@ -131,7 +136,10 @@ export default function FriendsScreen() {
       return;
     }
 
-    if (!accessToken) {
+    if (!accessToken || isOffline) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchLoading(false);
       return;
     }
 
@@ -167,7 +175,7 @@ export default function FriendsScreen() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [accessToken, isSearchModalVisible, searchQuery]);
+  }, [accessToken, isOffline, isSearchModalVisible, searchQuery]);
 
   const requestsLabel = `Anfragen (${data?.incomingRequestCount ?? 0})`;
   const sentLabel = `Gesendet${data && data.outgoingRequestCount > 0 ? ` (${data.outgoingRequestCount})` : ''}`;
@@ -210,15 +218,20 @@ export default function FriendsScreen() {
         return;
       }
 
-      setAcceptingPendingRequestId(pendingRequestId);
-
       try {
+        requireOnlineForWrite(canPerformWrites);
+        setAcceptingPendingRequestId(pendingRequestId);
         await acceptPendingFriendshipRequest(accessToken, pendingRequestId);
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
           queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
         ]);
       } catch (nextError) {
+        if (isNetworkUnavailableError(nextError)) {
+          Alert.alert('Offline', nextError.message);
+          return;
+        }
+
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
           await logout();
           return;
@@ -232,7 +245,7 @@ export default function FriendsScreen() {
         setAcceptingPendingRequestId(null);
       }
     },
-    [accessToken, claims?.sub, logout, queryClient]
+    [accessToken, canPerformWrites, claims?.sub, logout, queryClient]
   );
 
   const handleCreateRequest = useCallback(
@@ -241,9 +254,9 @@ export default function FriendsScreen() {
         return;
       }
 
-      setSubmittingUserId(userId);
-
       try {
+        requireOnlineForWrite(canPerformWrites);
+        setSubmittingUserId(userId);
         await createFriendRequest(accessToken, userId);
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
@@ -251,6 +264,11 @@ export default function FriendsScreen() {
         ]);
         setSearchResults((current) => current.slice());
       } catch (nextError) {
+        if (isNetworkUnavailableError(nextError)) {
+          Alert.alert('Offline', nextError.message);
+          return;
+        }
+
         if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
           await logout();
           return;
@@ -264,7 +282,7 @@ export default function FriendsScreen() {
         setSubmittingUserId(null);
       }
     },
-    [accessToken, claims?.sub, logout, queryClient]
+    [accessToken, canPerformWrites, claims?.sub, logout, queryClient]
   );
 
   const handleRecallRequest = useCallback(
@@ -286,15 +304,20 @@ export default function FriendsScreen() {
             style: 'destructive',
             onPress: () => {
               void (async () => {
-                setRecallingFriendshipId(friendshipId);
-
                 try {
+                  requireOnlineForWrite(canPerformWrites);
+                  setRecallingFriendshipId(friendshipId);
                   await removeFriendship(accessToken, friendshipId);
                   await Promise.all([
                     queryClient.invalidateQueries({ queryKey: queryKeys.friendsOverview(claims?.sub) }),
                     queryClient.invalidateQueries({ queryKey: queryKeys.profileOverview(claims?.sub) }),
                   ]);
                 } catch (nextError) {
+                  if (isNetworkUnavailableError(nextError)) {
+                    Alert.alert('Offline', nextError.message);
+                    return;
+                  }
+
                   if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
                     await logout();
                     return;
@@ -313,7 +336,7 @@ export default function FriendsScreen() {
         ]
       );
     },
-    [accessToken, claims?.sub, logout, queryClient]
+    [accessToken, canPerformWrites, claims?.sub, logout, queryClient]
   );
 
   const handleInviteFriends = useCallback(async () => {
@@ -362,7 +385,7 @@ export default function FriendsScreen() {
                     ? 'Du'
                     : 'Anfrage',
           actionMuted: status !== 'request',
-          actionDisabled: status !== 'request' || submittingUserId === result.id,
+          actionDisabled: status !== 'request' || submittingUserId === result.id || !canPerformWrites,
           onActionPress: () => void handleCreateRequest(result.id),
         };
       }),
@@ -375,6 +398,7 @@ export default function FriendsScreen() {
       searchResults,
       sentRequestIds,
       submittingUserId,
+      canPerformWrites,
     ]
   );
 
@@ -389,6 +413,10 @@ export default function FriendsScreen() {
                 void (async () => {
                   setIsPullRefreshing(true);
                   try {
+                    if (isOffline) {
+                      Alert.alert('Offline', OFFLINE_REFRESH_MESSAGE);
+                      return;
+                    }
                     await refetch();
                   } finally {
                     setIsPullRefreshing(false);
@@ -488,7 +516,8 @@ export default function FriendsScreen() {
                   onPress: () => router.push(`/profile/${encodeURIComponent(request.userId)}` as never),
                   subtitle: 'Moechte mit dir wandern',
                   actionLabel: acceptingPendingRequestId === request.pendingRequestId ? '...' : 'Annehmen',
-                  actionDisabled: acceptingPendingRequestId === request.pendingRequestId,
+                  actionDisabled:
+                    acceptingPendingRequestId === request.pendingRequestId || !canPerformWrites,
                   onActionPress: () => void handleAcceptRequest(request.pendingRequestId),
                 }))}
               />
@@ -524,7 +553,7 @@ export default function FriendsScreen() {
                     subtitle: 'Anfrage gesendet',
                     actionLabel: isRecalling ? '...' : 'Zurueckrufen',
                     actionMuted: true,
-                    actionDisabled: !recallFriendshipId || isRecalling,
+                    actionDisabled: !recallFriendshipId || isRecalling || !canPerformWrites,
                     onActionPress: () => {
                       if (!recallFriendshipId) {
                         return;
@@ -547,10 +576,12 @@ export default function FriendsScreen() {
 
         <Pressable
           accessibilityLabel="Freunde suchen"
+          disabled={!canPerformWrites}
           onPress={() => setIsSearchModalVisible(true)}
           style={({ pressed }) => [
             styles.searchButton,
             { bottom: floatingActionBottom },
+            !canPerformWrites && styles.searchButtonDisabled,
             pressed && styles.pressed,
           ]}>
           <Feather color="#F5F3EE" name="search" size={24} />
@@ -783,6 +814,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 20,
     width: 52,
+  },
+  searchButtonDisabled: {
+    opacity: 0.5,
   },
   modalOverlay: {
     ...StyleSheet.absoluteFillObject,
