@@ -270,9 +270,10 @@ function getCachedSelfProfileOverview(
 }
 
 function useAuthorizedRequest() {
-  const { accessToken, logout } = useAuth();
+  const { getValidAccessToken, logout } = useAuth();
 
   return async function authorizedRequest<T>(request: (token: string) => Promise<T>) {
+    const accessToken = await getValidAccessToken();
     if (!accessToken) {
       throw new Error('No access token available.');
     }

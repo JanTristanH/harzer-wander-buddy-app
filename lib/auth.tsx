@@ -3,7 +3,8 @@ import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { jwtDecode } from 'jwt-decode';
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import { fetchCurrentUserProfile, type CurrentUserProfileData } from '@/lib/api';
 import { appConfig, getMissingConfig } from '@/lib/config';
@@ -23,6 +24,8 @@ type AuthState = {
 
 type StoredTokenState = {
   accessToken: string;
+  tokenType?: AuthSession.TokenType;
+  scope?: string;
   idToken?: string;
   refreshToken?: string;
   issuedAt?: number;
@@ -43,6 +46,7 @@ type AuthContextValue = {
   configError: string | null;
   login: () => Promise<void>;
   signup: () => Promise<void>;
+  getValidAccessToken: () => Promise<string | null>;
   completeOnboarding: () => Promise<void>;
   logout: () => Promise<void>;
   resetApp: () => Promise<void>;
@@ -91,6 +95,8 @@ function decodeJwt<T>(token: string | undefined): T | null {
 async function saveTokenResponse(tokenResponse: AuthSession.TokenResponse) {
   const payload: StoredTokenState = {
     accessToken: tokenResponse.accessToken,
+    tokenType: tokenResponse.tokenType,
+    scope: tokenResponse.scope,
     idToken: tokenResponse.idToken,
     refreshToken: tokenResponse.refreshToken,
     issuedAt: tokenResponse.issuedAt,
@@ -109,6 +115,8 @@ async function loadTokenResponse() {
   const parsed = JSON.parse(storedValue) as StoredTokenState;
   return new AuthSession.TokenResponse({
     accessToken: parsed.accessToken,
+    tokenType: parsed.tokenType,
+    scope: parsed.scope,
     idToken: parsed.idToken,
     refreshToken: parsed.refreshToken,
     issuedAt: parsed.issuedAt,
@@ -180,12 +188,28 @@ function isInvalidGrantRefreshError(error: unknown) {
   return normalizedText.includes('invalid_grant');
 }
 
+function mergeTokenResponse(
+  previousTokenResponse: AuthSession.TokenResponse,
+  nextTokenResponse: AuthSession.TokenResponse
+) {
+  return new AuthSession.TokenResponse({
+    accessToken: nextTokenResponse.accessToken,
+    tokenType: nextTokenResponse.tokenType ?? previousTokenResponse.tokenType,
+    scope: nextTokenResponse.scope ?? previousTokenResponse.scope,
+    idToken: nextTokenResponse.idToken ?? previousTokenResponse.idToken,
+    refreshToken: nextTokenResponse.refreshToken ?? previousTokenResponse.refreshToken,
+    issuedAt: nextTokenResponse.issuedAt ?? previousTokenResponse.issuedAt,
+    expiresIn: nextTokenResponse.expiresIn ?? previousTokenResponse.expiresIn,
+  });
+}
+
 export function AuthProvider({ children }: React.PropsWithChildren) {
   const [authState, setAuthState] = useState<AuthState | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfileData | null>(null);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const refreshPromiseRef = useRef<Promise<AuthSession.TokenResponse | null> | null>(null);
 
   const missingConfig = getMissingConfig().filter((key) => key !== 'auth0LogoutReturnPath');
   const configError =
@@ -229,6 +253,76 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     return preloadCurrentUserProfileForToken(authState?.accessToken ?? null);
   }, [authState?.accessToken, preloadCurrentUserProfileForToken]);
 
+  const resolveValidTokenResponse = useCallback(
+    async (options?: { forceRefresh?: boolean }) => {
+      const forceRefresh = options?.forceRefresh ?? false;
+      const tokenResponse = await loadTokenResponse();
+      if (!tokenResponse) {
+        return null;
+      }
+
+      if (!forceRefresh && !tokenResponse.shouldRefresh()) {
+        return tokenResponse;
+      }
+
+      if (!tokenResponse.refreshToken || !appConfig.auth0ClientId) {
+        return tokenResponse;
+      }
+
+      const discovery = await resolveDiscovery();
+      if (!discovery?.tokenEndpoint) {
+        throw new Error('Could not load Auth0 discovery.');
+      }
+
+      const refreshedTokenResponse = await AuthSession.refreshAsync(
+        {
+          clientId: appConfig.auth0ClientId,
+          refreshToken: tokenResponse.refreshToken,
+        },
+        discovery
+      );
+      const mergedTokenResponse = mergeTokenResponse(tokenResponse, refreshedTokenResponse);
+      await saveTokenResponse(mergedTokenResponse);
+      return mergedTokenResponse;
+    },
+    [resolveDiscovery]
+  );
+
+  const getValidAccessToken = useCallback(async () => {
+    if (configError) {
+      return null;
+    }
+
+    try {
+      if (!refreshPromiseRef.current) {
+        refreshPromiseRef.current = resolveValidTokenResponse().finally(() => {
+          refreshPromiseRef.current = null;
+        });
+      }
+
+      const tokenResponse = await refreshPromiseRef.current;
+      if (tokenResponse) {
+        setAuthState(toAuthState(tokenResponse));
+        return tokenResponse.accessToken;
+      }
+
+      setAuthState(null);
+      return null;
+    } catch (error) {
+      const shouldInvalidateSession =
+        isUnauthorizedError(error) || isInvalidGrantRefreshError(error);
+
+      if (shouldInvalidateSession) {
+        await clearTokenResponse();
+        setAuthState(null);
+        setCurrentUserProfile(null);
+        return null;
+      }
+
+      throw error;
+    }
+  }, [configError, resolveValidTokenResponse]);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -244,42 +338,20 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
           setHasCompletedOnboarding(storedOnboardingState);
         }
 
-        const tokenResponse = await loadTokenResponse();
+        const tokenResponse = await resolveValidTokenResponse();
         if (!tokenResponse) {
           return;
         }
 
-        let nextTokenResponse = tokenResponse;
         if (isMounted) {
           setAuthState(toAuthState(tokenResponse));
-        }
-
-        if (
-          tokenResponse.shouldRefresh() &&
-          tokenResponse.refreshToken &&
-          appConfig.auth0ClientId
-        ) {
-          const discovery = await resolveDiscovery();
-          if (!discovery?.tokenEndpoint) {
-            throw new Error('Could not load Auth0 discovery.');
-          }
-
-          nextTokenResponse = await AuthSession.refreshAsync(
-            {
-              clientId: appConfig.auth0ClientId,
-              refreshToken: tokenResponse.refreshToken,
-            },
-            discovery
-          );
-          await saveTokenResponse(nextTokenResponse);
         }
 
         if (!isMounted) {
           return;
         }
 
-        setAuthState(toAuthState(nextTokenResponse));
-        await preloadCurrentUserProfileForToken(nextTokenResponse.accessToken);
+        await preloadCurrentUserProfileForToken(tokenResponse.accessToken);
         if (!isMounted) {
           return;
         }
@@ -309,7 +381,23 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [configError, resolveDiscovery]);
+  }, [configError, preloadCurrentUserProfileForToken, resolveValidTokenResponse]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (status !== 'active') {
+        return;
+      }
+
+      void getValidAccessToken().catch((error) => {
+        console.error('Failed to refresh auth token on foreground', error);
+      });
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [getValidAccessToken]);
 
   const authenticate = useCallback(async (mode: 'login' | 'signup') => {
     if (configError) {
@@ -437,6 +525,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       completeOnboarding,
       login,
       signup,
+      getValidAccessToken,
       logout,
       resetApp,
       preloadCurrentUserProfile,
@@ -452,6 +541,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       configError,
       completeOnboarding,
       currentUserProfile,
+      getValidAccessToken,
       login,
       hasCompletedOnboarding,
       isLoading,
