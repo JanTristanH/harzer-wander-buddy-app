@@ -66,6 +66,7 @@ const MAP_EDGE_PADDING = {
 
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
+const FOCUS_TARGET_DELTA = 0.08;
 const SEARCH_RESULT_LIMIT = 5;
 const REMOTE_SEARCH_DEBOUNCE_MS = 350;
 const POI_AUTOSAVE_DEBOUNCE_MS = 300;
@@ -1491,8 +1492,8 @@ export default function TourDetailScreen() {
       const nextRegion: Region = {
         latitude: coordinate.latitude,
         longitude: coordinate.longitude,
-        latitudeDelta: 0.08,
-        longitudeDelta: 0.08,
+        latitudeDelta: Math.min(regionRef.current.latitudeDelta, FOCUS_TARGET_DELTA),
+        longitudeDelta: Math.min(regionRef.current.longitudeDelta, FOCUS_TARGET_DELTA),
       };
       regionRef.current = nextRegion;
       setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
@@ -1528,8 +1529,8 @@ export default function TourDetailScreen() {
     const nextRegion: Region = {
       latitude: item.latitude,
       longitude: item.longitude,
-      latitudeDelta: 0.08,
-      longitudeDelta: 0.08,
+      latitudeDelta: Math.min(regionRef.current.latitudeDelta, FOCUS_TARGET_DELTA),
+      longitudeDelta: Math.min(regionRef.current.longitudeDelta, FOCUS_TARGET_DELTA),
     };
 
     setSelectedMapItemId(item.ID);
@@ -1549,8 +1550,8 @@ export default function TourDetailScreen() {
     const nextRegion: Region = {
       latitude: place.latitude,
       longitude: place.longitude,
-      latitudeDelta: 0.08,
-      longitudeDelta: 0.08,
+      latitudeDelta: Math.min(regionRef.current.latitudeDelta, FOCUS_TARGET_DELTA),
+      longitudeDelta: Math.min(regionRef.current.longitudeDelta, FOCUS_TARGET_DELTA),
     };
 
     setSelectedMapItemId(null);
