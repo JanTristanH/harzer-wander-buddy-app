@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -23,6 +24,10 @@ import { useProfileOverviewQuery, useUserProfileOverviewQuery } from '@/lib/quer
 type TimelineClaims = {
   sub?: string;
 };
+
+const FAST_SCROLLER_HIDE_DELAY_MS = 850;
+const FAST_SCROLLER_THUMB_HEIGHT = 44;
+const FAST_SCROLLER_PREVIEW_HEIGHT = 38;
 
 function formatVisitDate(value?: string) {
   if (!value) {
@@ -123,8 +128,16 @@ export default function ProfileTimelineScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [jumpHint, setJumpHint] = useState('');
   const [pendingJumpDayKey, setPendingJumpDayKey] = useState<string | null>(null);
+  const [previewDayIndex, setPreviewDayIndex] = useState(1);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [trackHeight, setTrackHeight] = useState(0);
+  const [isFastScrollerVisible, setIsFastScrollerVisible] = useState(false);
+  const [isThumbDragging, setIsThumbDragging] = useState(false);
+  const [thumbRatioOverride, setThumbRatioOverride] = useState<number | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
   const dayOffsetMapRef = useRef<Record<string, number>>({});
+  const hideFastScrollerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dateRange = useMemo(() => {
     if (groupedDayKeys.length === 0) {
@@ -146,15 +159,175 @@ export default function ProfileTimelineScreen() {
     };
   }, [groupedDayKeys]);
 
-  const scrollToDayKey = useCallback((dayKey: string) => {
+  const maxScrollY = Math.max(0, contentHeight - viewportHeight);
+  const hasScrollableTimeline = groupedTimeline.length > 0 && maxScrollY > 0;
+  const previewRatio =
+    groupedDayKeys.length > 1 ? (previewDayIndex - 1) / (groupedDayKeys.length - 1) : 0;
+  const thumbHeight = FAST_SCROLLER_THUMB_HEIGHT;
+  const thumbTravel = Math.max(0, trackHeight - thumbHeight);
+  const effectiveThumbRatio =
+    thumbRatioOverride !== null ? Math.max(0, Math.min(1, thumbRatioOverride)) : previewRatio;
+  const thumbTop = effectiveThumbRatio * thumbTravel;
+  const previewTop = Math.max(
+    0,
+    Math.min(
+      Math.max(0, trackHeight - FAST_SCROLLER_PREVIEW_HEIGHT),
+      thumbTop + thumbHeight / 2 - FAST_SCROLLER_PREVIEW_HEIGHT / 2
+    )
+  );
+  const scrollerOpacity = isFastScrollerVisible || isThumbDragging ? 1 : 0;
+
+  const formatPreviewLabel = useCallback((dayKey: string | null | undefined) => {
+    if (!dayKey) {
+      return '';
+    }
+
+    if (dayKey === 'without-date') {
+      return 'Ohne Datum';
+    }
+
+    const date = dayKeyToDate(dayKey);
+    return date ? formatJumpDate(date) : dayKey;
+  }, []);
+  const previewDayKey =
+    groupedDayKeys.length > 0
+      ? groupedDayKeys[Math.max(0, Math.min(groupedDayKeys.length - 1, previewDayIndex - 1))]
+      : null;
+  const previewLabel = formatPreviewLabel(previewDayKey);
+
+  const clearFastScrollerHideTimeout = useCallback(() => {
+    if (!hideFastScrollerTimeoutRef.current) {
+      return;
+    }
+
+    clearTimeout(hideFastScrollerTimeoutRef.current);
+    hideFastScrollerTimeoutRef.current = null;
+  }, []);
+
+  const showFastScroller = useCallback(() => {
+    if (!hasScrollableTimeline) {
+      return;
+    }
+
+    clearFastScrollerHideTimeout();
+    setIsFastScrollerVisible(true);
+  }, [clearFastScrollerHideTimeout, hasScrollableTimeline]);
+
+  const scheduleFastScrollerHide = useCallback(() => {
+    clearFastScrollerHideTimeout();
+    hideFastScrollerTimeoutRef.current = setTimeout(() => {
+      setIsFastScrollerVisible(false);
+    }, FAST_SCROLLER_HIDE_DELAY_MS);
+  }, [clearFastScrollerHideTimeout]);
+
+  const scrollToDayKey = useCallback((dayKey: string, animated = true) => {
     const y = dayOffsetMapRef.current[dayKey];
     if (!Number.isFinite(y)) {
       return false;
     }
 
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - 6), animated: true });
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 6), animated });
+    const nextDayIndex = groupedDayKeys.indexOf(dayKey);
+    if (nextDayIndex >= 0) {
+      const nextPreviewIndex = nextDayIndex + 1;
+      setPreviewDayIndex((current) => (current === nextPreviewIndex ? current : nextPreviewIndex));
+    }
     return true;
-  }, []);
+  }, [groupedDayKeys]);
+
+  const updatePreviewFromOffset = useCallback(
+    (offsetY: number) => {
+      if (groupedDayKeys.length === 0) {
+        setPreviewDayIndex(1);
+        return;
+      }
+
+      const anchor = Math.max(0, offsetY + 12);
+      let nextDayIndex = 0;
+      let hasMeasuredOffsets = false;
+
+      for (const [dayIndex, dayKey] of groupedDayKeys.entries()) {
+        const y = dayOffsetMapRef.current[dayKey];
+        if (!Number.isFinite(y)) {
+          continue;
+        }
+        hasMeasuredOffsets = true;
+
+        if (y <= anchor) {
+          nextDayIndex = dayIndex;
+          continue;
+        }
+
+        break;
+      }
+
+      if (!hasMeasuredOffsets && maxScrollY > 0) {
+        const ratio = Math.max(0, Math.min(1, offsetY / maxScrollY));
+        nextDayIndex = Math.min(groupedDayKeys.length - 1, Math.floor(ratio * groupedDayKeys.length));
+      }
+
+      const nextPreviewIndex = nextDayIndex + 1;
+      setPreviewDayIndex((current) => (current === nextPreviewIndex ? current : nextPreviewIndex));
+    },
+    [groupedDayKeys, maxScrollY]
+  );
+
+  const updateScrollFromTouch = useCallback(
+    (touchY: number) => {
+      if (!hasScrollableTimeline || trackHeight <= 0 || groupedDayKeys.length === 0) {
+        return;
+      }
+
+      const clampedTouchY = Math.max(0, Math.min(trackHeight, touchY));
+      const ratio = clampedTouchY / trackHeight;
+      const targetIndex = Math.max(
+        0,
+        Math.min(groupedDayKeys.length - 1, Math.round(ratio * (groupedDayKeys.length - 1)))
+      );
+      const targetDayKey = groupedDayKeys[targetIndex];
+
+      if (targetDayKey && !scrollToDayKey(targetDayKey, false)) {
+        scrollRef.current?.scrollTo({ y: maxScrollY * ratio, animated: false });
+      }
+
+      const nextPreviewIndex = targetIndex + 1;
+      setPreviewDayIndex((current) => (current === nextPreviewIndex ? current : nextPreviewIndex));
+      setThumbRatioOverride(ratio);
+    },
+    [groupedDayKeys, hasScrollableTimeline, maxScrollY, scrollToDayKey, trackHeight]
+  );
+
+  const fastScrollerPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          hasScrollableTimeline && (Math.abs(gestureState.dy) > 1 || Math.abs(gestureState.dx) > 1),
+        onPanResponderGrant: (event) => {
+          if (!hasScrollableTimeline) {
+            return;
+          }
+
+          showFastScroller();
+          setIsThumbDragging(true);
+          updateScrollFromTouch(event.nativeEvent.locationY);
+        },
+        onPanResponderMove: (event) => {
+          updateScrollFromTouch(event.nativeEvent.locationY);
+        },
+        onPanResponderRelease: () => {
+          setIsThumbDragging(false);
+          setThumbRatioOverride(null);
+          scheduleFastScrollerHide();
+        },
+        onPanResponderTerminate: () => {
+          setIsThumbDragging(false);
+          setThumbRatioOverride(null);
+          scheduleFastScrollerHide();
+        },
+        onStartShouldSetPanResponder: () => hasScrollableTimeline,
+      }),
+    [hasScrollableTimeline, scheduleFastScrollerHide, showFastScroller, updateScrollFromTouch]
+  );
 
   const jumpToDate = useCallback(
     (nextDate: Date) => {
@@ -205,6 +378,32 @@ export default function ProfileTimelineScreen() {
     [jumpToDate]
   );
 
+  React.useEffect(() => {
+    return () => {
+      clearFastScrollerHideTimeout();
+    };
+  }, [clearFastScrollerHideTimeout]);
+
+  React.useEffect(() => {
+    if (groupedDayKeys.length === 0) {
+      setPreviewDayIndex(1);
+      return;
+    }
+
+    setPreviewDayIndex((current) => Math.max(1, Math.min(groupedDayKeys.length, current)));
+  }, [groupedDayKeys.length]);
+
+  React.useEffect(() => {
+    if (hasScrollableTimeline) {
+      return;
+    }
+
+    clearFastScrollerHideTimeout();
+    setIsFastScrollerVisible(false);
+    setIsThumbDragging(false);
+    setThumbRatioOverride(null);
+  }, [clearFastScrollerHideTimeout, hasScrollableTimeline]);
+
   if (!requestedUserId) {
     return (
       <ProfileErrorState
@@ -229,114 +428,168 @@ export default function ProfileTimelineScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            onRefresh={() => {
-              void refetch();
-            }}
-            refreshing={isFetching && !isPending}
-            tintColor="#2e6b4b"
-          />
-        }
-        showsVerticalScrollIndicator={false}>
-        <View style={styles.headerCard}>
-          <Pressable
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-            <Feather color="#1e2a1e" name="arrow-left" size={16} />
-          </Pressable>
-          <View style={styles.headerBody}>
-            <Text style={styles.title}>Timeline</Text>
-            <Text style={styles.subtitle}>{profileName} • Alle Besuche</Text>
-          </View>
-        </View>
-
-        <View style={styles.jumpCard}>
-          <Text style={styles.jumpTitle}>Zu einem Datum springen</Text>
-          <Pressable
-            disabled={groupedTimeline.length === 0}
-            onPress={() => setShowDatePicker((current) => !current)}
-            style={({ pressed }) => [
-              styles.jumpButton,
-              groupedTimeline.length === 0 && styles.jumpButtonDisabled,
-              pressed && groupedTimeline.length > 0 && styles.pressed,
-            ]}>
-            <View style={styles.jumpButtonContent}>
-              <Feather color="#2e6b4b" name="calendar" size={15} />
-              <Text style={styles.jumpButtonLabel}>{formatJumpDate(selectedDate)}</Text>
-            </View>
-            <Feather color="#2e6b4b" name={showDatePicker ? 'chevron-up' : 'chevron-down'} size={16} />
-          </Pressable>
-          {showDatePicker ? (
-            <DateTimePicker
-              display={Platform.OS === 'ios' ? 'inline' : 'default'}
-              maximumDate={dateRange.max}
-              minimumDate={dateRange.min}
-              mode="date"
-              onChange={handleDateChange}
-              value={selectedDate}
-            />
-          ) : null}
-          {jumpHint ? <Text style={styles.jumpHint}>{jumpHint}</Text> : null}
-        </View>
-
-        {groupedTimeline.length > 0 ? (
-          groupedTimeline.map((group) => (
-            <View
-              key={group.dayKey}
-              onLayout={(event) => {
-                dayOffsetMapRef.current[group.dayKey] = event.nativeEvent.layout.y;
-                if (pendingJumpDayKey === group.dayKey && scrollToDayKey(group.dayKey)) {
-                  setPendingJumpDayKey(null);
-                }
+      <View style={styles.timelineContainer}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.content}
+          onContentSizeChange={(_, height) => {
+            setContentHeight(height);
+          }}
+          onLayout={(event) => {
+            setViewportHeight(event.nativeEvent.layout.height);
+          }}
+          onMomentumScrollBegin={() => {
+            showFastScroller();
+            clearFastScrollerHideTimeout();
+          }}
+          onMomentumScrollEnd={() => {
+            if (!isThumbDragging) {
+              scheduleFastScrollerHide();
+            }
+          }}
+          onScroll={({ nativeEvent }) => {
+            const nextY = Math.max(0, nativeEvent.contentOffset.y);
+            if (!isThumbDragging) {
+              updatePreviewFromOffset(nextY);
+            }
+          }}
+          onScrollBeginDrag={() => {
+            showFastScroller();
+          }}
+          onScrollEndDrag={() => {
+            if (!isThumbDragging) {
+              scheduleFastScrollerHide();
+            }
+          }}
+          refreshControl={
+            <RefreshControl
+              onRefresh={() => {
+                void refetch();
               }}
-              style={styles.daySection}>
-              <Text style={styles.dayLabel}>
-                {group.title} {'\u2022'} {group.items.length} {group.items.length === 1 ? 'Besuch' : 'Besuche'}
-              </Text>
-              {group.items.map((visit) => {
-                const disabled = !visit.stampId;
-                return (
-                  <Pressable
-                    key={visit.id}
-                    disabled={disabled}
-                    onPress={() => {
-                      if (visit.stampId) {
-                        router.push(`/stamps/${visit.stampId}` as never);
-                      }
-                    }}
-                    style={({ pressed }) => [styles.rowCard, pressed && !disabled && styles.pressed]}>
-                    {visit.heroImageUrl ? (
-                      <Image
-                        cachePolicy="disk"
-                        contentFit="cover"
-                        source={buildAuthenticatedImageSource(visit.heroImageUrl, accessToken)}
-                        style={styles.rowArtwork}
-                      />
-                    ) : (
-                      <View style={styles.rowArtworkFallback} />
-                    )}
-                    <View style={styles.rowBody}>
-                      <Text style={styles.rowTitle}>
-                        {visit.stampNumber || '--'} {'\u2022'} {visit.stampName}
-                      </Text>
-                      <Text style={styles.rowSubtitle}>{formatVisitDate(visit.visitedAt)}</Text>
-                    </View>
-                    {!disabled ? <Feather color="#2e6b4b" name="chevron-right" size={18} /> : null}
-                  </Pressable>
-                );
-              })}
+              refreshing={isFetching && !isPending}
+              tintColor="#2e6b4b"
+            />
+          }
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false}>
+          <View style={styles.headerCard}>
+            <Pressable
+              onPress={() => router.back()}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+              <Feather color="#1e2a1e" name="arrow-left" size={16} />
+            </Pressable>
+            <View style={styles.headerBody}>
+              <Text style={styles.title}>Timeline</Text>
+              <Text style={styles.subtitle}>{profileName} • Alle Besuche</Text>
             </View>
-          ))
-        ) : (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>Noch keine Besuche in der Timeline.</Text>
           </View>
-        )}
-      </ScrollView>
+
+          <View style={styles.jumpCard}>
+            <Text style={styles.jumpTitle}>Zu einem Datum springen</Text>
+            <Pressable
+              disabled={groupedTimeline.length === 0}
+              onPress={() => setShowDatePicker((current) => !current)}
+              style={({ pressed }) => [
+                styles.jumpButton,
+                groupedTimeline.length === 0 && styles.jumpButtonDisabled,
+                pressed && groupedTimeline.length > 0 && styles.pressed,
+              ]}>
+              <View style={styles.jumpButtonContent}>
+                <Feather color="#2e6b4b" name="calendar" size={15} />
+                <Text style={styles.jumpButtonLabel}>{formatJumpDate(selectedDate)}</Text>
+              </View>
+              <Feather color="#2e6b4b" name={showDatePicker ? 'chevron-up' : 'chevron-down'} size={16} />
+            </Pressable>
+            {showDatePicker ? (
+              <DateTimePicker
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                maximumDate={dateRange.max}
+                minimumDate={dateRange.min}
+                mode="date"
+                onChange={handleDateChange}
+                value={selectedDate}
+              />
+            ) : null}
+            {jumpHint ? <Text style={styles.jumpHint}>{jumpHint}</Text> : null}
+          </View>
+
+          {groupedTimeline.length > 0 ? (
+            groupedTimeline.map((group) => (
+              <View
+                key={group.dayKey}
+                onLayout={(event) => {
+                  dayOffsetMapRef.current[group.dayKey] = event.nativeEvent.layout.y;
+                  if (pendingJumpDayKey === group.dayKey && scrollToDayKey(group.dayKey)) {
+                    setPendingJumpDayKey(null);
+                  }
+                }}
+                style={styles.daySection}>
+                <Text style={styles.dayLabel}>
+                  {group.title} {'\u2022'} {group.items.length} {group.items.length === 1 ? 'Besuch' : 'Besuche'}
+                </Text>
+                {group.items.map((visit) => {
+                  const disabled = !visit.stampId;
+                  return (
+                    <Pressable
+                      key={visit.id}
+                      disabled={disabled}
+                      onPress={() => {
+                        if (visit.stampId) {
+                          router.push(`/stamps/${visit.stampId}` as never);
+                        }
+                      }}
+                      style={({ pressed }) => [styles.rowCard, pressed && !disabled && styles.pressed]}>
+                      {visit.heroImageUrl ? (
+                        <Image
+                          cachePolicy="disk"
+                          contentFit="cover"
+                          source={buildAuthenticatedImageSource(visit.heroImageUrl, accessToken)}
+                          style={styles.rowArtwork}
+                        />
+                      ) : (
+                        <View style={styles.rowArtworkFallback} />
+                      )}
+                      <View style={styles.rowBody}>
+                        <Text style={styles.rowTitle}>
+                          {visit.stampNumber || '--'} {'\u2022'} {visit.stampName}
+                        </Text>
+                        <Text style={styles.rowSubtitle}>{formatVisitDate(visit.visitedAt)}</Text>
+                      </View>
+                      {!disabled ? <Feather color="#2e6b4b" name="chevron-right" size={18} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ))
+          ) : (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyText}>Noch keine Besuche in der Timeline.</Text>
+            </View>
+          )}
+        </ScrollView>
+        {hasScrollableTimeline ? (
+          <View pointerEvents="box-none" style={styles.fastScrollerOverlay}>
+            <View style={styles.fastScrollerRail}>
+              <View
+                onLayout={(event) => {
+                  setTrackHeight(event.nativeEvent.layout.height);
+                }}
+                pointerEvents="none"
+                style={[styles.fastScrollerTrack, { opacity: scrollerOpacity }]}>
+                <View style={[styles.fastScrollerThumb, { height: thumbHeight, top: thumbTop }]} />
+              </View>
+              {scrollerOpacity > 0 ? (
+                <View pointerEvents="none" style={[styles.fastScrollerPreview, { top: previewTop }]}>
+                  <Text numberOfLines={1} style={styles.fastScrollerPreviewText}>
+                    {previewLabel}
+                  </Text>
+                </View>
+              ) : null}
+              <View {...fastScrollerPanResponder.panHandlers} style={styles.fastScrollerTouchArea} />
+            </View>
+          </View>
+        ) : null}
+      </View>
     </SafeAreaView>
   );
 }
@@ -346,10 +599,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f2efe8',
   },
+  timelineContainer: {
+    flex: 1,
+  },
   content: {
     paddingHorizontal: 14,
     paddingVertical: 14,
     gap: 12,
+    paddingBottom: 120,
   },
   headerCard: {
     backgroundColor: '#ffffff',
@@ -499,6 +756,59 @@ const styles = StyleSheet.create({
     color: '#6b7a6b',
     fontSize: 12,
     lineHeight: 16,
+  },
+  fastScrollerOverlay: {
+    position: 'absolute',
+    top: 14,
+    right: 0,
+    bottom: 18,
+    width: 118,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  fastScrollerRail: {
+    width: 118,
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  fastScrollerTrack: {
+    width: 4,
+    height: '100%',
+    marginRight: 18,
+    borderRadius: 999,
+    backgroundColor: 'rgba(46, 107, 75, 0.2)',
+  },
+  fastScrollerThumb: {
+    position: 'absolute',
+    left: -4,
+    width: 12,
+    borderRadius: 999,
+    backgroundColor: '#2e6b4b',
+  },
+  fastScrollerTouchArea: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 42,
+  },
+  fastScrollerPreview: {
+    position: 'absolute',
+    right: 34,
+    minWidth: 96,
+    height: FAST_SCROLLER_PREVIEW_HEIGHT,
+    borderRadius: 11,
+    backgroundColor: 'rgba(30, 42, 30, 0.92)',
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fastScrollerPreviewText: {
+    color: '#f5f3ee',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   pressed: {
     opacity: 0.84,

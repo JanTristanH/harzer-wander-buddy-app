@@ -44,7 +44,7 @@ export function StampListItem({
       )}
 
       <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>
+        <Text numberOfLines={1} style={styles.cardTitle}>
           {item.number || '--'} {'\u2022'} {item.name}
         </Text>
         <Text numberOfLines={2} style={styles.cardDescription}>
@@ -77,6 +77,7 @@ export function StampListItem({
 
 const styles = StyleSheet.create({
   card: {
+    height: 100,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,

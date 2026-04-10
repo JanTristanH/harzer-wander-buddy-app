@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import DateTimePicker, {
-  type DateTimePickerEvent,
+    type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
@@ -8,57 +8,57 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Markdown from 'react-native-markdown-display';
 import {
-  Alert,
-  Animated,
-  FlatList,
-  type GestureResponderEvent,
-  type LayoutChangeEvent,
-  Linking,
-  Modal,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  PanResponder,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
+    Alert,
+    Animated,
+    FlatList,
+    type GestureResponderEvent,
+    type LayoutChangeEvent,
+    Linking,
+    Modal,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
+    PanResponder,
+    Platform,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    Share,
+    StyleSheet,
+    Text,
+    useWindowDimensions,
+    View,
 } from 'react-native';
+import Markdown from 'react-native-markdown-display';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthGuard } from '@/components/auth-guard';
+import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
 import { FriendsList } from '@/components/friends-list';
 import { SkeletonBlock } from '@/components/skeleton';
-import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
-  createStamping,
-  deleteStamping,
-  type LatestVisitedStamp,
-  type MapData,
-  type ProfileOverviewData,
-  type Stampbox,
-  type StampDetailData,
-  updateStamping,
-  type VisitStamping,
+    createStamping,
+    deleteStamping,
+    type LatestVisitedStamp,
+    type MapData,
+    type ProfileOverviewData,
+    type Stampbox,
+    type StampDetailData,
+    updateStamping,
+    type VisitStamping,
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import {
-  isNetworkUnavailableError,
-  OFFLINE_REFRESH_MESSAGE,
-  requireOnlineForWrite,
+    isNetworkUnavailableError,
+    OFFLINE_REFRESH_MESSAGE,
+    requireOnlineForWrite,
 } from '@/lib/offline-write';
 import {
-  replaceTimelineEntry,
-  updateTimelineEntryTimestamp,
-  upsertTimelineEntry,
+    replaceTimelineEntry,
+    updateTimelineEntryTimestamp,
+    upsertTimelineEntry,
 } from '@/lib/profile-timeline';
 import { queryKeys, useRouteToStampFromPositionQuery, useStampDetailQuery } from '@/lib/queries';
 
@@ -88,7 +88,7 @@ const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.p
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
-    return 'Keine Distanz';
+    return '';
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
@@ -96,7 +96,7 @@ function formatDistance(distanceKm: number | null) {
 
 function formatDistanceMeters(distanceMeters: number | null) {
   if (distanceMeters === null) {
-    return 'Keine Distanz';
+    return '';
   }
 
   return formatDistance(distanceMeters / 1000);

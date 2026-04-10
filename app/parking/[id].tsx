@@ -51,7 +51,7 @@ function haversineDistanceKm(
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
-    return 'Keine Distanz';
+    return '';
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;

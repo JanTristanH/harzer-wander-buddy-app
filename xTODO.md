@@ -21,6 +21,7 @@
 |  | P2 | Admin: neuer Parkplatz | Mittel | M | Betrieb | Pflege |
 |  | P3 | Detaillierte Routenansicht (optional) | Mittel | M-L | Feature | Nice-to-have |
 |  | P3 | Icons kleiner | Niedrig-Mittel | S | UI-Polish | Zusammenfassen |
+|  | P3 | Fast Scroll auf der Liste | Niedrig-Mittel | S | UI-Polish | |
 
 
 ## Unsortiert:

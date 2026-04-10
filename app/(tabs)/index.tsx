@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   FlatList,
+  PanResponder,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -30,6 +31,15 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 ];
 
 const NEARBY_DISTANCE_KM = 15;
+const LIST_TOP_PADDING = 20;
+const LIST_BOTTOM_PADDING = 220;
+const KNOWN_STAMP_ROW_HEIGHT = 112;
+const DEFAULT_INTRO_HEIGHT = 220;
+const DEFAULT_CONTROLS_HEIGHT = 124;
+const STAMP_LIST_START_INDEX = 2;
+const FAST_SCROLLER_HIDE_DELAY_MS = 850;
+const FAST_SCROLLER_THUMB_HEIGHT = 44;
+const FAST_SCROLLER_TRACK_HEIGHT = 320;
 const emptySearchIllustration = require('@/assets/images/buddy/telescope.png');
 const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
 
@@ -57,7 +67,7 @@ function haversineDistanceKm(
 
 function formatDistance(distanceKm: number | null) {
   if (distanceKm === null) {
-    return 'Keine Distanz';
+    return '';
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
@@ -84,7 +94,17 @@ export default function StampsScreen() {
   const [locationState, setLocationState] = useState<LocationState>('idle');
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [introHeight, setIntroHeight] = useState(DEFAULT_INTRO_HEIGHT);
+  const [controlsHeight, setControlsHeight] = useState(DEFAULT_CONTROLS_HEIGHT);
+  const [isFastScrollerVisible, setIsFastScrollerVisible] = useState(false);
+  const [isThumbDragging, setIsThumbDragging] = useState(false);
+  const [thumbRatioOverride, setThumbRatioOverride] = useState<number | null>(null);
+  const [previewIndex, setPreviewIndex] = useState(1);
   const { data, error, isFetching, isPending, refetch } = useStampsOverviewQuery();
+  const listRef = React.useRef<FlatList<unknown> | null>(null);
+  const hideFastScrollerTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const stamps = data?.stamps ?? [];
   const lastVisited = data?.lastVisited ?? null;
   const isRefreshing = isFetching && !isPending;
@@ -210,6 +230,161 @@ export default function StampsScreen() {
       });
     });
   }
+  const headerHeight = LIST_TOP_PADDING + introHeight + controlsHeight;
+  const stampStartOffset = LIST_TOP_PADDING + introHeight;
+  const estimatedContentHeight =
+    headerHeight + filteredStamps.length * KNOWN_STAMP_ROW_HEIGHT + LIST_BOTTOM_PADDING;
+  const maxScrollY = Math.max(0, Math.max(contentHeight, estimatedContentHeight) - viewportHeight);
+  const hasScrollableList = filteredStamps.length > 0 && maxScrollY > 0;
+  const trackHeight = FAST_SCROLLER_TRACK_HEIGHT;
+  const previewRatio =
+    filteredStamps.length > 1 ? (previewIndex - 1) / (filteredStamps.length - 1) : 0;
+  const thumbHeight = FAST_SCROLLER_THUMB_HEIGHT;
+  const thumbTravel = Math.max(0, trackHeight - thumbHeight);
+  const effectiveThumbRatio =
+    thumbRatioOverride !== null ? Math.max(0, Math.min(1, thumbRatioOverride)) : previewRatio;
+  const thumbTop = effectiveThumbRatio * thumbTravel;
+  const previewTop = Math.max(0, Math.min(Math.max(0, trackHeight - 42), thumbTop + thumbHeight / 2 - 21));
+  const scrollerOpacity = isFastScrollerVisible || isThumbDragging ? 1 : 0;
+
+  const clearFastScrollerHideTimeout = React.useCallback(() => {
+    if (!hideFastScrollerTimeoutRef.current) {
+      return;
+    }
+
+    clearTimeout(hideFastScrollerTimeoutRef.current);
+    hideFastScrollerTimeoutRef.current = null;
+  }, []);
+
+  const showFastScroller = React.useCallback(() => {
+    if (!hasScrollableList) {
+      return;
+    }
+
+    clearFastScrollerHideTimeout();
+    setIsFastScrollerVisible(true);
+  }, [clearFastScrollerHideTimeout, hasScrollableList]);
+
+  const scheduleFastScrollerHide = React.useCallback(() => {
+    clearFastScrollerHideTimeout();
+    hideFastScrollerTimeoutRef.current = setTimeout(() => {
+      setIsFastScrollerVisible(false);
+    }, FAST_SCROLLER_HIDE_DELAY_MS);
+  }, [clearFastScrollerHideTimeout]);
+
+  const updatePreviewFromRatio = React.useCallback((ratio: number) => {
+    if (filteredStamps.length === 0) {
+      return;
+    }
+
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    const zeroBasedIndex = Math.min(
+      filteredStamps.length - 1,
+      Math.floor(clampedRatio * filteredStamps.length)
+    );
+    const nextIndex = zeroBasedIndex + 1;
+    setPreviewIndex(nextIndex);
+  }, [filteredStamps.length]);
+
+  const updatePreviewFromOffset = React.useCallback((offsetY: number) => {
+    if (filteredStamps.length === 0) {
+      return;
+    }
+
+    const adjustedOffset = Math.max(0, offsetY - stampStartOffset);
+    const zeroBasedIndex = Math.floor(adjustedOffset / KNOWN_STAMP_ROW_HEIGHT);
+    const clamped = Math.max(0, Math.min(filteredStamps.length - 1, zeroBasedIndex));
+    const nextIndex = clamped + 1;
+    setPreviewIndex((current) => (current === nextIndex ? current : nextIndex));
+  }, [filteredStamps.length, stampStartOffset]);
+
+  const updateScrollFromTouch = React.useCallback(
+    (touchY: number) => {
+      if (!hasScrollableList || trackHeight <= 0) {
+        return;
+      }
+
+      const clampedTouchY = Math.max(0, Math.min(trackHeight, touchY));
+      const ratio = clampedTouchY / trackHeight;
+      const targetStampIndex = Math.max(
+        0,
+        Math.min(filteredStamps.length - 1, Math.floor(ratio * filteredStamps.length))
+      );
+      const targetListIndex = targetStampIndex + STAMP_LIST_START_INDEX;
+      listRef.current?.scrollToIndex({
+        animated: false,
+        index: targetListIndex,
+        viewOffset: controlsHeight,
+      });
+      setThumbRatioOverride(ratio);
+
+      updatePreviewFromRatio(ratio);
+    },
+    [
+      controlsHeight,
+      filteredStamps.length,
+      hasScrollableList,
+      trackHeight,
+      updatePreviewFromRatio,
+    ]
+  );
+
+  const fastScrollerPanResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) => hasScrollableList && Math.abs(gestureState.dy) > 1,
+        onPanResponderGrant: (event) => {
+          if (!hasScrollableList) {
+            return;
+          }
+
+          showFastScroller();
+          setIsThumbDragging(true);
+          updateScrollFromTouch(event.nativeEvent.locationY);
+        },
+        onPanResponderMove: (event) => {
+          updateScrollFromTouch(event.nativeEvent.locationY);
+        },
+        onPanResponderRelease: () => {
+          setIsThumbDragging(false);
+          setThumbRatioOverride(null);
+          scheduleFastScrollerHide();
+        },
+        onPanResponderTerminate: () => {
+          setIsThumbDragging(false);
+          setThumbRatioOverride(null);
+          scheduleFastScrollerHide();
+        },
+        onStartShouldSetPanResponder: () => hasScrollableList,
+      }),
+    [hasScrollableList, scheduleFastScrollerHide, showFastScroller, updateScrollFromTouch]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearFastScrollerHideTimeout();
+    };
+  }, [clearFastScrollerHideTimeout]);
+
+  useEffect(() => {
+    if (filteredStamps.length === 0) {
+      setPreviewIndex(1);
+      return;
+    }
+
+    setPreviewIndex((current) => Math.max(1, Math.min(filteredStamps.length, current)));
+  }, [filteredStamps.length]);
+
+  useEffect(() => {
+    if (hasScrollableList) {
+      return;
+    }
+
+    clearFastScrollerHideTimeout();
+    setIsFastScrollerVisible(false);
+    setIsThumbDragging(false);
+    setThumbRatioOverride(null);
+  }, [clearFastScrollerHideTimeout, hasScrollableList]);
 
   const renderIntro = () => (
     <View style={styles.introContent}>
@@ -379,72 +554,172 @@ export default function StampsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <FlatList
-        data={listItems}
-        keyExtractor={(item) => item.key}
-        renderItem={({ item }) => {
-          if (item.type === 'intro') {
-            return <View style={styles.introWrap}>{renderIntro()}</View>;
-          }
-
-          if (item.type === 'controls') {
-            return (
-              <View style={styles.controlsWrap}>
-                {renderControls()}
-              </View>
-            );
-          }
-
-          if (item.type === 'empty') {
-            return (
-              <View style={styles.emptyStateWrap}>
-                <View style={styles.emptyState}>
-                  <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
-                  <Image
-                    contentFit="contain"
-                    source={emptyStateIllustration}
-                    style={styles.emptyIllustration}
-                  />
-                  <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
+      <View style={styles.listContainer}>
+        <FlatList
+          ref={listRef}
+          data={listItems}
+          keyExtractor={(item) => item.key}
+          onContentSizeChange={(_, height) => {
+            setContentHeight(height);
+          }}
+          onLayout={(event) => {
+            setViewportHeight(event.nativeEvent.layout.height);
+          }}
+          onMomentumScrollBegin={() => {
+            showFastScroller();
+            clearFastScrollerHideTimeout();
+          }}
+          onMomentumScrollEnd={() => {
+            if (!isThumbDragging) {
+              scheduleFastScrollerHide();
+            }
+          }}
+          onScroll={({ nativeEvent }) => {
+            if (!isThumbDragging) {
+              updatePreviewFromOffset(nativeEvent.contentOffset.y);
+            }
+          }}
+          onScrollBeginDrag={() => {
+            showFastScroller();
+          }}
+          onScrollEndDrag={() => {
+            if (!isThumbDragging) {
+              scheduleFastScrollerHide();
+            }
+          }}
+          renderItem={({ item }) => {
+            if (item.type === 'intro') {
+              return (
+                <View
+                  onLayout={(event) => {
+                    const nextHeight = event.nativeEvent.layout.height;
+                    setIntroHeight((current) =>
+                      Math.abs(current - nextHeight) < 0.5 ? current : nextHeight
+                    );
+                  }}
+                  style={styles.introWrap}>
+                  {renderIntro()}
                 </View>
+              );
+            }
+
+            if (item.type === 'controls') {
+              return (
+                <View
+                  onLayout={(event) => {
+                    const nextHeight = event.nativeEvent.layout.height;
+                    setControlsHeight((current) =>
+                      Math.abs(current - nextHeight) < 0.5 ? current : nextHeight
+                    );
+                  }}
+                  style={styles.controlsWrap}>
+                  {renderControls()}
+                </View>
+              );
+            }
+
+            if (item.type === 'empty') {
+              return (
+                <View style={styles.emptyStateWrap}>
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
+                    <Image
+                      contentFit="contain"
+                      source={emptyStateIllustration}
+                      style={styles.emptyIllustration}
+                    />
+                    <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
+                  </View>
+                </View>
+              );
+            }
+
+            return (
+              <View style={styles.stampRow}>
+                <StampListItem
+                  index={item.stampIndex}
+                  item={item.stampItem.stamp}
+                  metaLabel={formatDistance(item.stampItem.distanceKm)}
+                  onPress={() => router.push(`/stamps/${item.stampItem.stamp.ID}` as never)}
+                />
               </View>
             );
-          }
+          }}
+          getItemLayout={(_, index) => {
+            if (index === 0) {
+              return { index, length: introHeight, offset: 0 };
+            }
 
-          return (
-            <View style={styles.stampRow}>
-              <StampListItem
-                index={item.stampIndex}
-                item={item.stampItem.stamp}
-                metaLabel={formatDistance(item.stampItem.distanceKm)}
-                onPress={() => router.push(`/stamps/${item.stampItem.stamp.ID}` as never)}
-              />
+            if (index === 1) {
+              return { index, length: controlsHeight, offset: introHeight };
+            }
+
+            return {
+              index,
+              length: KNOWN_STAMP_ROW_HEIGHT,
+              offset: headerHeight + (index - STAMP_LIST_START_INDEX) * KNOWN_STAMP_ROW_HEIGHT,
+            };
+          }}
+          onScrollToIndexFailed={(info) => {
+            const fallbackOffset =
+              stampStartOffset + Math.max(0, info.index - STAMP_LIST_START_INDEX) * KNOWN_STAMP_ROW_HEIGHT;
+            listRef.current?.scrollToOffset({
+              animated: false,
+              offset: Math.min(maxScrollY, fallbackOffset),
+            });
+            setTimeout(() => {
+              listRef.current?.scrollToIndex({
+                animated: false,
+                index: info.index,
+                viewOffset: controlsHeight,
+              });
+            }, 64);
+          }}
+          contentContainerStyle={styles.listContent}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          refreshControl={
+            <RefreshControl
+              onRefresh={() => {
+                void (async () => {
+                  setIsPullRefreshing(true);
+                  try {
+                    await refetch();
+                  } finally {
+                    setIsPullRefreshing(false);
+                  }
+                })();
+              }}
+              refreshing={isPullRefreshing}
+              tintColor="#2e6b4b"
+            />
+          }
+          scrollEventThrottle={16}
+          stickyHeaderIndices={[1]}
+          updateCellsBatchingPeriod={50}
+          windowSize={9}
+          scrollIndicatorInsets={{ bottom: 160 }}
+          showsVerticalScrollIndicator={false}
+          style={styles.list}
+        />
+        {hasScrollableList ? (
+          <View pointerEvents="box-none" style={styles.fastScrollerOverlay}>
+            <View style={styles.fastScrollerRail}>
+              <View
+                pointerEvents="none"
+                style={[styles.fastScrollerTrack, { opacity: scrollerOpacity }]}>
+                <View style={[styles.fastScrollerThumb, { height: thumbHeight, top: thumbTop }]} />
+              </View>
+              {scrollerOpacity > 0 ? (
+                <View pointerEvents="none" style={[styles.fastScrollerPreview, { top: previewTop }]}>
+                  <Text style={styles.fastScrollerPreviewText}>{previewIndex}</Text>
+                </View>
+              ) : null}
+              <View {...fastScrollerPanResponder.panHandlers} style={styles.fastScrollerTouchArea} />
             </View>
-          );
-        }}
-        contentContainerStyle={styles.listContent}
-        contentInset={{ bottom: 160 }}
-        refreshControl={
-          <RefreshControl
-            onRefresh={() => {
-              void (async () => {
-                setIsPullRefreshing(true);
-                try {
-                  await refetch();
-                } finally {
-                  setIsPullRefreshing(false);
-                }
-              })();
-            }}
-            refreshing={isPullRefreshing}
-            tintColor="#2e6b4b"
-          />
-        }
-        stickyHeaderIndices={[1]}
-        scrollIndicatorInsets={{ bottom: 160 }}
-        showsVerticalScrollIndicator={false}
-        style={styles.list}
-      />
+          </View>
+        ) : null}
+      </View>
     </SafeAreaView>
   );
 }
@@ -454,12 +729,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f3ee',
   },
+  listContainer: {
+    flex: 1,
+  },
   list: {
     flex: 1,
   },
   listContent: {
-    paddingTop: 20,
-    paddingBottom: 220,
+    paddingTop: LIST_TOP_PADDING,
+    paddingBottom: LIST_BOTTOM_PADDING,
   },
   loadingContent: {
     flex: 1,
@@ -523,6 +801,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   stampRow: {
+    height: KNOWN_STAMP_ROW_HEIGHT,
     paddingHorizontal: 20,
     paddingBottom: 12,
   },
@@ -712,5 +991,57 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     alignSelf: 'center',
+  },
+  fastScrollerOverlay: {
+    position: 'absolute',
+    top: 116,
+    right: 0,
+    bottom: 176,
+    width: 74,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  fastScrollerRail: {
+    width: 74,
+    height: FAST_SCROLLER_TRACK_HEIGHT,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  fastScrollerTrack: {
+    width: 4,
+    height: FAST_SCROLLER_TRACK_HEIGHT,
+    marginRight: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(46, 107, 75, 0.18)',
+  },
+  fastScrollerThumb: {
+    position: 'absolute',
+    left: -4,
+    width: 12,
+    borderRadius: 999,
+    backgroundColor: '#2e6b4b',
+  },
+  fastScrollerTouchArea: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 40,
+  },
+  fastScrollerPreview: {
+    position: 'absolute',
+    right: 30,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: 'rgba(30, 42, 30, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fastScrollerPreviewText: {
+    color: '#f5f3ee',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
   },
 });
