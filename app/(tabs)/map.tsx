@@ -121,6 +121,7 @@ const MAP_EDGE_PADDING = { top: 140, right: 64, bottom: 260, left: 64 };
 const ZOOM_CONTROLS_GAP = 16;
 const SEARCH_RESULT_LIMIT = 6;
 const REMOTE_SEARCH_DEBOUNCE_MS = 350;
+const REMOTE_PLACE_SEARCH_MIN_QUERY_LENGTH = 4;
 const SEARCH_TARGET_DELTA = 0.02;
 const SELECTION_TARGET_DELTA = 0.08;
 const LOCATE_ME_TARGET_DELTA = 0.05;
@@ -362,6 +363,10 @@ function zoomRegion(region: Region, factor: number) {
 
 function normalizeSearchValue(value: string) {
   return value.trim().toLowerCase();
+}
+
+function shouldSkipRemotePlaceSearch(normalizedQuery: string) {
+  return /^\d{1,3}$/.test(normalizedQuery);
 }
 
 function normalizeStampMarkerToken(value?: string | null): string | null {
@@ -745,7 +750,12 @@ export default function MapScreen() {
     }
 
     const normalizedQuery = normalizeSearchValue(searchQuery);
-    if (!isOnline || normalizedQuery.length < 3 || !accessToken) {
+    if (
+      !isOnline ||
+      normalizedQuery.length < REMOTE_PLACE_SEARCH_MIN_QUERY_LENGTH ||
+      !accessToken ||
+      shouldSkipRemotePlaceSearch(normalizedQuery)
+    ) {
       setRemoteSearchResults([]);
       setIsRemoteSearchLoading(false);
       setRemoteSearchError(null);
@@ -1523,7 +1533,10 @@ export default function MapScreen() {
   }, [claims?.sub, isOnline, queryClient]);
 
   const showOfflineSearchHint =
-    isSearchFocused && !isOnline && normalizeSearchValue(searchQuery).length >= 3;
+    isSearchFocused &&
+    !isOnline &&
+    normalizeSearchValue(searchQuery).length >= REMOTE_PLACE_SEARCH_MIN_QUERY_LENGTH &&
+    !shouldSkipRemotePlaceSearch(normalizeSearchValue(searchQuery));
 
   return (
     <View style={styles.screen}>
