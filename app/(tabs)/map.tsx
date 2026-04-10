@@ -1441,6 +1441,25 @@ export default function MapScreen() {
     }
   }, [selectedExternalPlace]);
 
+  const handleStartSelectedParkingNavigation = useCallback(async () => {
+    if (!selectedItem || selectedItem.kind !== 'parking') {
+      return;
+    }
+
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      `${selectedItem.coordinate.latitude},${selectedItem.coordinate.longitude}`
+    )}`;
+
+    try {
+      await Linking.openURL(url);
+    } catch (nextError) {
+      Alert.alert(
+        'Google Maps konnte nicht geoeffnet werden',
+        nextError instanceof Error ? nextError.message : 'Unknown error'
+      );
+    }
+  }, [selectedItem]);
+
   useEffect(() => {
     if (!requestedStampId) {
       handledRequestedStampIdRef.current = null;
@@ -1500,8 +1519,12 @@ export default function MapScreen() {
   }, []);
 
   const selectionPrimaryActionLabel = useMemo(() => {
-    if (!selectedItem || selectedItem.kind === 'parking') {
+    if (!selectedItem) {
       return undefined;
+    }
+
+    if (selectedItem.kind === 'parking') {
+      return 'Navigation starten';
     }
 
     if (isStamping) {
@@ -1512,12 +1535,28 @@ export default function MapScreen() {
   }, [isStamping, selectedItem]);
 
   const selectionPrimaryActionDisabled = useMemo(() => {
-    if (!selectedItem || selectedItem.kind === 'parking') {
+    if (!selectedItem) {
       return true;
+    }
+
+    if (selectedItem.kind === 'parking') {
+      return false;
     }
 
     return isStamping || selectedItem.kind === 'visited-stamp' || !accessToken || !canPerformWrites;
   }, [accessToken, canPerformWrites, isStamping, selectedItem]);
+
+  const selectionPrimaryActionPress = useMemo(() => {
+    if (!selectedItem) {
+      return undefined;
+    }
+
+    if (selectedItem.kind === 'parking') {
+      return handleStartSelectedParkingNavigation;
+    }
+
+    return handleStampVisit;
+  }, [handleStampVisit, handleStartSelectedParkingNavigation, selectedItem]);
 
   const handleManualRefresh = useCallback(() => {
     if (!isOnline) {
@@ -1835,7 +1874,7 @@ export default function MapScreen() {
                   ? `Besucht am ${formatVisitDate(selectedItem.visitedAt)}`
                   : 'Noch kein Besuchsdatum vorhanden.')
             }
-            onPrimaryActionPress={handleStampVisit}
+            onPrimaryActionPress={selectionPrimaryActionPress}
             primaryActionDisabled={selectionPrimaryActionDisabled}
             primaryActionLabel={selectionPrimaryActionLabel}
             onDetailsPress={() =>
