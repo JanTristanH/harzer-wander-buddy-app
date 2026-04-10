@@ -39,7 +39,7 @@ const DEFAULT_CONTROLS_HEIGHT = 124;
 const STAMP_LIST_START_INDEX = 2;
 const FAST_SCROLLER_HIDE_DELAY_MS = 850;
 const FAST_SCROLLER_THUMB_HEIGHT = 44;
-const FAST_SCROLLER_TRACK_HEIGHT = 320;
+const FAST_SCROLLER_TRACK_HEIGHT = 580;
 const emptySearchIllustration = require('@/assets/images/buddy/telescope.png');
 const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.png');
 
