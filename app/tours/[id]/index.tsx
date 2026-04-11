@@ -1,5 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
@@ -11,6 +12,8 @@ import {
   Linking,
   Modal,
   Pressable,
+  Animated as RNAnimated,
+  Easing as RNEasing,
   ScrollView,
   Share,
   StyleSheet,
@@ -38,16 +41,16 @@ import {
   getPreGeneratedMapMarkerImageSource,
 } from '@/lib/map-marker-images.generated';
 import {
+  isNetworkUnavailableError,
+  requireOnlineForWrite,
+} from '@/lib/offline-write';
+import {
   useDeleteTourMutation,
   useMapDataQuery,
   useTourDetailQuery,
   useUpdateTourByPOIListMutation,
   useUpdateTourNameMutation,
 } from '@/lib/queries';
-import {
-  isNetworkUnavailableError,
-  requireOnlineForWrite,
-} from '@/lib/offline-write';
 
 const HARZ_REGION: Region = {
   latitude: 51.7544,
@@ -744,6 +747,7 @@ export default function TourDetailScreen() {
   const [isRemoveVisitDialogOpen, setIsRemoveVisitDialogOpen] = useState(false);
   const [tourNameDraft, setTourNameDraft] = useState('');
   const [tracksOverlayViewChanges, setTracksOverlayViewChanges] = useState(true);
+  const [showPoiAddedFeedback, setShowPoiAddedFeedback] = useState(false);
 
   const mapRef = useRef<MapView | null>(null);
   const hasAppliedAutoStartEditModeRef = useRef(false);
@@ -757,10 +761,26 @@ export default function TourDetailScreen() {
   const wasEditModeRef = useRef(false);
   const renameDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTracksViewChangesTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const poiAddedFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const poiAddedFeedbackProgress = useRef(new RNAnimated.Value(1)).current;
+  const tourMetricsGlowProgress = useRef(new RNAnimated.Value(0)).current;
   const fullscreenProgress = useSharedValue(0);
+  const addPoiButtonScale = useSharedValue(1);
   const fullscreenAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 0.94 + fullscreenProgress.value * 0.06 }],
   }));
+  const addPoiButtonAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: addPoiButtonScale.value }],
+  }));
+  const shouldShowTourMetricsGlow = isEditMode && (saveStatus === 'saving' || updateTourMutation.isPending);
+  const tourMetricsGlowTranslateX = useMemo(
+    () =>
+      tourMetricsGlowProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-140, 360],
+      }),
+    [tourMetricsGlowProgress]
+  );
 
   const openMapFullscreen = useCallback(() => {
     setIsMapFullscreen(true);
@@ -809,7 +829,67 @@ export default function TourDetailScreen() {
       clearTimeout(renameDebounceTimeoutRef.current);
       renameDebounceTimeoutRef.current = null;
     }
-  }, [tourId]);
+    if (poiAddedFeedbackTimeoutRef.current) {
+      clearTimeout(poiAddedFeedbackTimeoutRef.current);
+      poiAddedFeedbackTimeoutRef.current = null;
+    }
+    poiAddedFeedbackProgress.stopAnimation();
+    poiAddedFeedbackProgress.setValue(1);
+    tourMetricsGlowProgress.stopAnimation();
+    tourMetricsGlowProgress.setValue(0);
+    setShowPoiAddedFeedback(false);
+    addPoiButtonScale.value = 1;
+  }, [addPoiButtonScale, poiAddedFeedbackProgress, tourId, tourMetricsGlowProgress]);
+
+  useEffect(() => {
+    return () => {
+      if (poiAddedFeedbackTimeoutRef.current) {
+        clearTimeout(poiAddedFeedbackTimeoutRef.current);
+        poiAddedFeedbackTimeoutRef.current = null;
+      }
+      poiAddedFeedbackProgress.stopAnimation();
+      tourMetricsGlowProgress.stopAnimation();
+    };
+  }, [poiAddedFeedbackProgress, tourMetricsGlowProgress]);
+
+  useEffect(() => {
+    if (isEditMode) {
+      return;
+    }
+
+    if (poiAddedFeedbackTimeoutRef.current) {
+      clearTimeout(poiAddedFeedbackTimeoutRef.current);
+      poiAddedFeedbackTimeoutRef.current = null;
+    }
+    poiAddedFeedbackProgress.stopAnimation();
+    poiAddedFeedbackProgress.setValue(1);
+    setShowPoiAddedFeedback(false);
+    addPoiButtonScale.value = 1;
+  }, [addPoiButtonScale, isEditMode, poiAddedFeedbackProgress]);
+
+  useEffect(() => {
+    if (!shouldShowTourMetricsGlow) {
+      tourMetricsGlowProgress.stopAnimation();
+      tourMetricsGlowProgress.setValue(0);
+      return;
+    }
+
+    tourMetricsGlowProgress.setValue(0);
+    const animation = RNAnimated.loop(
+      RNAnimated.timing(tourMetricsGlowProgress, {
+        toValue: 1,
+        duration: 1100,
+        easing: RNEasing.linear,
+        useNativeDriver: true,
+      })
+    );
+    animation.start();
+
+    return () => {
+      animation.stop();
+      tourMetricsGlowProgress.stopAnimation();
+    };
+  }, [shouldShowTourMetricsGlow, tourMetricsGlowProgress]);
 
   useEffect(() => {
     if (!isMapFullscreen) {
@@ -1749,13 +1829,58 @@ export default function TourDetailScreen() {
     updateTourNameMutation.isPending,
   ]);
 
+  const triggerPoiAddedFeedback = useCallback(() => {
+    if (poiAddedFeedbackTimeoutRef.current) {
+      clearTimeout(poiAddedFeedbackTimeoutRef.current);
+      poiAddedFeedbackTimeoutRef.current = null;
+    }
+
+    setShowPoiAddedFeedback(true);
+    poiAddedFeedbackProgress.stopAnimation();
+    poiAddedFeedbackProgress.setValue(1);
+    RNAnimated.timing(poiAddedFeedbackProgress, {
+      toValue: 0,
+      duration: 800,
+      useNativeDriver: false,
+    }).start();
+    addPoiButtonScale.value = 1;
+    addPoiButtonScale.value = withTiming(
+      0.97,
+      {
+        duration: 70,
+        easing: Easing.out(Easing.cubic),
+      },
+      (finished) => {
+        if (!finished) {
+          return;
+        }
+
+        addPoiButtonScale.value = withTiming(1, {
+          duration: 120,
+          easing: Easing.inOut(Easing.cubic),
+        });
+      }
+    );
+    poiAddedFeedbackTimeoutRef.current = setTimeout(() => {
+      poiAddedFeedbackTimeoutRef.current = null;
+      setShowPoiAddedFeedback(false);
+      poiAddedFeedbackProgress.stopAnimation();
+      poiAddedFeedbackProgress.setValue(1);
+    }, 800);
+
+    void Haptics.selectionAsync().catch(() => {
+      // Ignore non-critical haptic errors to keep add-flow robust.
+    });
+  }, [addPoiButtonScale, poiAddedFeedbackProgress]);
+
   const handleAppendSelectedPoi = useCallback(() => {
     if (editingBlocked || !selectedMapItem) {
       return;
     }
 
     setDraftPoiIds((current) => [...current, selectedMapItem.ID]);
-  }, [editingBlocked, selectedMapItem]);
+    triggerPoiAddedFeedback();
+  }, [editingBlocked, selectedMapItem, triggerPoiAddedFeedback]);
 
   const closeRemoveVisitDialog = useCallback(() => {
     setIsRemoveVisitDialogOpen(false);
@@ -2348,19 +2473,40 @@ export default function TourDetailScreen() {
           </Pressable>
           {isEditMode ? (
             <View style={styles.mapBottomActionRow}>
-              <Pressable
-                disabled={editingBlocked}
-                onPress={handleAppendSelectedPoi}
-                style={({ pressed }) => [
-                  styles.addButton,
-                  styles.mapBottomActionButton,
-                  editingBlocked && styles.addButtonDisabled,
-                  pressed && !editingBlocked && styles.pressed,
-                ]}>
-                <Text style={styles.addButtonLabel}>
-                  {selectedItemInTourCount > 0 ? 'Nochmals hinzufuegen' : 'Zur Tour hinzufuegen'}
-                </Text>
-              </Pressable>
+              <Animated.View style={[styles.mapBottomActionButton, addPoiButtonAnimatedStyle]}>
+                <Pressable
+                  disabled={editingBlocked}
+                  onPress={handleAppendSelectedPoi}
+                  style={({ pressed }) => [
+                    styles.addButton,
+                    styles.mapBottomActionButtonFill,
+                    editingBlocked && styles.addButtonDisabled,
+                    pressed && !editingBlocked && styles.pressed,
+                  ]}>
+                  <Text style={styles.addButtonLabel}>
+                    {showPoiAddedFeedback
+                      ? 'Hinzugefügt'
+                      : selectedItemInTourCount > 0
+                        ? 'Nochmals hinzufügen'
+                        : 'Zur Tour hinzufügen'}
+                  </Text>
+                  {showPoiAddedFeedback ? (
+                    <View style={styles.addFeedbackTimerTrack}>
+                      <RNAnimated.View
+                        style={[
+                          styles.addFeedbackTimerBar,
+                          {
+                            width: poiAddedFeedbackProgress.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: ['0%', '100%'],
+                            }),
+                          },
+                        ]}
+                      />
+                    </View>
+                  ) : null}
+                </Pressable>
+              </Animated.View>
 
               {selectedItemInTourCount > 0 ? (
                 <Pressable
@@ -2489,9 +2635,72 @@ export default function TourDetailScreen() {
           <View style={styles.cardHeaderRow}>
             <Text style={styles.cardTitle}>Tourprofil</Text>
           </View>
-          <Text style={styles.cardLine}>{`Distanz: ${formatDistance(tourMetrics.distance)} • Dauer: ${formatDuration(tourMetrics.duration)}`}</Text>
-          <Text style={styles.cardLine}>{`Hoehenprofil: ↑${formatElevation(tourMetrics.totalElevationGain)} • ↓${formatElevation(tourMetrics.totalElevationLoss)}`}</Text>
-          <Text style={styles.cardLine}>{`Stempel gesamt: ${tourMetrics.stampCount ?? 0} • Neue Stempel fuer mich: ${tourMetrics.newStampCountForUser ?? 0}`}</Text>
+
+          <View style={styles.tourMetricsLineWrap}>
+            <Text style={styles.cardLine}>
+              {`Distanz: ${formatDistance(tourMetrics.distance)} • Dauer: ${formatDuration(tourMetrics.duration)}`}
+            </Text>
+            {shouldShowTourMetricsGlow ? (
+              <RNAnimated.View
+                pointerEvents="none"
+                style={[styles.tourMetricsLineGlow, { transform: [{ translateX: tourMetricsGlowTranslateX }] }]}>
+                <LinearGradient
+                  colors={[
+                    'rgba(255, 255, 255, 0)',
+                    'rgba(244, 250, 245, 0.62)',
+                    'rgba(255, 255, 255, 0)',
+                  ]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.tourMetricsLineGlowGradient}
+                />
+              </RNAnimated.View>
+            ) : null}
+          </View>
+
+          <View style={styles.tourMetricsLineWrap}>
+            <Text style={styles.cardLine}>
+              {`Höhenprofil: ↑${formatElevation(tourMetrics.totalElevationGain)} • ↓${formatElevation(tourMetrics.totalElevationLoss)}`}
+            </Text>
+            {shouldShowTourMetricsGlow ? (
+              <RNAnimated.View
+                pointerEvents="none"
+                style={[styles.tourMetricsLineGlow, { transform: [{ translateX: tourMetricsGlowTranslateX }] }]}>
+                <LinearGradient
+                  colors={[
+                    'rgba(255, 255, 255, 0)',
+                    'rgba(244, 250, 245, 0.62)',
+                    'rgba(255, 255, 255, 0)',
+                  ]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.tourMetricsLineGlowGradient}
+                />
+              </RNAnimated.View>
+            ) : null}
+          </View>
+
+          <View style={styles.tourMetricsLineWrap}>
+            <Text style={styles.cardLine}>
+              {`Stempel gesamt: ${tourMetrics.stampCount ?? 0} • Neue Stempel für mich: ${tourMetrics.newStampCountForUser ?? 0}`}
+            </Text>
+            {shouldShowTourMetricsGlow ? (
+              <RNAnimated.View
+                pointerEvents="none"
+                style={[styles.tourMetricsLineGlow, { transform: [{ translateX: tourMetricsGlowTranslateX }] }]}>
+                <LinearGradient
+                  colors={[
+                    'rgba(255, 255, 255, 0)',
+                    'rgba(244, 250, 245, 0.62)',
+                    'rgba(255, 255, 255, 0)',
+                  ]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.tourMetricsLineGlowGradient}
+                />
+              </RNAnimated.View>
+            ) : null}
+          </View>
         </View>
 
         {blockingErrorCode === 403 ? (
@@ -3095,6 +3304,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  tourMetricsLineWrap: {
+    position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  tourMetricsLineGlow: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 130,
+  },
+  tourMetricsLineGlowGradient: {
+    flex: 1,
+  },
   warningBanner: {
     borderRadius: 16,
     backgroundColor: '#fff6ea',
@@ -3363,6 +3586,9 @@ const styles = StyleSheet.create({
   mapBottomActionButton: {
     flex: 1,
   },
+  mapBottomActionButtonFill: {
+    width: '100%',
+  },
   addButton: {
     backgroundColor: '#2e6b4b',
     borderRadius: 10,
@@ -3379,6 +3605,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
+  },
+  addFeedbackTimerTrack: {
+    marginTop: 6,
+    width: '100%',
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245, 243, 238, 0.25)',
+    overflow: 'hidden',
+  },
+  addFeedbackTimerBar: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#f5f3ee',
   },
   removeButton: {
     borderRadius: 10,
