@@ -8,7 +8,7 @@ import {
   ProfileView,
   type ProfileViewModel,
 } from '@/components/profile-view';
-import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useAdminAccess, useAuth, useIdTokenClaims } from '@/lib/auth';
 import { OFFLINE_REFRESH_MESSAGE } from '@/lib/offline-write';
 import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { useProfileOverviewQuery } from '@/lib/queries';
@@ -25,6 +25,7 @@ const emptyVisitedIllustration = require('@/assets/images/buddy/emptyNotebook.pn
 export default function ProfileScreen() {
   const router = useRouter();
   const { currentUserProfile, isOffline, logout, resetApp } = useAuth();
+  const { isAdmin } = useAdminAccess();
   const claims = useIdTokenClaims<ProfileClaims & { sub?: string }>();
   const matchingCurrentUserProfile =
     claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
@@ -128,6 +129,17 @@ export default function ProfileScreen() {
       refreshHint: isFetching && !isPending ? 'Aktualisiere Daten im Hintergrund...' : undefined,
       showDeferredSkeletons: isPlaceholderData,
       footerButtons: [
+        ...(isAdmin
+          ? [
+              {
+                key: 'admin',
+                label: 'Admin',
+                onPress: () => {
+                  router.push('/admin' as never);
+                },
+              },
+            ]
+          : []),
         {
           key: 'reset-app',
           label: 'Onboarding neu starten',
@@ -153,6 +165,7 @@ export default function ProfileScreen() {
     matchingCurrentUserProfile?.picture,
     data,
     isFetching,
+    isAdmin,
     isOffline,
     isPending,
     isPlaceholderData,

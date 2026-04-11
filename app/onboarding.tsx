@@ -434,6 +434,7 @@ export default function OnboardingScreen() {
           id: matchingCurrentUserProfile?.id || claims?.sub || nextName,
           name: updatedProfile.name || nextName,
           picture: updatedProfile.picture || nextPicture,
+          roles: matchingCurrentUserProfile?.roles,
         };
 
         setCurrentUserProfile(resolvedProfile);
@@ -493,6 +494,7 @@ export default function OnboardingScreen() {
     claims?.picture,
     claims?.sub,
     matchingCurrentUserProfile?.id,
+    matchingCurrentUserProfile?.roles,
     isAuthenticated,
     logout,
     canPerformWrites,

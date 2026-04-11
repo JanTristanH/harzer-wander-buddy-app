@@ -40,7 +40,6 @@ import {
 import {
   useDeleteTourMutation,
   useMapDataQuery,
-  usePointsOfInterestQuery,
   useTourDetailQuery,
   useUpdateTourByPOIListMutation,
   useUpdateTourNameMutation,
@@ -500,37 +499,6 @@ function extractStampToken(value?: string | null) {
   return tokenWithDigits ?? tokens[0];
 }
 
-function inferStampNumberFromPoi(poi: {
-  stampNumber?: string;
-  poiType?: string;
-  name?: string;
-  orderBy?: string;
-}) {
-  const explicit = extractStampToken(poi.stampNumber);
-  if (explicit) {
-    return explicit;
-  }
-
-  const byOrder = extractStampToken(poi.orderBy);
-  if (byOrder) {
-    return byOrder;
-  }
-
-  const normalizedType = normalizeSearchValue(poi.poiType || '');
-  const normalizedName = normalizeSearchValue(poi.name || '');
-  const looksLikeStamp =
-    normalizedType.includes('stempel') ||
-    normalizedType.includes('stamp') ||
-    normalizedName.includes('stempel') ||
-    normalizedName.includes('stamp');
-
-  if (!looksLikeStamp) {
-    return null;
-  }
-
-  return extractStampToken(poi.name);
-}
-
 function haversineDistanceKm(from: Coordinate, to: Coordinate) {
   const toRad = (degrees: number) => (degrees * Math.PI) / 180;
   const earthRadiusKm = 6371;
@@ -744,7 +712,6 @@ export default function TourDetailScreen() {
   const editParam = Array.isArray(params.edit) ? params.edit[0] : params.edit;
   const shouldStartInEditMode = editParam === '1' || editParam === 'true';
   const { data, error, isPending, isFetching, refetch } = useTourDetailQuery(tourId);
-  const { data: poiData = [] } = usePointsOfInterestQuery();
   const { data: mapData } = useMapDataQuery();
   const deleteTourMutation = useDeleteTourMutation(tourId);
   const updateTourNameMutation = useUpdateTourNameMutation(tourId);
@@ -887,26 +854,6 @@ export default function TourDetailScreen() {
   const allMapItems = useMemo<TourMapItem[]>(() => {
     const itemsById = new Map<string, TourMapItem>();
 
-    for (const poi of poiData) {
-      if (!hasCoordinate(poi)) {
-        continue;
-      }
-
-      const inferredStampNumber = inferStampNumberFromPoi(poi);
-      itemsById.set(poi.ID.toLowerCase(), {
-        ID: poi.ID,
-        name: cleanText(poi.name) || poi.ID,
-        typeLabel: inferredStampNumber ? 'Stempel' : cleanText(poi.poiType) || 'POI',
-        markerLabel: inferredStampNumber || 'POI',
-        stampNumber: inferredStampNumber || undefined,
-        kind: 'poi',
-        latitude: poi.latitude,
-        longitude: poi.longitude,
-        description: cleanText(poi.description),
-        imageUrl: cleanText(poi.heroImageUrl),
-      });
-    }
-
     for (const stamp of mapData?.stamps ?? []) {
       if (!hasCoordinate(stamp)) {
         continue;
@@ -946,7 +893,7 @@ export default function TourDetailScreen() {
     }
 
     return Array.from(itemsById.values());
-  }, [mapData?.parkingSpots, mapData?.stamps, poiData]);
+  }, [mapData?.parkingSpots, mapData?.stamps]);
 
   const mapItemById = useMemo(() => {
     const nextMap = new Map<string, TourMapItem>();

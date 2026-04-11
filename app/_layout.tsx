@@ -102,6 +102,11 @@ export default function RootLayout() {
                 <Stack.Screen name="tours/[id]/edit" />
                 <Stack.Screen name="stamps/[id]" />
                 <Stack.Screen name="parking/[id]" />
+                <Stack.Screen name="admin/index" />
+                <Stack.Screen name="admin/stamps/index" />
+                <Stack.Screen name="admin/stamps/[id]" />
+                <Stack.Screen name="admin/parking/index" />
+                <Stack.Screen name="admin/parking/[id]" />
               </Stack>
               <StatusBar style="light" />
             </ThemeProvider>

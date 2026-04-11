@@ -9,6 +9,7 @@ import {
   PanResponder,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,9 +19,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonBlock } from '@/components/skeleton';
 import { StampListItem } from '@/components/stamp-list-item';
-import { useStampsOverviewQuery } from '@/lib/queries';
+import { useFilteredStampsOverviewQuery } from '@/lib/queries';
 
-type FilterKey = 'all' | 'visited' | 'open' | 'near';
+type FilterKey = 'all' | 'visited' | 'open' | 'near' | 'relocated';
 type LocationState = 'idle' | 'loading' | 'granted' | 'denied';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -28,6 +29,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'visited', label: 'Besucht' },
   { key: 'open', label: 'Unbesucht' },
   { key: 'near', label: 'In der Nähe' },
+  { key: 'relocated', label: 'Verlegt' },
 ];
 
 const NEARBY_DISTANCE_KM = 15;
@@ -87,6 +89,21 @@ function formatVisitDate(value?: string) {
   });
 }
 
+function isRelocatedStamp(validTo?: string) {
+  if (!validTo) {
+    return false;
+  }
+
+  const validToTimestamp = Date.parse(validTo);
+  if (!Number.isFinite(validToTimestamp)) {
+    return false;
+  }
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return validToTimestamp < startOfToday;
+}
+
 export default function StampsScreen() {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -102,7 +119,9 @@ export default function StampsScreen() {
   const [isThumbDragging, setIsThumbDragging] = useState(false);
   const [thumbRatioOverride, setThumbRatioOverride] = useState<number | null>(null);
   const [previewIndex, setPreviewIndex] = useState(1);
-  const { data, error, isFetching, isPending, refetch } = useStampsOverviewQuery();
+  const backendFilter: 'validToday' | 'all' | 'visited' | 'open' | 'relocated' =
+    activeFilter === 'relocated' ? 'relocated' : 'validToday';
+  const { data, error, isFetching, isPending, refetch } = useFilteredStampsOverviewQuery(backendFilter);
   const listRef = React.useRef<FlatList<unknown> | null>(null);
   const hideFastScrollerTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const stamps = data?.stamps ?? [];
@@ -185,6 +204,10 @@ export default function StampsScreen() {
 
     if (activeFilter === 'near') {
       return distanceKm !== null && distanceKm <= NEARBY_DISTANCE_KM;
+    }
+
+    if (activeFilter === 'relocated') {
+      return isRelocatedStamp(stamp.validTo);
     }
 
     return true;
@@ -430,7 +453,11 @@ export default function StampsScreen() {
         />
       </View>
 
-      <View style={styles.filterRow}>
+      <ScrollView
+        contentContainerStyle={styles.filterRow}
+        horizontal
+        style={styles.filterScroll}
+        showsHorizontalScrollIndicator={false}>
         {FILTERS.map((filter) => {
           const isActive = activeFilter === filter.key;
           return (
@@ -448,7 +475,7 @@ export default function StampsScreen() {
             </Pressable>
           );
         })}
-      </View>
+      </ScrollView>
 
       {activeFilter === 'near' && locationState !== 'granted' ? (
         <Text style={styles.filterHint}>
@@ -488,7 +515,11 @@ export default function StampsScreen() {
                 value=""
               />
             </View>
-            <View style={styles.filterRow}>
+            <ScrollView
+              contentContainerStyle={styles.filterRow}
+              horizontal
+              style={styles.filterScroll}
+              showsHorizontalScrollIndicator={false}>
               {FILTERS.map((filter) => (
                 <View
                   key={filter.key}
@@ -505,7 +536,7 @@ export default function StampsScreen() {
                   </Text>
                 </View>
               ))}
-            </View>
+            </ScrollView>
           </View>
 
           <View style={styles.loadingCards}>
@@ -910,14 +941,20 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: 8,
+    paddingRight: 6,
+  },
+  filterScroll: {
+    height: 40,
   },
   filterPill: {
+    height: 32,
     borderRadius: 999,
     backgroundColor: '#ffffff',
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   filterPillActive: {
     backgroundColor: '#2e6b4b',

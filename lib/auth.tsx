@@ -6,6 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { extractRolesFromClaims, hasAdminRole } from '@/lib/admin-access';
 import { fetchCurrentUserProfile, type CurrentUserProfileData } from '@/lib/api';
 import { appConfig, getMissingConfig } from '@/lib/config';
 import { useConnectivity } from '@/lib/connectivity';
@@ -642,4 +643,26 @@ export function useAuth() {
 export function useIdTokenClaims<T>() {
   const { idToken } = useAuth();
   return decodeJwt<T>(idToken ?? undefined);
+}
+
+type GenericIdTokenClaims = Record<string, unknown> & { sub?: string };
+
+export function useAdminAccess() {
+  const { currentUserProfile, isAuthenticated, isLoading } = useAuth();
+  const claims = useIdTokenClaims<GenericIdTokenClaims>();
+  const claimRoles = useMemo(() => extractRolesFromClaims(claims), [claims]);
+  const profileRoles = currentUserProfile?.roles ?? [];
+  const isAdminFromClaims = hasAdminRole(claimRoles);
+  const isAdminFromProfile = hasAdminRole(profileRoles);
+  const isAdmin = isAdminFromClaims || isAdminFromProfile;
+  const source = isAdminFromClaims ? 'claims' : isAdminFromProfile ? 'profile' : 'none';
+  const isResolved = !isAuthenticated || isAdminFromClaims || Boolean(currentUserProfile);
+
+  return {
+    isAdmin,
+    source,
+    isResolved: isResolved && !isLoading,
+    claimRoles,
+    profileRoles,
+  } as const;
 }

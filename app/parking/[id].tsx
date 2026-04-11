@@ -19,8 +19,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AuthGuard } from '@/components/auth-guard';
 import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
+import { DetailOverflowMenu } from '@/components/detail-overflow-menu';
 import { SkeletonBlock } from '@/components/skeleton';
-import { useAuth } from '@/lib/auth';
+import { useAdminAccess, useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import { useParkingDetailQuery } from '@/lib/queries';
 
@@ -163,6 +164,7 @@ function ParkingDetailContent() {
   }>();
   const insets = useSafeAreaInsets();
   const { accessToken } = useAuth();
+  const { isAdmin } = useAdminAccess();
   const parkingId = Array.isArray(params.id) ? params.id[0] : params.id;
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
     useParkingDetailQuery(parkingId);
@@ -339,6 +341,22 @@ function ParkingDetailContent() {
           <Pressable onPress={handleBack} style={({ pressed }) => [styles.topButton, pressed && styles.topButtonPressed]}>
             <Feather color="#1e2a1e" name="arrow-left" size={18} />
           </Pressable>
+
+          {isAdmin ? (
+            <View style={styles.topRightActions}>
+              <DetailOverflowMenu
+                actions={[
+                  {
+                    key: 'edit-parking',
+                    label: 'Bearbeiten',
+                    icon: 'edit-2',
+                    onPress: () => router.push(`/admin/parking/${parking.ID}` as never),
+                  },
+                ]}
+                topOffset={insets.top + 58}
+              />
+            </View>
+          ) : null}
 
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Parkplatz</Text>
@@ -628,6 +646,14 @@ const styles = StyleSheet.create({
   },
   topButtonPressed: {
     opacity: 0.88,
+  },
+  topRightActions: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
   },
   heroBadge: {
     position: 'absolute',

@@ -1,3 +1,4 @@
+import { normalizeRoleTokens } from '@/lib/admin-access';
 import { appConfig } from '@/lib/config';
 import { prepareProfileImageForUpload, type UploadableImage } from '@/lib/image-upload';
 import buildODataQuery, { type QueryOptions } from 'odata-query';
@@ -11,6 +12,8 @@ export type Stampbox = {
   heroImageUrl?: string;
   image?: string;
   imageCaption?: string;
+  validFrom?: string;
+  validTo?: string;
   latitude?: number;
   longitude?: number;
   hasVisited?: boolean;
@@ -18,6 +21,35 @@ export type Stampbox = {
   stampedUsers?: string | string[];
   stampedUserIds?: string | string[];
 };
+
+export type AdminStampboxMutationInput = {
+  name: string;
+  description?: string;
+  heroImageUrl?: string;
+  imageCaption?: string;
+  validFrom?: string;
+  validTo?: string;
+  latitude: number;
+  longitude: number;
+  number?: string;
+  orderBy?: string;
+};
+
+export type AdminParkingSpotMutationInput = {
+  name: string;
+  description?: string;
+  image?: string;
+  latitude: number;
+  longitude: number;
+};
+
+export type StampboxFetchMode =
+  | 'default'
+  | 'validToday'
+  | 'all'
+  | 'visited'
+  | 'open'
+  | 'relocated';
 
 type ODataCollection<T> = {
   value?: T[];
@@ -129,6 +161,7 @@ type User = {
   name?: string;
   picture?: string;
   isFriend?: boolean;
+  roles?: string | string[];
   friends?: User[];
   Friends?: User[];
 };
@@ -266,6 +299,7 @@ export type CurrentUserProfileData = {
   id: string;
   name: string;
   picture?: string;
+  roles?: string[];
 };
 
 export type FriendshipRelationshipState =
@@ -616,6 +650,19 @@ function parseODataFunctionResult<T>(payload: unknown, functionName: string): T 
   return unwrapped as T;
 }
 
+function unwrapNumericODataResult(payload: unknown) {
+  const direct = toRoundedNumberOrNull(payload);
+  if (direct !== null) {
+    return direct;
+  }
+
+  if (payload && typeof payload === 'object' && 'value' in payload) {
+    return toRoundedNumberOrNull((payload as { value?: unknown }).value);
+  }
+
+  return null;
+}
+
 async function readErrorBody(response: Response) {
   try {
     return (await response.text()).trim();
@@ -761,12 +808,40 @@ async function fetchStringEntityById<T>(
 }
 
 async function fetchCurrentUserRecord(accessToken: string) {
-  return fetchOData<User>(
+  const payload = await fetchOData<unknown>(
     accessToken,
     buildUrl('getCurrentUser()', {
-      select: ['ID', 'name', 'picture', 'isFriend'],
+      select: ['ID', 'name', 'picture', 'isFriend', 'roles'],
     })
   );
+
+  const unwrapped = unwrapODataEnvelope(payload, 'getCurrentUser');
+  const rootRecord =
+    unwrapped && typeof unwrapped === 'object'
+      ? (unwrapped as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const nestedRecord =
+    rootRecord.d && typeof rootRecord.d === 'object'
+      ? (rootRecord.d as Record<string, unknown>)
+      : rootRecord;
+
+  const id = safeTrim(nestedRecord.ID) || safeTrim(nestedRecord.id) || safeTrim(nestedRecord.sub);
+  if (!id) {
+    throw new Error('Current user record missing ID');
+  }
+
+  const rawRoles = nestedRecord.roles ?? nestedRecord._roles;
+
+  return {
+    ID: id,
+    name: safeTrim(nestedRecord.name) || safeTrim(nestedRecord.nickname) || undefined,
+    picture: safeTrim(nestedRecord.picture) || undefined,
+    isFriend: typeof nestedRecord.isFriend === 'boolean' ? nestedRecord.isFriend : undefined,
+    roles:
+      Array.isArray(rawRoles) || typeof rawRoles === 'string'
+        ? (rawRoles as string | string[])
+        : undefined,
+  } satisfies User;
 }
 
 function normalizeIdList(ids: string[]) {
@@ -1629,7 +1704,7 @@ async function fetchStampWithRecentStampings(accessToken: string, stampId: strin
       [
         [
           '$select',
-          'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+          'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,validFrom,validTo,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
         ],
         [
           '$expand',
@@ -1673,7 +1748,7 @@ async function fetchStampWithRecentStampings(accessToken: string, stampId: strin
     fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
       [
         '$select',
-        'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
+        'ID,number,orderBy,name,description,heroImageUrl,image,imageCaption,validFrom,validTo,latitude,longitude,hasVisited,totalGroupStampings,stampedUsers,stampedUserIds',
       ],
     ]),
     fetchGuidFilteredCollection<Stamping>(accessToken, 'Stampings', 'stamp_ID', stampId, [
@@ -1717,7 +1792,25 @@ async function fetchGuidEntitiesByIds<T>(
   return [] as T[];
 }
 
-export async function fetchStampboxes(accessToken: string) {
+export async function fetchStampboxes(accessToken: string, mode: StampboxFetchMode = 'default') {
+  const nowIso = new Date().toISOString();
+  const year2000Iso = '2000-01-01T00:00:00Z';
+  const now = new Date();
+  const startOfTodayIso = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const validTodayClause = `(validFrom eq null or validFrom le ${nowIso}) and (validTo eq null or validTo ge ${nowIso})`;
+  const filter =
+    mode === 'validToday'
+      ? validTodayClause
+      : mode === 'all'
+        ? `(validTo eq null or validTo gt ${year2000Iso} or validTo lt ${year2000Iso})`
+        : mode === 'visited'
+          ? `(hasVisited eq true) and ${validTodayClause}`
+          : mode === 'open'
+            ? `((hasVisited eq false or hasVisited eq null) and ${validTodayClause})`
+            : mode === 'relocated'
+              ? `(validTo ne null and validTo lt ${startOfTodayIso})`
+        : undefined;
+
   const rows = await fetchCollection<Stampbox>(accessToken, 'Stampboxes', {
     select: [
       'ID',
@@ -1728,6 +1821,8 @@ export async function fetchStampboxes(accessToken: string) {
       'heroImageUrl',
       'image',
       'imageCaption',
+      'validFrom',
+      'validTo',
       'latitude',
       'longitude',
       'hasVisited',
@@ -1737,6 +1832,7 @@ export async function fetchStampboxes(accessToken: string) {
     ],
     orderBy: 'orderBy asc',
     top: 500,
+    ...(filter ? { filter } : {}),
   });
 
   return rows.slice().sort((left, right) => {
@@ -1750,10 +1846,11 @@ export async function fetchMapData(
   accessToken: string,
   currentUserId?: string,
   prefetchedStamps?: Stampbox[],
-  prefetchedLatestVisited?: LatestVisitedStamp | null
+  prefetchedLatestVisited?: LatestVisitedStamp | null,
+  stampboxFetchMode: StampboxFetchMode = 'default'
 ) {
   const [stamps, parkingSpots, latestVisited] = await Promise.all([
-    prefetchedStamps ? Promise.resolve(prefetchedStamps) : fetchStampboxes(accessToken),
+    prefetchedStamps ? Promise.resolve(prefetchedStamps) : fetchStampboxes(accessToken, stampboxFetchMode),
     fetchCollection<ParkingSpot>(accessToken, 'ParkingSpots', {
       select: ['ID', 'name', 'description', 'image', 'latitude', 'longitude'],
       top: 500,
@@ -2190,7 +2287,186 @@ export async function fetchCurrentUserProfile(accessToken: string) {
     id: currentUser.ID,
     name: currentUser.name || currentUser.ID,
     picture: currentUser.picture,
+    roles: normalizeRoleTokens(currentUser.roles),
   } satisfies CurrentUserProfileData;
+}
+
+function assertValidLatitudeLongitude(latitude: number, longitude: number) {
+  if (latitude < -90 || latitude > 90) {
+    throw new Error('Latitude must be between -90 and 90.');
+  }
+
+  if (longitude < -180 || longitude > 180) {
+    throw new Error('Longitude must be between -180 and 180.');
+  }
+}
+
+function normalizeAdminStampboxCreatePayload(payload: AdminStampboxMutationInput) {
+  const name = safeTrim(payload.name);
+  const description = safeTrim(payload.description);
+  const heroImageUrl = safeTrim(payload.heroImageUrl);
+  const imageCaption = safeTrim(payload.imageCaption);
+  debugger
+  const validFrom = safeTrim(payload.validFrom);
+  const validTo = safeTrim(payload.validTo);
+  const number = safeTrim(payload.number);
+  const orderBy = safeTrim(payload.orderBy);
+  const latitude = toFiniteNumber(payload.latitude);
+  const longitude = toFiniteNumber(payload.longitude);
+
+  if (!name) {
+    throw new Error('Stampbox name is required.');
+  }
+
+  if (latitude === null || longitude === null) {
+    throw new Error('Latitude and longitude are required.');
+  }
+
+  assertValidLatitudeLongitude(latitude, longitude);
+
+  return {
+    name,
+    description: description || undefined,
+    heroImageUrl: heroImageUrl || undefined,
+    imageCaption: imageCaption || undefined,
+    validFrom: validFrom || new Date("2000-01-01T00:00:00.000Z").toISOString(),
+    validTo: validTo || new Date("2037-12-31T23:00:01.000Z").toISOString(),
+    latitude,
+    longitude,
+    number: number || undefined,
+    orderBy: orderBy || undefined,
+  };
+}
+
+function normalizeAdminStampboxUpdatePayload(payload: Partial<AdminStampboxMutationInput>) {
+  const updatePayload: Partial<AdminStampboxMutationInput> = {};
+  debugger
+
+  if ('name' in payload) {
+    const name = safeTrim(payload.name);
+    if (!name) {
+      throw new Error('Stampbox name cannot be empty.');
+    }
+    updatePayload.name = name;
+  }
+
+  if ('description' in payload) {
+    updatePayload.description = safeTrim(payload.description);
+  }
+
+  if ('heroImageUrl' in payload) {
+    updatePayload.heroImageUrl = safeTrim(payload.heroImageUrl);
+  }
+
+  if ('imageCaption' in payload) {
+    updatePayload.imageCaption = safeTrim(payload.imageCaption);
+  }
+
+  if ('validFrom' in payload) {
+    updatePayload.validFrom = safeTrim(payload.validFrom);
+  }
+
+  if ('validTo' in payload) {
+    updatePayload.validTo = safeTrim(payload.validTo);
+  }
+
+  if ('number' in payload) {
+    updatePayload.number = safeTrim(payload.number);
+  }
+
+  if ('orderBy' in payload) {
+    updatePayload.orderBy = safeTrim(payload.orderBy);
+  }
+
+  const hasLatitude = 'latitude' in payload;
+  const hasLongitude = 'longitude' in payload;
+
+  if (hasLatitude || hasLongitude) {
+    const latitude = hasLatitude ? toFiniteNumber(payload.latitude) : null;
+    const longitude = hasLongitude ? toFiniteNumber(payload.longitude) : null;
+
+    if (latitude === null || longitude === null) {
+      throw new Error('Latitude and longitude must both be valid numbers when updating location.');
+    }
+
+    assertValidLatitudeLongitude(latitude, longitude);
+    updatePayload.latitude = latitude;
+    updatePayload.longitude = longitude;
+  }
+
+  if (Object.keys(updatePayload).length === 0) {
+    throw new Error('No stampbox fields to update.');
+  }
+
+  return updatePayload;
+}
+
+function normalizeAdminParkingSpotCreatePayload(payload: AdminParkingSpotMutationInput) {
+  const name = safeTrim(payload.name);
+  const description = safeTrim(payload.description);
+  const image = safeTrim(payload.image);
+  const latitude = toFiniteNumber(payload.latitude);
+  const longitude = toFiniteNumber(payload.longitude);
+
+  if (!name) {
+    throw new Error('Parking spot name is required.');
+  }
+
+  if (latitude === null || longitude === null) {
+    throw new Error('Latitude and longitude are required.');
+  }
+
+  assertValidLatitudeLongitude(latitude, longitude);
+
+  return {
+    name,
+    description: description || undefined,
+    image: image || undefined,
+    latitude,
+    longitude,
+  };
+}
+
+function normalizeAdminParkingSpotUpdatePayload(payload: Partial<AdminParkingSpotMutationInput>) {
+  const updatePayload: Partial<AdminParkingSpotMutationInput> = {};
+
+  if ('name' in payload) {
+    const name = safeTrim(payload.name);
+    if (!name) {
+      throw new Error('Parking spot name cannot be empty.');
+    }
+    updatePayload.name = name;
+  }
+
+  if ('description' in payload) {
+    updatePayload.description = safeTrim(payload.description);
+  }
+
+  if ('image' in payload) {
+    updatePayload.image = safeTrim(payload.image);
+  }
+
+  const hasLatitude = 'latitude' in payload;
+  const hasLongitude = 'longitude' in payload;
+
+  if (hasLatitude || hasLongitude) {
+    const latitude = hasLatitude ? toFiniteNumber(payload.latitude) : null;
+    const longitude = hasLongitude ? toFiniteNumber(payload.longitude) : null;
+
+    if (latitude === null || longitude === null) {
+      throw new Error('Latitude and longitude must both be valid numbers when updating location.');
+    }
+
+    assertValidLatitudeLongitude(latitude, longitude);
+    updatePayload.latitude = latitude;
+    updatePayload.longitude = longitude;
+  }
+
+  if (Object.keys(updatePayload).length === 0) {
+    throw new Error('No parking spot fields to update.');
+  }
+
+  return updatePayload;
 }
 
 export async function fetchStampDetail(accessToken: string, stampId: string, currentUserId?: string) {
@@ -3030,6 +3306,102 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
         isFriend: !!user.isFriend,
       }))
   );
+}
+
+export async function createStampbox(accessToken: string, payload: AdminStampboxMutationInput) {
+  const normalizedPayload = normalizeAdminStampboxCreatePayload(payload);
+
+  return mutateOData<Stampbox>(accessToken, buildUrl('Stampboxes'), {
+    method: 'POST',
+    body: JSON.stringify(normalizedPayload),
+  });
+}
+
+export async function updateStampbox(
+  accessToken: string,
+  stampId: string,
+  payload: Partial<AdminStampboxMutationInput>
+) {
+  const normalizedStampId = safeTrim(stampId);
+  if (!normalizedStampId) {
+    throw new Error('Stampbox ID is required.');
+  }
+
+  const normalizedPayload = normalizeAdminStampboxUpdatePayload(payload);
+
+  return mutateOData<Stampbox>(accessToken, buildUrl(`Stampboxes(${normalizedStampId})`), {
+    method: 'PATCH',
+    body: JSON.stringify(normalizedPayload),
+  });
+}
+
+export async function createParkingSpot(accessToken: string, payload: AdminParkingSpotMutationInput) {
+  const normalizedPayload = normalizeAdminParkingSpotCreatePayload(payload);
+
+  return mutateOData<ParkingSpot>(accessToken, buildUrl('ParkingSpots'), {
+    method: 'POST',
+    body: JSON.stringify(normalizedPayload),
+  });
+}
+
+export async function updateParkingSpot(
+  accessToken: string,
+  parkingSpotId: string,
+  payload: Partial<AdminParkingSpotMutationInput>
+) {
+  const normalizedParkingSpotId = safeTrim(parkingSpotId);
+  if (!normalizedParkingSpotId) {
+    throw new Error('Parking spot ID is required.');
+  }
+
+  const normalizedPayload = normalizeAdminParkingSpotUpdatePayload(payload);
+
+  return mutateOData<ParkingSpot>(accessToken, buildUrl(`ParkingSpots(${normalizedParkingSpotId})`), {
+    method: 'PATCH',
+    body: JSON.stringify(normalizedPayload),
+  });
+}
+
+export async function deleteSpotWithRoutes(accessToken: string, spotId: string) {
+  const normalizedSpotId = safeTrim(spotId);
+  if (!normalizedSpotId) {
+    throw new Error('Spot ID is required.');
+  }
+
+  const payload = await mutateOData<unknown>(accessToken, buildUrl('DeleteSpotWithRoutes'), {
+    method: 'POST',
+    body: JSON.stringify({
+      SpotId: normalizedSpotId,
+    }),
+  });
+
+  return parseActionStringResult(payload);
+}
+
+export async function getMissingTravelTimesCount(accessToken: string, n?: number) {
+  const payload = await fetchOData<unknown>(
+    accessToken,
+    buildUrl('getMissingTravelTimesCount', typeof n === 'number' ? [['n', n]] : undefined)
+  );
+
+  const parsed = parseODataFunctionResult<unknown>(payload, 'getMissingTravelTimesCount');
+  return unwrapNumericODataResult(parsed) ?? 0;
+}
+
+export async function calculateTravelTimesNNearestNeighbors(accessToken: string, n?: number) {
+  const payload = await fetchOData<unknown>(
+    accessToken,
+    buildUrl('calculateTravelTimesNNearestNeighbors', typeof n === 'number' ? [['n', n]] : undefined)
+  );
+
+  const parsed = parseODataFunctionResult<unknown>(payload, 'calculateTravelTimesNNearestNeighbors');
+  return unwrapNumericODataResult(parsed) ?? 0;
+}
+
+export async function addElevationToAllTravelTimes(accessToken: string) {
+  const payload = await fetchOData<unknown>(accessToken, buildUrl('addElevationToAllTravelTimes'));
+  const parsed = parseODataFunctionResult<unknown>(payload, 'addElevationToAllTravelTimes');
+  return parseActionStringResult(parsed);
 }
 
 export async function createFriendRequest(accessToken: string, userId: string) {

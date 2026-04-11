@@ -190,6 +190,7 @@ function ProfileEditContent() {
         id: profile.id,
         name: updatedProfile.name || nextName,
         picture: updatedProfile.picture || nextPicture,
+        roles: profile.roles,
       };
 
       setCurrentUserProfile(resolvedProfile);

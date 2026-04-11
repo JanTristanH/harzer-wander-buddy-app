@@ -34,6 +34,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AuthGuard } from '@/components/auth-guard';
 import { CurrentPositionDistanceSection } from '@/components/current-position-distance-section';
+import { DetailOverflowMenu } from '@/components/detail-overflow-menu';
 import { FriendsList } from '@/components/friends-list';
 import { SkeletonBlock } from '@/components/skeleton';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
@@ -48,7 +49,7 @@ import {
     updateStamping,
     type VisitStamping,
 } from '@/lib/api';
-import { useAuth, useIdTokenClaims } from '@/lib/auth';
+import { useAdminAccess, useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import {
     isNetworkUnavailableError,
@@ -297,6 +298,7 @@ function StampDetailContent() {
     useStampDetailQuery(stampId);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const { isAdmin } = useAdminAccess();
   const [isStamping, setIsStamping] = useState(false);
   const [isStampSuccessToastVisible, setIsStampSuccessToastVisible] = useState(false);
   const [isEditingVisits, setIsEditingVisits] = useState(false);
@@ -1345,6 +1347,19 @@ function StampDetailContent() {
               <Feather color="#3a4f84" name="share-2" size={14} />
               <Text style={styles.shareHeaderButtonLabel}>Teilen</Text>
             </Pressable>
+            {isAdmin ? (
+              <DetailOverflowMenu
+                actions={[
+                  {
+                    key: 'edit-stamp',
+                    label: 'Bearbeiten',
+                    icon: 'edit-2',
+                    onPress: () => router.push(`/admin/stamps/${stamp.ID}` as never),
+                  },
+                ]}
+                topOffset={insets.top + 58}
+              />
+            ) : null}
           </View>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Stempel {stamp.number || '--'}</Text>

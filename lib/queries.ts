@@ -25,6 +25,7 @@ import {
   type PointOfInterest,
   type ProfileOverviewData,
   type RouteToStampFromPositionData,
+  type StampboxFetchMode,
   type StampDetailData,
   type Stampbox,
   type Tour,
@@ -50,9 +51,13 @@ export type TourDetailData = {
   path: TourPathEntry[];
 };
 
-export async function fetchStampsOverviewData(accessToken: string, userId?: string): Promise<StampsOverviewData> {
+export async function fetchStampsOverviewData(
+  accessToken: string,
+  userId?: string,
+  stampboxFetchMode: StampboxFetchMode = 'default'
+): Promise<StampsOverviewData> {
   const [stamps, lastVisited] = await Promise.all([
-    fetchStampboxes(accessToken),
+    fetchStampboxes(accessToken, stampboxFetchMode),
     fetchLatestVisitedStamp(accessToken, userId),
   ]);
 
@@ -64,6 +69,12 @@ export async function fetchStampsOverviewData(accessToken: string, userId?: stri
 
 export const queryKeys = {
   stampsOverview: (userId?: string) => ['stamps-overview', userId ?? 'anonymous'] as const,
+  stampsOverviewByFilter: (
+    userId: string | undefined,
+    filter: 'validToday' | 'all' | 'visited' | 'open' | 'relocated'
+  ) => ['stamps-overview-by-filter', userId ?? 'anonymous', filter] as const,
+  adminStampsOverview: (userId: string | undefined, filter: 'validToday' | 'all') =>
+    ['admin-stamps-overview', userId ?? 'anonymous', filter] as const,
   mapData: (userId?: string) => ['map-data', userId ?? 'anonymous'] as const,
   toursOverview: (userId?: string) => ['tours-overview', userId ?? 'anonymous'] as const,
   tourDetail: (userId: string | undefined, tourId: string | undefined) =>
@@ -201,7 +212,9 @@ function getCachedMapData(
     return existingMapData;
   }
 
-  const stampsOverview = queryClient.getQueryData<StampsOverviewData>(queryKeys.stampsOverview(userId));
+  const stampsOverview =
+    queryClient.getQueryData<StampsOverviewData>(queryKeys.stampsOverviewByFilter(userId, 'validToday')) ??
+    queryClient.getQueryData<StampsOverviewData>(queryKeys.stampsOverview(userId));
   if (!stampsOverview) {
     return undefined;
   }
@@ -302,6 +315,34 @@ export function useStampsOverviewQuery() {
   });
 }
 
+export function useAdminStampsOverviewQuery(filter: 'validToday' | 'all') {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+
+  return useQuery<StampsOverviewData>({
+    queryKey: queryKeys.adminStampsOverview(claims?.sub, filter),
+    enabled: Boolean(accessToken && isAuthenticated),
+    queryFn: () => authorizedRequest((token) => fetchStampsOverviewData(token, claims?.sub, filter)),
+  });
+}
+
+export function useFilteredStampsOverviewQuery(
+  filter: 'validToday' | 'all' | 'visited' | 'open' | 'relocated'
+) {
+  const claims = useIdTokenClaims<AuthClaims>();
+  const { accessToken, isAuthenticated } = useAuth();
+  const authorizedRequest = useAuthorizedRequest();
+  const stampboxFetchMode: StampboxFetchMode = filter;
+
+  return useQuery<StampsOverviewData>({
+    queryKey: queryKeys.stampsOverviewByFilter(claims?.sub, filter),
+    enabled: Boolean(accessToken && isAuthenticated),
+    queryFn: () =>
+      authorizedRequest((token) => fetchStampsOverviewData(token, claims?.sub, stampboxFetchMode)),
+  });
+}
+
 export function useMapDataQuery() {
   const claims = useIdTokenClaims<AuthClaims>();
   const { accessToken, isAuthenticated } = useAuth();
@@ -314,15 +355,20 @@ export function useMapDataQuery() {
     placeholderData: () => getCachedMapData(queryClient, claims?.sub),
     queryFn: () =>
       authorizedRequest((token) => {
-        const cachedStampsOverview = queryClient.getQueryData<StampsOverviewData>(
-          queryKeys.stampsOverview(claims?.sub)
-        );
+        const cachedStampsOverview =
+          queryClient.getQueryData<StampsOverviewData>(
+            queryKeys.stampsOverviewByFilter(claims?.sub, 'validToday')
+          ) ??
+          queryClient.getQueryData<StampsOverviewData>(
+            queryKeys.stampsOverview(claims?.sub)
+          );
 
         return fetchMapData(
           token,
           claims?.sub,
           cachedStampsOverview?.stamps,
-          cachedStampsOverview?.lastVisited
+          cachedStampsOverview?.lastVisited,
+          'validToday'
         );
       }),
   });

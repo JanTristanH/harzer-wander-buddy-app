@@ -30,6 +30,10 @@ import { useCreateTourMutation, useToursOverviewQuery } from '@/lib/queries';
 
 type FilterKey = 'mine' | 'all';
 type SortKey = 'newest' | 'oldest' | 'nameAsc' | 'nameDesc';
+type ToursListItem =
+  | { type: 'controls'; key: 'controls' }
+  | { type: 'empty'; key: 'empty' }
+  | { type: 'tour'; key: string; tour: Tour };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'mine', label: 'Meine' },
@@ -252,6 +256,16 @@ export default function ToursTabScreen() {
 
     return sorted;
   }, [activeSort, filteredTours]);
+  const listItems = useMemo<ToursListItem[]>(() => {
+    const items: ToursListItem[] = [{ type: 'controls', key: 'controls' }];
+    if (sortedTours.length === 0) {
+      items.push({ type: 'empty', key: 'empty' });
+      return items;
+    }
+
+    items.push(...sortedTours.map((tour) => ({ type: 'tour' as const, key: tour.ID, tour })));
+    return items;
+  }, [sortedTours]);
 
   const blockingError = !data ? error : null;
   const isMineFilter = activeFilter === 'mine';
@@ -407,17 +421,8 @@ export default function ToursTabScreen() {
     <SafeAreaView style={styles.safeArea}>
       <FlatList
         contentContainerStyle={styles.listContent}
-        data={sortedTours}
-        keyExtractor={(item) => item.ID}
-        ListEmptyComponent={
-          <View style={styles.emptyStateWrap}>
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
-              <Image contentFit="contain" source={emptyStateIllustration} style={styles.emptyIllustration} />
-              <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
-            </View>
-          </View>
-        }
+        data={listItems}
+        keyExtractor={(item) => item.key}
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <View style={styles.titleRow}>
@@ -441,50 +446,6 @@ export default function ToursTabScreen() {
                 <Text style={styles.quickstartBody}>Leere Tour erstellen und direkt POIs hinzufuegen.</Text>
               </LinearGradient>
             </Pressable>
-
-            <View style={styles.searchRow}>
-              <View style={styles.searchShell}>
-                <Feather color="#6d7d6e" name="search" size={14} />
-                <TextInput
-                  onChangeText={setQuery}
-                  placeholder="Suche nach Tourname"
-                  placeholderTextColor="#7b8776"
-                  style={styles.searchInput}
-                  value={query}
-                />
-              </View>
-
-              <Pressable
-                onPress={() => setIsSortOpen(true)}
-                style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
-                <MaterialIcons name="sort" size={24} color="black" />
-                <Text style={styles.sortButtonLabel}>Sortieren</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.controlsRow}>
-              <View style={styles.filterRow}>
-                {FILTERS.map((filter) => {
-                  const isActive = activeFilter === filter.key;
-                  return (
-                    <Pressable
-                      key={filter.key}
-                      onPress={() => setActiveFilter(filter.key)}
-                      style={({ pressed }) => [
-                        styles.filterPill,
-                        isActive && styles.filterPillActive,
-                        pressed && styles.filterPillPressed,
-                      ]}>
-                      <Text style={[styles.filterPillLabel, isActive && styles.filterPillLabelActive]}>
-                        {filter.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
           </View>
         }
         refreshControl={
@@ -507,16 +468,81 @@ export default function ToursTabScreen() {
             tintColor="#2e6b4b"
           />
         }
-        renderItem={({ item }) => (
-          <View style={styles.cardRow}>
-            <TourCard
-              item={item}
-              normalizedCurrentUserId={normalizedCurrentUserId}
-              onPress={() => handleOpenTour(item)}
-            />
-          </View>
-        )}
+        renderItem={({ item }) => {
+          if (item.type === 'controls') {
+            return (
+              <View style={styles.stickyControlsWrap}>
+                <View style={styles.searchRow}>
+                  <View style={styles.searchShell}>
+                    <Feather color="#6d7d6e" name="search" size={14} />
+                    <TextInput
+                      onChangeText={setQuery}
+                      placeholder="Suche nach Tourname"
+                      placeholderTextColor="#7b8776"
+                      style={styles.searchInput}
+                      value={query}
+                    />
+                  </View>
+
+                  <Pressable
+                    onPress={() => setIsSortOpen(true)}
+                    style={({ pressed }) => [styles.sortButton, pressed && styles.pressed]}>
+                    <MaterialIcons name="sort" size={24} color="black" />
+                    <Text style={styles.sortButtonLabel}>Sortieren</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.controlsRow}>
+                  <View style={styles.filterRow}>
+                    {FILTERS.map((filter) => {
+                      const isActive = activeFilter === filter.key;
+                      return (
+                        <Pressable
+                          key={filter.key}
+                          onPress={() => setActiveFilter(filter.key)}
+                          style={({ pressed }) => [
+                            styles.filterPill,
+                            isActive && styles.filterPillActive,
+                            pressed && styles.filterPillPressed,
+                          ]}>
+                          <Text style={[styles.filterPillLabel, isActive && styles.filterPillLabelActive]}>
+                            {filter.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {isFetching ? <Text style={styles.refreshHint}>Aktualisiere Touren im Hintergrund...</Text> : null}
+              </View>
+            );
+          }
+
+          if (item.type === 'empty') {
+            return (
+              <View style={styles.emptyStateWrap}>
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyTitle}>{emptyStateTitle}</Text>
+                  <Image contentFit="contain" source={emptyStateIllustration} style={styles.emptyIllustration} />
+                  <Text style={styles.emptyCopy}>{emptyStateCopy}</Text>
+                </View>
+              </View>
+            );
+          }
+
+          return (
+            <View style={styles.cardRow}>
+              <TourCard
+                item={item.tour}
+                normalizedCurrentUserId={normalizedCurrentUserId}
+                onPress={() => handleOpenTour(item.tour)}
+              />
+            </View>
+          );
+        }}
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[1]}
       />
 
       <Pressable
@@ -587,6 +613,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     gap: 12,
+  },
+  stickyControlsWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    gap: 12,
+    backgroundColor: '#f5f3ee',
   },
   loadingTitleRow: {
     flexDirection: 'row',
