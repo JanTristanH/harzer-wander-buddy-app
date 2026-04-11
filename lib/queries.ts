@@ -453,6 +453,7 @@ export function useStampDetailQuery(stampId?: string) {
         nearbyParking: [],
         friendVisits: [],
         myVisits: [],
+        myNote: null,
       } satisfies StampDetailData;
     },
     queryFn: () => authorizedRequest((token) => fetchStampDetail(token, stampId!, claims?.sub)),

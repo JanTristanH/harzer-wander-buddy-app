@@ -146,6 +146,15 @@ type Stamping = {
 
 export type VisitStamping = Stamping;
 
+export type StampNote = {
+  ID: string;
+  stamp_ID?: string;
+  note: string;
+  createdBy?: string;
+  createdAt?: string;
+  modifiedAt?: string;
+};
+
 type MyFriend = {
   ID: string;
   name?: string;
@@ -376,6 +385,7 @@ export type StampDetailData = {
     createdAt?: string;
   }[];
   myVisits: VisitStamping[];
+  myNote: StampNote | null;
 };
 
 export type ParkingDetailData = {
@@ -1690,13 +1700,75 @@ function stampContainsUser(stamp: Stampbox, user: { ID: string; name?: string })
   return stampContainsUserId(stamp, user.ID) || stampContainsUserName(stamp, user.name);
 }
 
-type StampboxWithExpandedStampings = Stampbox & {
+type StampboxWithExpandedData = Stampbox & {
   Stampings?: Stamping[];
+  StampNotes?: StampNote[];
 };
 
-async function fetchStampWithRecentStampings(accessToken: string, stampId: string) {
+function normalizeStampNote(value?: Partial<StampNote> | null): StampNote | null {
+  if (!value?.ID) {
+    return null;
+  }
+
+  return {
+    ID: value.ID,
+    stamp_ID: value.stamp_ID,
+    note: typeof value.note === 'string' ? value.note : '',
+    createdBy: safeTrim(value.createdBy) || undefined,
+    createdAt: value.createdAt,
+    modifiedAt: value.modifiedAt,
+  };
+}
+
+function normalizeUserToken(value?: string) {
+  return safeTrim(value).toLowerCase();
+}
+
+function pickCurrentUserStampNote(notes: StampNote[], currentUserId?: string) {
+  if (notes.length === 0) {
+    return null;
+  }
+
+  const sortedNotes = notes.slice().sort((left, right) => {
+    const leftModifiedAt = left.modifiedAt ? Date.parse(left.modifiedAt) : Number.NaN;
+    const rightModifiedAt = right.modifiedAt ? Date.parse(right.modifiedAt) : Number.NaN;
+    const leftCreatedAt = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+    const rightCreatedAt = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+
+    const leftTime = Number.isFinite(leftModifiedAt)
+      ? leftModifiedAt
+      : Number.isFinite(leftCreatedAt)
+        ? leftCreatedAt
+        : 0;
+    const rightTime = Number.isFinite(rightModifiedAt)
+      ? rightModifiedAt
+      : Number.isFinite(rightCreatedAt)
+        ? rightCreatedAt
+        : 0;
+
+    return rightTime - leftTime;
+  });
+
+  const normalizedCurrentUserId = normalizeUserToken(currentUserId);
+  if (!normalizedCurrentUserId) {
+    return normalizeStampNote(sortedNotes[0]);
+  }
+
+  const matchingNote = sortedNotes.find(
+    (note) => normalizeUserToken(note.createdBy) === normalizedCurrentUserId
+  );
+  return normalizeStampNote(matchingNote ?? null);
+}
+
+async function fetchStampWithRecentStampings(
+  accessToken: string,
+  stampId: string,
+  currentUserId?: string
+) {
+  const expandStampNotes =
+    'StampNotes($select=ID,stamp_ID,note,createdBy,createdAt,modifiedAt;$orderby=modifiedAt desc,createdAt desc;$top=50)';
   try {
-    const rows = await fetchGuidFilteredCollection<StampboxWithExpandedStampings>(
+    const rows = await fetchGuidFilteredCollection<StampboxWithExpandedData>(
       accessToken,
       'Stampboxes',
       'ID',
@@ -1708,14 +1780,14 @@ async function fetchStampWithRecentStampings(accessToken: string, stampId: strin
         ],
         [
           '$expand',
-          'Stampings($select=ID,visitedAt,createdAt,createdBy,stamp_ID)',
+          `Stampings($select=ID,visitedAt,createdAt,createdBy,stamp_ID),${expandStampNotes}`,
         ],
         ['$top', 1],
       ]
     );
 
     if (rows.length > 0) {
-      const { Stampings: expandedStampings, ...stamp } = rows[0];
+      const { Stampings: expandedStampings, StampNotes: expandedStampNotes, ...stamp } = rows[0];
       const sortedStampings = (Array.isArray(expandedStampings) ? expandedStampings : []).sort((left, right) => {
         const leftVisitedAt = left.visitedAt ? Date.parse(left.visitedAt) : Number.NaN;
         const rightVisitedAt = right.visitedAt ? Date.parse(right.visitedAt) : Number.NaN;
@@ -1735,16 +1807,36 @@ async function fetchStampWithRecentStampings(accessToken: string, stampId: strin
 
         return rightTime - leftTime;
       });
+      const sortedStampNotes = (Array.isArray(expandedStampNotes) ? expandedStampNotes : []).sort((left, right) => {
+        const leftModifiedAt = left.modifiedAt ? Date.parse(left.modifiedAt) : Number.NaN;
+        const rightModifiedAt = right.modifiedAt ? Date.parse(right.modifiedAt) : Number.NaN;
+        const leftCreatedAt = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+        const rightCreatedAt = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+
+        const leftTime = Number.isFinite(leftModifiedAt)
+          ? leftModifiedAt
+          : Number.isFinite(leftCreatedAt)
+            ? leftCreatedAt
+            : 0;
+        const rightTime = Number.isFinite(rightModifiedAt)
+          ? rightModifiedAt
+          : Number.isFinite(rightCreatedAt)
+            ? rightCreatedAt
+            : 0;
+
+        return rightTime - leftTime;
+      });
       return {
         stamp: stamp as Stampbox,
         stampings: sortedStampings.slice(0, 200),
+        myNote: pickCurrentUserStampNote(sortedStampNotes, currentUserId),
       };
     }
   } catch {
     // Fallback below for services that do not support this expand shape.
   }
 
-  const [stamp, stampings] = await Promise.all([
+  const [stamp, stampings, stampNotes] = await Promise.all([
     fetchEntityById<Stampbox>(accessToken, 'Stampboxes', stampId, [
       [
         '$select',
@@ -1756,9 +1848,14 @@ async function fetchStampWithRecentStampings(accessToken: string, stampId: strin
       ['$orderby', 'visitedAt desc,createdAt desc'],
       ['$top', 200],
     ]),
+    fetchGuidFilteredCollection<StampNote>(accessToken, 'StampNotes', 'stamp_ID', stampId, {
+      select: ['ID', 'stamp_ID', 'note', 'createdBy', 'createdAt', 'modifiedAt'],
+      orderBy: 'modifiedAt desc,createdAt desc',
+      top: 50,
+    }),
   ]);
 
-  return { stamp, stampings };
+  return { stamp, stampings, myNote: pickCurrentUserStampNote(stampNotes, currentUserId) };
 }
 
 async function fetchGuidEntitiesByIds<T>(
@@ -2470,8 +2567,8 @@ function normalizeAdminParkingSpotUpdatePayload(payload: Partial<AdminParkingSpo
 }
 
 export async function fetchStampDetail(accessToken: string, stampId: string, currentUserId?: string) {
-  const [{ stamp, stampings }, neighborStampRows, neighborParkingRows, friendships] = await Promise.all([
-    fetchStampWithRecentStampings(accessToken, stampId),
+  const [{ stamp, stampings, myNote }, neighborStampRows, neighborParkingRows, friendships] = await Promise.all([
+    fetchStampWithRecentStampings(accessToken, stampId, currentUserId),
     fetchGuidFilteredCollection<NeighborStampRow>(accessToken, 'NeighborsStampStamp', 'ID', stampId, {
       orderBy: 'distanceKm asc',
       top: 3,
@@ -2688,6 +2785,7 @@ export async function fetchStampDetail(accessToken: string, stampId: string, cur
     nearbyParking,
     friendVisits,
     myVisits,
+    myNote,
   } satisfies StampDetailData;
 }
 
@@ -3509,6 +3607,18 @@ export async function createStamping(accessToken: string, stampId: string) {
       stamp: {
         ID: stampId,
       },
+    }),
+  });
+}
+
+export async function upsertStampNote(accessToken: string, stampId: string, note: string) {
+  return mutateOData<StampNote>(accessToken, buildUrl('StampNotes'), {
+    method: 'POST',
+    body: JSON.stringify({
+      stamp: {
+        ID: stampId,
+      },
+      note,
     }),
   });
 }

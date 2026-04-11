@@ -1,33 +1,33 @@
 import { Feather } from '@expo/vector-icons';
 import DateTimePicker, {
-    type DateTimePickerEvent,
+  type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
-    Animated,
-    FlatList,
-    type GestureResponderEvent,
-    type LayoutChangeEvent,
-    Linking,
-    Modal,
-    type NativeScrollEvent,
-    type NativeSyntheticEvent,
-    PanResponder,
-    Platform,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    Share,
-    StyleSheet,
-    Text,
-    useWindowDimensions,
-    View,
+  Alert,
+  Animated,
+  FlatList,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
+  Linking,
+  Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  PanResponder,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -37,29 +37,31 @@ import { CurrentPositionDistanceSection } from '@/components/current-position-di
 import { DetailOverflowMenu } from '@/components/detail-overflow-menu';
 import { FriendsList } from '@/components/friends-list';
 import { SkeletonBlock } from '@/components/skeleton';
+import { StampNoteSection } from '@/components/stamp-note-section';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
-    createStamping,
-    deleteStamping,
-    type LatestVisitedStamp,
-    type MapData,
-    type ProfileOverviewData,
-    type Stampbox,
-    type StampDetailData,
-    updateStamping,
-    type VisitStamping,
+  createStamping,
+  deleteStamping,
+  type LatestVisitedStamp,
+  type MapData,
+  type ProfileOverviewData,
+  type Stampbox,
+  type StampDetailData,
+  updateStamping,
+  upsertStampNote,
+  type VisitStamping,
 } from '@/lib/api';
 import { useAdminAccess, useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import {
-    isNetworkUnavailableError,
-    OFFLINE_REFRESH_MESSAGE,
-    requireOnlineForWrite,
+  isNetworkUnavailableError,
+  OFFLINE_REFRESH_MESSAGE,
+  requireOnlineForWrite,
 } from '@/lib/offline-write';
 import {
-    replaceTimelineEntry,
-    updateTimelineEntryTimestamp,
-    upsertTimelineEntry,
+  replaceTimelineEntry,
+  updateTimelineEntryTimestamp,
+  upsertTimelineEntry,
 } from '@/lib/profile-timeline';
 import { queryKeys, useRouteToStampFromPositionQuery, useStampDetailQuery } from '@/lib/queries';
 
@@ -85,6 +87,7 @@ const CAROUSEL_DOUBLE_TAP_DELAY_MS = 280;
 const CAROUSEL_ZOOM_SCALE = 2;
 const CAROUSEL_PAN_THRESHOLD = 2;
 const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
+const STAMP_NOTE_MAX_LENGTH = 500;
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
 
 function formatDistance(distanceKm: number | null) {
@@ -287,6 +290,7 @@ function StampDetailLoadingState({ onBack }: { onBack: () => void }) {
 
 function StampDetailContent() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{
     id?: string | string[];
   }>();
@@ -304,6 +308,10 @@ function StampDetailContent() {
   const [isEditingVisits, setIsEditingVisits] = useState(false);
   const [visitDrafts, setVisitDrafts] = useState<Record<string, string>>({});
   const [busyVisitId, setBusyVisitId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const persistedNoteRef = useRef('');
+  const recentNoteSaveAtRef = useRef<number | null>(null);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isImageCarouselVisible, setIsImageCarouselVisible] = useState(false);
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
   const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
@@ -322,20 +330,12 @@ function StampDetailContent() {
     value: Date;
     mode: 'date' | 'time' | 'datetime';
   } | null>(null);
+  const allowLeavingRef = useRef(false);
   const routeToCurrentPositionQuery = useRouteToStampFromPositionQuery(
     stampId,
     userLocation?.latitude,
     userLocation?.longitude
   );
-
-  function handleBack() {
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
-
-    router.replace('/(tabs)' as never);
-  }
 
   useEffect(() => {
     if (!detail) {
@@ -345,7 +345,103 @@ function StampDetailContent() {
     setVisitDrafts(
       Object.fromEntries(detail.myVisits.map((visit) => [visit.ID, getVisitTimestamp(visit) ?? '']))
     );
+    const nextPersistedNote = detail.myNote?.note ?? '';
+    setNoteDraft((currentDraft) => {
+      const previousPersistedNote = persistedNoteRef.current;
+      const hasUnsavedLocalChanges = currentDraft.trim() !== previousPersistedNote.trim();
+      const protectRecentSaveFromTransientEmpty =
+        nextPersistedNote.trim().length === 0 &&
+        currentDraft.trim().length > 0 &&
+        recentNoteSaveAtRef.current !== null &&
+        Date.now() - recentNoteSaveAtRef.current < 15_000;
+
+      persistedNoteRef.current = nextPersistedNote;
+
+      if (hasUnsavedLocalChanges || protectRecentSaveFromTransientEmpty) {
+        return currentDraft;
+      }
+
+      return nextPersistedNote;
+    });
   }, [detail]);
+
+  const handleSaveNote = useCallback(async (): Promise<boolean> => {
+    if (!accessToken || !stampId || isSavingNote) {
+      return false;
+    }
+
+    const normalizedNote = noteDraft.trim();
+    const persistedNote = detail?.myNote?.note ?? '';
+    if (normalizedNote === persistedNote.trim()) {
+      return true;
+    }
+
+    if (normalizedNote.length > STAMP_NOTE_MAX_LENGTH) {
+      Alert.alert('Notiz zu lang', `Bitte maximal ${STAMP_NOTE_MAX_LENGTH} Zeichen speichern.`);
+      return false;
+    }
+
+    const stampDetailKey = queryKeys.stampDetail(claims?.sub, stampId);
+
+    try {
+      requireOnlineForWrite(canPerformWrites, 'Notizen koennen nur online gespeichert werden.');
+      setIsSavingNote(true);
+
+      const savedNote = await upsertStampNote(accessToken, stampId, normalizedNote);
+      const persistedNote = {
+        ID: savedNote.ID || detail?.myNote?.ID || `note-${stampId}`,
+        stamp_ID: savedNote.stamp_ID || stampId,
+        note: typeof savedNote.note === 'string' ? savedNote.note : normalizedNote,
+        createdAt: savedNote.createdAt || detail?.myNote?.createdAt,
+        modifiedAt: savedNote.modifiedAt,
+      };
+
+      recentNoteSaveAtRef.current = Date.now();
+      persistedNoteRef.current = persistedNote.note;
+      setNoteDraft(persistedNote.note);
+      queryClient.setQueryData<StampDetailData>(stampDetailKey, (currentDetail) => {
+        if (!currentDetail) {
+          return currentDetail;
+        }
+
+        return {
+          ...currentDetail,
+          myNote: persistedNote,
+        };
+      });
+      return true;
+    } catch (nextError) {
+      if (isNetworkUnavailableError(nextError)) {
+        Alert.alert('Offline', nextError.message);
+        return false;
+      }
+
+      if (nextError instanceof Error && nextError.name === 'UnauthorizedError') {
+        await logout();
+        return false;
+      }
+
+      Alert.alert(
+        'Speichern fehlgeschlagen',
+        nextError instanceof Error ? nextError.message : 'Unbekannter Fehler'
+      );
+      return false;
+    } finally {
+      setIsSavingNote(false);
+    }
+  }, [
+    accessToken,
+    canPerformWrites,
+    claims?.sub,
+    detail?.myNote?.ID,
+    detail?.myNote?.createdAt,
+    detail?.myNote?.note,
+    isSavingNote,
+    logout,
+    noteDraft,
+    queryClient,
+    stampId,
+  ]);
 
   async function handleRequestRouteToStamp() {
     if (selectedStampLatitude === null || selectedStampLongitude === null) {
@@ -401,13 +497,17 @@ function StampDetailContent() {
   }
 
   async function handleStartNavigation() {
-    if (!detail?.stamp.latitude || !detail?.stamp.longitude) {
-      Alert.alert('Navigation nicht moeglich', 'Diese Stempelstelle hat keine Koordinaten.');
-      return;
-    }
+    handleAttemptNavigateAway(() => {
+      void (async () => {
+        if (!detail?.stamp.latitude || !detail?.stamp.longitude) {
+          Alert.alert('Navigation nicht moeglich', 'Diese Stempelstelle hat keine Koordinaten.');
+          return;
+        }
 
-    const url = `https://www.google.com/maps/search/?api=1&query=${detail.stamp.latitude},${detail.stamp.longitude}`;
-    await Linking.openURL(url);
+        const url = `https://www.google.com/maps/search/?api=1&query=${detail.stamp.latitude},${detail.stamp.longitude}`;
+        await Linking.openURL(url);
+      })();
+    });
   }
 
   function handleShowOnMap() {
@@ -415,10 +515,12 @@ function StampDetailContent() {
       return;
     }
 
-    router.push({
-      pathname: '/(tabs)/map',
-      params: { stampId: detail.stamp.ID },
-    } as never);
+    handleAttemptNavigateAway(() => {
+      router.push({
+        pathname: '/(tabs)/map',
+        params: { stampId: detail.stamp.ID },
+      } as never);
+    });
   }
 
   async function refreshAfterVisitMutation() {
@@ -576,6 +678,7 @@ function StampDetailContent() {
           nearbyParking: [],
           friendVisits: [],
           myVisits: [optimisticVisit],
+          myNote: null,
         };
       });
 
@@ -953,6 +1056,11 @@ function StampDetailContent() {
   }
 
   const selectedStamp = detail?.stamp;
+  const persistedNote = detail?.myNote?.note ?? '';
+  const normalizedNoteDraft = noteDraft.trim();
+  const isNoteTooLong = normalizedNoteDraft.length > STAMP_NOTE_MAX_LENGTH;
+  const isNoteDirty = normalizedNoteDraft !== persistedNote.trim();
+  const hasUnsavedChanges = isNoteDirty;
   const heroImageUri = selectedStamp?.heroImageUrl?.trim() || selectedStamp?.image?.trim() || '';
   const selectedStampLatitude =
     typeof selectedStamp?.latitude === 'number' && Number.isFinite(selectedStamp.latitude)
@@ -1232,6 +1340,109 @@ function StampDetailContent() {
     [activeCarouselIndex, getCarouselScrollIndex, resetCarouselPan]
   );
 
+  const showLeaveDialog = useCallback((onDiscard: () => void, onSave: () => void) => {
+    Alert.alert(
+      'Aenderungen speichern?',
+      'Du hast ungespeicherte Aenderungen. Moechtest du speichern oder verwerfen?',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        { text: 'Verwerfen', style: 'destructive', onPress: onDiscard },
+        { text: 'Speichern', onPress: onSave },
+      ]
+    );
+  }, []);
+
+  const handleAttemptNavigateAway = useCallback(
+    (action: () => void, options?: { bypassBeforeRemove?: boolean }) => {
+      if (isSavingNote) {
+        return;
+      }
+
+      if (!hasUnsavedChanges) {
+        if (options?.bypassBeforeRemove) {
+          allowLeavingRef.current = true;
+        }
+        action();
+        return;
+      }
+
+      showLeaveDialog(
+        () => {
+          if (options?.bypassBeforeRemove) {
+            allowLeavingRef.current = true;
+          }
+          action();
+        },
+        () => {
+          void (async () => {
+            const saved = await handleSaveNote();
+            if (!saved) {
+              return;
+            }
+
+            if (options?.bypassBeforeRemove) {
+              allowLeavingRef.current = true;
+            }
+            action();
+          })();
+        }
+      );
+    },
+    [handleSaveNote, hasUnsavedChanges, isSavingNote, showLeaveDialog]
+  );
+
+  const handleBack = useCallback(() => {
+    handleAttemptNavigateAway(
+      () => {
+        if (router.canGoBack()) {
+          router.back();
+          return;
+        }
+
+        router.replace('/(tabs)' as never);
+      },
+      { bypassBeforeRemove: true }
+    );
+  }, [handleAttemptNavigateAway, router]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (allowLeavingRef.current) {
+        return;
+      }
+
+      if (isSavingNote) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!hasUnsavedChanges) {
+        return;
+      }
+
+      event.preventDefault();
+      showLeaveDialog(
+        () => {
+          allowLeavingRef.current = true;
+          navigation.dispatch(event.data.action);
+        },
+        () => {
+          void (async () => {
+            const saved = await handleSaveNote();
+            if (!saved) {
+              return;
+            }
+
+            allowLeavingRef.current = true;
+            navigation.dispatch(event.data.action);
+          })();
+        }
+      );
+    });
+
+    return unsubscribe;
+  }, [handleSaveNote, hasUnsavedChanges, isSavingNote, navigation, showLeaveDialog]);
+
   if (!stampId) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -1354,7 +1565,10 @@ function StampDetailContent() {
                     key: 'edit-stamp',
                     label: 'Bearbeiten',
                     icon: 'edit-2',
-                    onPress: () => router.push(`/admin/stamps/${stamp.ID}` as never),
+                    onPress: () =>
+                      handleAttemptNavigateAway(() => {
+                        router.push(`/admin/stamps/${stamp.ID}` as never);
+                      }),
                   },
                 ]}
                 topOffset={insets.top + 58}
@@ -1394,6 +1608,19 @@ function StampDetailContent() {
             <Text style={styles.description}>Keine Beschreibung fuer diese Stempelstelle verfuegbar.</Text>
           )}
 
+          <StampNoteSection
+            isDirty={isNoteDirty}
+            isSaving={isSavingNote}
+            isTooLong={isNoteTooLong}
+            maxLength={STAMP_NOTE_MAX_LENGTH}
+            noteDraft={noteDraft}
+            noteLength={normalizedNoteDraft.length}
+            onChangeNote={setNoteDraft}
+            onSave={() => {
+              void handleSaveNote();
+            }}
+          />
+
           <Section title="Stempel in der Nähe">
             {showDeferredSkeletons ? (
               <>
@@ -1405,7 +1632,11 @@ function StampDetailContent() {
               detail.nearbyStamps.map((neighbor) => (
                 <Pressable
                   key={neighbor.ID}
-                  onPress={() => router.push(`/stamps/${neighbor.ID}` as never)}
+                  onPress={() =>
+                    handleAttemptNavigateAway(() => {
+                      router.push(`/stamps/${neighbor.ID}` as never);
+                    })
+                  }
                   style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   {neighbor.heroImageUrl ? (
                     <Image
@@ -1457,7 +1688,11 @@ function StampDetailContent() {
               detail.nearbyParking.map((parking) => (
                 <Pressable
                   key={parking.ID}
-                  onPress={() => router.push(`/parking/${parking.ID}` as never)}
+                  onPress={() =>
+                    handleAttemptNavigateAway(() => {
+                      router.push(`/parking/${parking.ID}` as never);
+                    })
+                  }
                   style={({ pressed }) => [styles.rowItem, pressed && styles.rowItemPressed]}>
                   <View style={[styles.rowBadge, styles.rowBadgeParking]}>
                     <Text style={[styles.rowBadgeLabel, styles.rowBadgeLabelParking]}>P</Text>

@@ -3,14 +3,13 @@
 | Prio | Thema | Nutzen | Aufwand | Kategorie | Status | Begründung |
 |---|---|---|---|---|---|---|
 | P0 | Samsung: keine Nutzung über mobile Daten | Sehr hoch | M-L | Stabilität | In Progress | Harte Blockade für den Outdoor-Kern-Use-Case. |
-| P1 | Code für defekte Stempel | Sehr hoch | M | Core Feature | Offen | Technische Grundlage für konsistente Defekt-Logik in App und Admin. |
 | P1 | Aktuelle Defektmeldungen aufnehmen (harzer-wandernadel.de) | Hoch | S-M | Datenqualität | Offen | Sofort spürbarer Mehrwert durch aktuelle, verlässliche POI-Informationen. |
-| P1 | Defektmeldungen aus der App heraus machen | Hoch | M | Core Feature | Offen | Schließt den Datenkreislauf und hält Defektstatus schneller aktuell. |
 | P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Offen | Schneller UX-Gewinn in einem häufig genutzten Interaktionspunkt. |
-| P2 | Fortschritt Wanderabzeichen | Mittel-Hoch | M | Engagement | Offen | Stärkt Retention nach Stabilitäts- und Kern-UX-Themen. |
-| P2 | Allgemeine Notizen, wer dabei war | Mittel | S-M | Engagement | Offen | Praktische Tour-Dokumentation ohne Kern-Blocker-Charakter. |
-| P2 | Benachrichtigungen Freundschaftsanfragen | Mittel | M | Engagement | Offen | Social-Verbesserung, aber nicht kritisch für die Kernnutzung. |
+| P1 | Fortschritt Wanderabzeichen | Mittel-Hoch | M | Engagement | Offen | Stärkt Retention nach Stabilitäts- und Kern-UX-Themen. |
+| P3 | Benachrichtigungen Freundschaftsanfragen | Mittel | M | Engagement | Offen | Social-Verbesserung, aber nicht kritisch für die Kernnutzung. |
+| P3 | Defektmeldungen aus der App heraus machen | Hoch | M | Core Feature | Offen | Schließt den Datenkreislauf und hält Defektstatus schneller aktuell. |
 | P3 | Detaillierte Routenansicht (optional) | Mittel | M-L | Feature | Offen | Optionales Feature, erst nach Kernqualität. |
+| P3 | Alternative map tiles | Mittel | L | Feature | Offen | Optionales Feature, erst nach Kernqualität. |
 
 ## ✅ Bereits erledigt / gepusht
 
@@ -30,3 +29,4 @@
 - Admin: Stempelstelle verlegt
 - Bottom Sheet kleiner beim Kartenbewegen
 - Icons kleiner
+- Allgemeine Notizen (Deckt auch Code für defekte Stempel ab)

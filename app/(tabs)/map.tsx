@@ -1252,6 +1252,7 @@ export default function MapScreen() {
           nearbyParking: [],
           friendVisits: [],
           myVisits: [optimisticVisit],
+          myNote: null,
         };
       });
 
@@ -1365,6 +1366,7 @@ export default function MapScreen() {
           nearbyParking: [],
           friendVisits: [],
           myVisits: [persistedVisit],
+          myNote: null,
         };
       });
 
