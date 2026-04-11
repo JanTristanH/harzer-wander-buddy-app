@@ -23,7 +23,7 @@ import { DetailOverflowMenu } from '@/components/detail-overflow-menu';
 import { SkeletonBlock } from '@/components/skeleton';
 import { useAdminAccess, useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
-import { useParkingDetailQuery } from '@/lib/queries';
+import { useParkingDetailQuery, useRouteToStampFromPositionQuery } from '@/lib/queries';
 
 const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
@@ -56,6 +56,14 @@ function formatDistance(distanceKm: number | null) {
   }
 
   return `${distanceKm.toFixed(1).replace('.', ',')} km`;
+}
+
+function formatDistanceMeters(distanceMeters: number | null) {
+  if (distanceMeters === null) {
+    return '';
+  }
+
+  return formatDistance(distanceMeters / 1000);
 }
 
 function formatDuration(durationMinutes: number | null) {
@@ -163,7 +171,7 @@ function ParkingDetailContent() {
     id?: string | string[];
   }>();
   const insets = useSafeAreaInsets();
-  const { accessToken } = useAuth();
+  const { accessToken, isOffline } = useAuth();
   const { isAdmin } = useAdminAccess();
   const parkingId = Array.isArray(params.id) ? params.id[0] : params.id;
   const { data: detail, error, isFetching, isPending, isPlaceholderData, refetch } =
@@ -175,6 +183,11 @@ function ParkingDetailContent() {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const routeToCurrentPositionQuery = useRouteToStampFromPositionQuery(
+    parkingId,
+    userLocation?.latitude,
+    userLocation?.longitude
+  );
 
   function handleBack() {
     if (router.canGoBack()) {
@@ -306,9 +319,37 @@ function ParkingDetailContent() {
     Number.isFinite(parking.latitude) &&
     typeof parking.longitude === 'number' &&
     Number.isFinite(parking.longitude);
-  const distanceToCurrentPositionKm =
-    userLocation && hasParkingCoordinates ? haversineDistanceKm(userLocation, parking) : null;
-  const isRouteToCurrentPositionLoading = locationState === 'loading';
+  const offlineRouteToCurrentPosition =
+    !isOffline || !userLocation || !hasParkingCoordinates
+      ? null
+      : (() => {
+          const distanceKm = haversineDistanceKm(userLocation, parking);
+          const distanceMeters =
+            typeof distanceKm === 'number' && Number.isFinite(distanceKm)
+              ? Math.max(0, Math.round(distanceKm * 1000))
+              : 0;
+
+          return {
+            distanceMeters,
+            durationSeconds: 0,
+            elevationGainMeters: 0,
+            elevationLossMeters: 0,
+          };
+        })();
+  const routeToCurrentPosition = routeToCurrentPositionQuery.data ?? offlineRouteToCurrentPosition;
+  const hasOfflineRouteFallback =
+    routeToCurrentPositionQuery.data == null && offlineRouteToCurrentPosition !== null;
+  const isRouteToCurrentPositionLoading =
+    locationState === 'loading' ||
+    (hasParkingCoordinates &&
+      locationState === 'granted' &&
+      routeToCurrentPositionQuery.isPending &&
+      !hasOfflineRouteFallback);
+  const routeToCurrentPositionError = hasOfflineRouteFallback ? null : routeToCurrentPositionQuery.error;
+  const routeToCurrentPositionErrorMessage =
+    routeToCurrentPositionError instanceof Error
+      ? routeToCurrentPositionError.message
+      : 'Route konnte noch nicht geladen werden.';
   const bottomInset = Math.max(insets.bottom, 0);
 
   return (
@@ -468,13 +509,13 @@ function ParkingDetailContent() {
 
           <CurrentPositionDistanceSection
             actionLabel="Distanz berechnen"
-            errorText="Route konnte noch nicht geladen werden."
+            errorText={routeToCurrentPositionErrorMessage}
             loadingLineWidths={['72%', '56%']}
             noCoordinatesText="Für diesen Parkplatz liegen keine Koordinaten vor."
             onRequestDistance={() => {
               void handleRequestRouteToParking();
             }}
-            promptText="Tippe auf den Button, um die Distanz von deinem aktuellen Standort zum Parkplatz zu berechnen."
+            promptText="Tippe auf den Button, um die Distanz und Höhenmeter von deinem aktuellen Standort zum Parkplatz zu berechnen."
             retryLabel="Erneut versuchen"
             title="Von aktueller Position"
             status={
@@ -486,28 +527,46 @@ function ParkingDetailContent() {
                     ? 'denied'
                     : isRouteToCurrentPositionLoading
                       ? 'loading'
-                      : userLocation && distanceToCurrentPositionKm !== null
-                        ? 'ready'
-                        : 'error'
+                      : routeToCurrentPositionError
+                        ? 'error'
+                        : routeToCurrentPosition
+                          ? 'ready'
+                          : 'error'
             }>
-            {userLocation && distanceToCurrentPositionKm !== null ? (
+            {routeToCurrentPosition ? (
               <View style={styles.routeSummaryCard}>
                 <View style={[styles.rowBadge, styles.rowBadgeRoute]}>
                   <Feather color="#b56928" name="map-pin" size={14} />
                 </View>
                 <View style={styles.rowBody}>
                   <Text style={styles.rowTitle}>Aktuelle Position</Text>
-                  <Text style={styles.rowMeta}>{formatDistance(distanceToCurrentPositionKm)}</Text>
+                  <Text style={styles.rowMeta}>
+                    {formatDistanceMeters(routeToCurrentPosition.distanceMeters)}
+                    {formatElevationSummary(
+                      routeToCurrentPosition.elevationGainMeters,
+                      routeToCurrentPosition.elevationLossMeters
+                    )}
+                  </Text>
                 </View>
                 <Pressable
+                  disabled={routeToCurrentPositionQuery.isFetching || isOffline}
                   onPress={() => {
-                    void handleRequestRouteToParking();
+                    if (isOffline) {
+                      return;
+                    }
+
+                    void routeToCurrentPositionQuery.refetch();
                   }}
                   style={({ pressed }) => [
                     styles.routeRefreshButton,
+                    (routeToCurrentPositionQuery.isFetching || isOffline) && styles.routeRefreshButtonDisabled,
                     pressed && styles.sectionActionPressed,
                   ]}>
-                  <Feather color="#2e3a2e" name="rotate-cw" size={14} />
+                  <Feather
+                    color="#2e3a2e"
+                    name={routeToCurrentPositionQuery.isFetching ? 'refresh-cw' : 'rotate-cw'}
+                    size={14}
+                  />
                 </Pressable>
               </View>
             ) : null}
@@ -793,6 +852,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#eef2ea',
+  },
+  routeRefreshButtonDisabled: {
+    opacity: 0.55,
   },
   emptyNearbyStampsState: {
     alignItems: 'center',
