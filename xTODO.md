@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|---|
 | P0 | Samsung: keine Nutzung über mobile Daten | Sehr hoch | M-L | Stabilität | In Progress | Harte Blockade für den Outdoor-Kern-Use-Case. |
 | P1 | Aktuelle Defektmeldungen aufnehmen (harzer-wandernadel.de) | Hoch | S-M | Datenqualität | Offen | Sofort spürbarer Mehrwert durch aktuelle, verlässliche POI-Informationen. |
-| P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Offen | Schneller UX-Gewinn in einem häufig genutzten Interaktionspunkt. |
+| P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Untested | Schneller UX-Gewinn in einem häufig genutzten Interaktionspunkt. |
 | P1 | Fortschritt Wanderabzeichen | Mittel-Hoch | M | Engagement | Offen | Stärkt Retention nach Stabilitäts- und Kern-UX-Themen. |
 | P3 | Benachrichtigungen Freundschaftsanfragen | Mittel | M | Engagement | Offen | Social-Verbesserung, aber nicht kritisch für die Kernnutzung. |
 | P3 | Defektmeldungen aus der App heraus machen | Hoch | M | Core Feature | Offen | Schließt den Datenkreislauf und hält Defektstatus schneller aktuell. |
