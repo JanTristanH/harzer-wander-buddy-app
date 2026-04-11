@@ -11,8 +11,8 @@ const generatedMappingFilePath = path.join(rootDir, 'lib', 'map-marker-images.ge
 
 const STAMP_MIN = 1;
 const STAMP_MAX = 222;
-const BASE_MARKER_WIDTH = 56;
-const BASE_MARKER_HEIGHT = 60;
+const BASE_MARKER_WIDTH = 48;
+const BASE_MARKER_HEIGHT = 52;
 const MARKER_ASSET_SCALES = [1, 2, 3];
 
 const PLACEHOLDERS = {
