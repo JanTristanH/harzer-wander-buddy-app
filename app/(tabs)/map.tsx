@@ -56,6 +56,7 @@ type Coordinate = {
 };
 
 type LocationState = 'idle' | 'loading' | 'granted' | 'denied';
+type SelectionSheetMode = 'expanded' | 'compact';
 type AuthClaims = {
   sub?: string;
 };
@@ -128,6 +129,7 @@ const LOCATE_ME_TARGET_DELTA = 0.05;
 const SELECTION_TARGET_VERTICAL_RATIO = 0.3;
 const SINGLE_POINT_FOCUS_OFFSET_RATIO = 0.15;
 const NORTH_HEADING_EPSILON = 2;
+const PROGRAMMATIC_SELECTION_MOVE_SUPPRESS_MS = 420;
 const MARKER_ANCHOR = { x: 0.5, y: 1 };
 const MARKER_Z_INDEX_PARKING = 10;
 const MARKER_Z_INDEX_STAMP = 20;
@@ -514,8 +516,10 @@ export default function MapScreen() {
   const [isStampSuccessToastVisible, setIsStampSuccessToastVisible] = useState(false);
   const [isParkingRevealPending, setIsParkingRevealPending] = useState(false);
   const [selectedSheetHeight, setSelectedSheetHeight] = useState(0);
+  const [selectionSheetMode, setSelectionSheetMode] = useState<SelectionSheetMode>('expanded');
   const [mapHeading, setMapHeading] = useState(0);
   const [nearestRouteMetrics, setNearestRouteMetrics] = useState<RouteMetrics | null>(null);
+  const suppressSheetCompactUntilRef = useRef(0);
   const showStartupLoading = (isPending && !data) || isPlaceholderData;
   const isMapNorthUp = Math.abs(normalizeHeading(mapHeading)) <= NORTH_HEADING_EPSILON;
 
@@ -523,6 +527,9 @@ export default function MapScreen() {
     regionRef.current = nextRegion;
     setRegion(nextRegion);
     lastMapRegion = nextRegion;
+  }, []);
+  const suppressSelectionSheetCompactionForSelectionMove = useCallback((durationMs = PROGRAMMATIC_SELECTION_MOVE_SUPPRESS_MS) => {
+    suppressSheetCompactUntilRef.current = Date.now() + durationMs;
   }, []);
 
   const fitCoordinates = useCallback((coordinates: Coordinate[]) => {
@@ -689,6 +696,12 @@ export default function MapScreen() {
       setSelectedItemId(null);
     }
   }, [selectedItemId, visibleItems]);
+
+  useEffect(() => {
+    if (!selectedItem) {
+      setSelectionSheetMode('expanded');
+    }
+  }, [selectedItem]);
 
   useEffect(() => {
     if (!isMapReady || !data || hasFittedInitialRegion.current) {
@@ -1000,6 +1013,10 @@ export default function MapScreen() {
     (item: MarkerItem) => {
       lastMarkerPressAtRef.current = Date.now();
       setSelectedExternalPlace(null);
+      const isSameSelectedItem = selectedItemId === item.id;
+      if (!isSameSelectedItem) {
+        setSelectionSheetMode('expanded');
+      }
       setSelectedItemId(item.id);
       const targetDelta = Math.min(regionRef.current.longitudeDelta, SELECTION_TARGET_DELTA);
       const shouldDelayParkingReveal =
@@ -1007,6 +1024,7 @@ export default function MapScreen() {
         regionRef.current.longitudeDelta >= PARKING_HIDE_LONGITUDE_DELTA &&
         targetDelta < PARKING_HIDE_LONGITUDE_DELTA;
       setIsParkingRevealPending(shouldDelayParkingReveal);
+      suppressSelectionSheetCompactionForSelectionMove();
       const nextRegion = createPointRegionAtVerticalRatio(
         item.coordinate,
         targetDelta,
@@ -1015,7 +1033,7 @@ export default function MapScreen() {
       updateMapRegion(nextRegion);
       mapRef.current?.animateToRegion(nextRegion, 260);
     },
-    [updateMapRegion]
+    [selectedItemId, suppressSelectionSheetCompactionForSelectionMove, updateMapRegion]
   );
 
   const handleLocateMePress = useCallback(() => {
@@ -1383,6 +1401,9 @@ export default function MapScreen() {
   const focusItemOnMap = useCallback((item: MarkerItem) => {
     lastMarkerPressAtRef.current = Date.now();
     setSelectedExternalPlace(null);
+    if (selectedItemId !== item.id) {
+      setSelectionSheetMode('expanded');
+    }
     setSelectedItemId(item.id);
     setSearchQuery('');
     setIsSearchFocused(false);
@@ -1401,9 +1422,10 @@ export default function MapScreen() {
       ),
     };
 
+    suppressSelectionSheetCompactionForSelectionMove();
     updateMapRegion(nextRegion);
     mapRef.current?.animateToRegion(nextRegion, 260);
-  }, [updateMapRegion]);
+  }, [selectedItemId, suppressSelectionSheetCompactionForSelectionMove, updateMapRegion]);
 
   const focusExternalPlaceOnMap = useCallback((place: PlaceSearchResult) => {
     lastMarkerPressAtRef.current = Date.now();
@@ -1506,6 +1528,22 @@ export default function MapScreen() {
     setIsParkingRevealPending(false);
     void syncMapHeading();
   }, [syncMapHeading, updateMapRegion]);
+
+  const handleRegionChange = useCallback(() => {
+    if (!selectedItem || selectionSheetMode === 'compact') {
+      return;
+    }
+
+    if (Date.now() < suppressSheetCompactUntilRef.current) {
+      return;
+    }
+
+    setSelectionSheetMode('compact');
+  }, [selectedItem, selectionSheetMode]);
+
+  const handleSelectionSheetToggleExpand = useCallback(() => {
+    setSelectionSheetMode('expanded');
+  }, []);
 
   const handleResetNorthPress = useCallback(() => {
     mapRef.current?.animateCamera(
@@ -1620,6 +1658,7 @@ export default function MapScreen() {
           setIsSearchFocused(false);
         }}
         onRegionChangeComplete={handleRegionChangeComplete}
+        onRegionChange={handleRegionChange}
         showsCompass={false}
         showsUserLocation={locationState !== 'denied'}
         showsMyLocationButton={false}
@@ -1860,6 +1899,7 @@ export default function MapScreen() {
         {selectedItem ? (
           <MapSelectionSheet
             bottomOffset={sheetBottomOffset}
+            mode={selectionSheetMode}
             item={{
               kind: selectedItem.kind,
               title: selectedItem.title,
@@ -1883,6 +1923,7 @@ export default function MapScreen() {
                 : router.push(`/stamps/${selectedItem.stampId}` as never)
             }
             onHeightChange={setSelectedSheetHeight}
+            onToggleExpand={handleSelectionSheetToggleExpand}
           />
         ) : null}
         {!selectedItem && selectedExternalPlace ? (

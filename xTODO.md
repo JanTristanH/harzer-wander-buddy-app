@@ -7,12 +7,10 @@
 | P1 | Aktuelle Defektmeldungen aufnehmen (harzer-wandernadel.de) | Hoch | S-M | Datenqualität | Offen | Sofort spürbarer Mehrwert durch aktuelle, verlässliche POI-Informationen. |
 | P1 | Defektmeldungen aus der App heraus machen | Hoch | M | Core Feature | Offen | Schließt den Datenkreislauf und hält Defektstatus schneller aktuell. |
 | P1 | Feedback beim Hinzufügen von POIs schlecht | Hoch | S-M | UX | Offen | Schneller UX-Gewinn in einem häufig genutzten Interaktionspunkt. |
-| P1 | Bottom Sheet kleiner beim Kartenbewegen | Mittel-Hoch | S-M | UX | Offen | Verbessert Kartenfokus und reduziert Bedienfrust. |
 | P2 | Fortschritt Wanderabzeichen | Mittel-Hoch | M | Engagement | Offen | Stärkt Retention nach Stabilitäts- und Kern-UX-Themen. |
 | P2 | Allgemeine Notizen, wer dabei war | Mittel | S-M | Engagement | Offen | Praktische Tour-Dokumentation ohne Kern-Blocker-Charakter. |
 | P2 | Benachrichtigungen Freundschaftsanfragen | Mittel | M | Engagement | Offen | Social-Verbesserung, aber nicht kritisch für die Kernnutzung. |
 | P3 | Detaillierte Routenansicht (optional) | Mittel | M-L | Feature | Offen | Optionales Feature, erst nach Kernqualität. |
-| P3 | Icons kleiner | Niedrig-Mittel | S | UI-Polish | Offen | Reines Feintuning, gut bündelbar mit anderem UI-Polish. |
 
 ## ✅ Bereits erledigt / gepusht
 
@@ -30,3 +28,5 @@
 - Fast Scroll auf der Liste
 - Admin: neuer Parkplatz
 - Admin: Stempelstelle verlegt
+- Bottom Sheet kleiner beim Kartenbewegen
+- Icons kleiner

@@ -7,18 +7,22 @@ import { useAuth } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 
 type MarkerKind = 'visited-stamp' | 'open-stamp' | 'parking';
+type MapSelectionSheetMode = 'expanded' | 'compact';
 
 export function MapSelectionSheet({
   bottomOffset,
+  mode,
   item,
   metadata,
   primaryActionLabel,
   onPrimaryActionPress,
   primaryActionDisabled,
   onDetailsPress,
+  onToggleExpand,
   onHeightChange,
 }: {
   bottomOffset: number;
+  mode: MapSelectionSheetMode;
   item: {
     kind: MarkerKind;
     title: string;
@@ -30,25 +34,28 @@ export function MapSelectionSheet({
   onPrimaryActionPress?: () => void;
   primaryActionDisabled?: boolean;
   onDetailsPress?: () => void;
+  onToggleExpand?: () => void;
   onHeightChange?: (height: number) => void;
 }) {
   const { accessToken } = useAuth();
+  const isCompact = mode === 'compact';
   const isInteractive = Boolean(onDetailsPress);
   const imageSource = item.imageUrl
     ? buildAuthenticatedImageSource(item.imageUrl, accessToken)
     : null;
+  const handleSheetPress = isCompact ? onToggleExpand : onDetailsPress;
 
   return (
     <Pressable
       onLayout={(event: LayoutChangeEvent) => onHeightChange?.(event.nativeEvent.layout.height)}
-      onPress={onDetailsPress}
+      onPress={handleSheetPress}
       style={({ pressed }) => [
         styles.bottomSheet,
         { bottom: bottomOffset },
-        pressed && isInteractive && styles.pressed,
+        pressed && (isCompact || isInteractive) && styles.pressed,
       ]}>
-      <View pointerEvents="none" style={styles.detailRow}>
-        {imageSource ? (
+      <View pointerEvents="none" style={[styles.detailRow, isCompact && styles.detailRowCompact]}>
+        {isCompact ? null : imageSource ? (
           <Image cachePolicy="disk" contentFit="cover" source={imageSource} style={styles.detailArtwork} />
         ) : (
           <LinearGradient
@@ -62,12 +69,11 @@ export function MapSelectionSheet({
             style={styles.detailArtwork}
           />
         )}
-
         <View style={styles.detailCopy}>
           <Text numberOfLines={1} style={styles.detailTitle}>
             {item.title}
           </Text>
-          {item.description?.trim() ? (
+          {!isCompact && item.description?.trim() ? (
             <Text numberOfLines={2} style={styles.detailDescription}>
               {item.description}
             </Text>
@@ -101,7 +107,7 @@ export function MapSelectionSheet({
         </View>
       </View>
 
-      {metadata?.trim() ? (
+      {!isCompact && metadata?.trim() ? (
         <View pointerEvents="none" style={styles.detailMetaRow}>
           <Text numberOfLines={2} style={styles.detailMeta}>
             {metadata}
@@ -109,7 +115,7 @@ export function MapSelectionSheet({
         </View>
       ) : null}
 
-      {primaryActionLabel || onDetailsPress ? (
+      {!isCompact && (primaryActionLabel || onDetailsPress) ? (
         <View style={styles.actionRow}>
           {primaryActionLabel ? (
             <Pressable
@@ -164,6 +170,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  detailRowCompact: {
+    gap: 10,
   },
   detailArtwork: {
     width: 56,
