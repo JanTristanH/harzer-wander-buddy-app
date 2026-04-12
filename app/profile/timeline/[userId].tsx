@@ -132,6 +132,7 @@ export default function ProfileTimelineScreen() {
   const [contentHeight, setContentHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [trackHeight, setTrackHeight] = useState(0);
+  const [topControlsHeight, setTopControlsHeight] = useState(0);
   const [isFastScrollerVisible, setIsFastScrollerVisible] = useState(false);
   const [isThumbDragging, setIsThumbDragging] = useState(false);
   const [thumbRatioOverride, setThumbRatioOverride] = useState<number | null>(null);
@@ -176,6 +177,7 @@ export default function ProfileTimelineScreen() {
     )
   );
   const scrollerOpacity = isFastScrollerVisible || isThumbDragging ? 1 : 0;
+  const fastScrollerTopInset = 14 + topControlsHeight;
 
   const formatPreviewLabel = useCallback((dayKey: string | null | undefined) => {
     if (!dayKey) {
@@ -472,45 +474,52 @@ export default function ProfileTimelineScreen() {
           }
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}>
-          <View style={styles.headerCard}>
-            <Pressable
-              onPress={() => router.back()}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-              <Feather color="#1e2a1e" name="arrow-left" size={16} />
-            </Pressable>
-            <View style={styles.headerBody}>
-              <Text style={styles.title}>Timeline</Text>
-              <Text style={styles.subtitle}>{profileName} • Alle Besuche</Text>
-            </View>
-          </View>
-
-          <View style={styles.jumpCard}>
-            <Text style={styles.jumpTitle}>Zu einem Datum springen</Text>
-            <Pressable
-              disabled={groupedTimeline.length === 0}
-              onPress={() => setShowDatePicker((current) => !current)}
-              style={({ pressed }) => [
-                styles.jumpButton,
-                groupedTimeline.length === 0 && styles.jumpButtonDisabled,
-                pressed && groupedTimeline.length > 0 && styles.pressed,
-              ]}>
-              <View style={styles.jumpButtonContent}>
-                <Feather color="#2e6b4b" name="calendar" size={15} />
-                <Text style={styles.jumpButtonLabel}>{formatJumpDate(selectedDate)}</Text>
+          <View
+            onLayout={(event) => {
+              const nextHeight = event.nativeEvent.layout.height;
+              setTopControlsHeight((current) => (Math.abs(current - nextHeight) < 0.5 ? current : nextHeight));
+            }}
+            style={styles.topControlsWrap}>
+            <View style={styles.headerCard}>
+              <Pressable
+                onPress={() => router.back()}
+                style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+                <Feather color="#1e2a1e" name="arrow-left" size={16} />
+              </Pressable>
+              <View style={styles.headerBody}>
+                <Text style={styles.title}>Timeline</Text>
+                <Text style={styles.subtitle}>{profileName} • Alle Besuche</Text>
               </View>
-              <Feather color="#2e6b4b" name={showDatePicker ? 'chevron-up' : 'chevron-down'} size={16} />
-            </Pressable>
-            {showDatePicker ? (
-              <DateTimePicker
-                display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                maximumDate={dateRange.max}
-                minimumDate={dateRange.min}
-                mode="date"
-                onChange={handleDateChange}
-                value={selectedDate}
-              />
-            ) : null}
-            {jumpHint ? <Text style={styles.jumpHint}>{jumpHint}</Text> : null}
+            </View>
+
+            <View style={styles.jumpCard}>
+              <Text style={styles.jumpTitle}>Zu einem Datum springen</Text>
+              <Pressable
+                disabled={groupedTimeline.length === 0}
+                onPress={() => setShowDatePicker((current) => !current)}
+                style={({ pressed }) => [
+                  styles.jumpButton,
+                  groupedTimeline.length === 0 && styles.jumpButtonDisabled,
+                  pressed && groupedTimeline.length > 0 && styles.pressed,
+                ]}>
+                <View style={styles.jumpButtonContent}>
+                  <Feather color="#2e6b4b" name="calendar" size={15} />
+                  <Text style={styles.jumpButtonLabel}>{formatJumpDate(selectedDate)}</Text>
+                </View>
+                <Feather color="#2e6b4b" name={showDatePicker ? 'chevron-up' : 'chevron-down'} size={16} />
+              </Pressable>
+              {showDatePicker ? (
+                <DateTimePicker
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  maximumDate={dateRange.max}
+                  minimumDate={dateRange.min}
+                  mode="date"
+                  onChange={handleDateChange}
+                  value={selectedDate}
+                />
+              ) : null}
+              {jumpHint ? <Text style={styles.jumpHint}>{jumpHint}</Text> : null}
+            </View>
           </View>
 
           {groupedTimeline.length > 0 ? (
@@ -568,7 +577,7 @@ export default function ProfileTimelineScreen() {
           )}
         </ScrollView>
         {hasScrollableTimeline ? (
-          <View pointerEvents="box-none" style={styles.fastScrollerOverlay}>
+          <View pointerEvents="box-none" style={[styles.fastScrollerOverlay, { top: fastScrollerTopInset }]}>
             <View style={styles.fastScrollerRail}>
               <View
                 onLayout={(event) => {
@@ -607,6 +616,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
     paddingBottom: 120,
+  },
+  topControlsWrap: {
+    gap: 12,
   },
   headerCard: {
     backgroundColor: '#ffffff',
@@ -759,7 +771,7 @@ const styles = StyleSheet.create({
   },
   fastScrollerOverlay: {
     position: 'absolute',
-    top: 14,
+    top: 0,
     right: 0,
     bottom: 18,
     width: 118,

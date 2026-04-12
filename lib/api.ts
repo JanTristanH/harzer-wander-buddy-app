@@ -3355,8 +3355,11 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
     return [] as SearchUserResult[];
   }
 
+  const normalizedQuery = query.toLowerCase();
+  const escapedNormalizedQuery = escapeODataString(normalizedQuery);
   const escapedQuery = escapeODataString(query);
   const filters = [
+    `contains(tolower(name),'${escapedNormalizedQuery}') or startswith(tolower(name),'${escapedNormalizedQuery}') or contains(tolower(ID),'${escapedNormalizedQuery}')`,
     `contains(name,'${escapedQuery}') or startswith(name,'${escapedQuery}')`,
   ];
 
@@ -3367,6 +3370,10 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
         filter,
         top: 12,
       });
+
+      if (users.length === 0) {
+        continue;
+      }
 
       return attachUserProgress(
         accessToken,
@@ -3387,7 +3394,6 @@ export async function searchUsers(accessToken: string, rawQuery: string) {
     top: 50,
   });
 
-  const normalizedQuery = query.toLowerCase();
   return attachUserProgress(
     accessToken,
     users
