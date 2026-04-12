@@ -392,21 +392,72 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         return;
       }
 
+      const applySessionFromToken = (tokenResponse: AuthSession.TokenResponse | null, mode: SessionMode) => {
+        if (!isMounted) {
+          return;
+        }
+
+        if (!tokenResponse) {
+          setAuthState(null);
+          setSessionMode('online');
+          setCurrentUserProfile(null);
+          return;
+        }
+
+        setAuthState(toAuthState(tokenResponse));
+        setSessionMode(mode);
+      };
+
+      const invalidateSession = async () => {
+        await clearTokenResponse();
+        if (!isMounted) {
+          return;
+        }
+
+        setAuthState(null);
+        setSessionMode('online');
+        setCurrentUserProfile(null);
+      };
+
       try {
         const storedOnboardingState = await loadOnboardingState();
         if (isMounted) {
           setHasCompletedOnboarding(storedOnboardingState);
         }
 
-        const resolved = await resolveValidTokenResponse();
-        if (!resolved.tokenResponse) {
+        const cachedTokenResponse = await loadTokenResponse();
+        if (!cachedTokenResponse) {
+          applySessionFromToken(null, 'online');
           return;
         }
 
+        applySessionFromToken(cachedTokenResponse, isOffline ? 'offline_grace' : 'online');
+      } catch (error) {
+        const shouldInvalidateSession =
+          isUnauthorizedError(error) || isInvalidGrantRefreshError(error);
+
+        console.error('Failed to restore auth session', error);
         if (isMounted) {
-          setAuthState(toAuthState(resolved.tokenResponse));
-          setSessionMode(resolved.sessionMode);
+          setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
         }
+
+        if (shouldInvalidateSession) {
+          await invalidateSession();
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+
+      try {
+        const resolved = await resolveValidTokenResponse();
+        if (!resolved.tokenResponse) {
+          applySessionFromToken(null, 'online');
+          return;
+        }
+
+        applySessionFromToken(resolved.tokenResponse, resolved.sessionMode);
 
         if (!isMounted) {
           return;
@@ -424,21 +475,23 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         const shouldInvalidateSession =
           isUnauthorizedError(error) || isInvalidGrantRefreshError(error);
 
-        console.error('Failed to restore auth session', error);
-        setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
-
         if (shouldInvalidateSession) {
-          await clearTokenResponse();
+          console.error('Failed to restore auth session', error);
           if (isMounted) {
-            setAuthState(null);
-            setSessionMode('online');
-            setCurrentUserProfile(null);
+            setAuthError(error instanceof Error ? error.message : 'Failed to restore auth session');
           }
+          await invalidateSession();
+          return;
         }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
+
+        if (isOffline || isNetworkRefreshError(error)) {
+          if (isMounted) {
+            setSessionMode('offline_grace');
+          }
+          return;
         }
+
+        console.warn('Failed to refresh startup auth session in background', error);
       }
     }
 
@@ -447,7 +500,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     return () => {
       isMounted = false;
     };
-  }, [configError, preloadCurrentUserProfileForToken, resolveValidTokenResponse]);
+  }, [configError, isOffline, preloadCurrentUserProfileForToken, resolveValidTokenResponse]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
