@@ -260,6 +260,7 @@ export default function StampsScreen() {
   const maxScrollY = Math.max(0, Math.max(contentHeight, estimatedContentHeight) - viewportHeight);
   const hasScrollableList = filteredStamps.length > 0 && maxScrollY > 0;
   const trackHeight = FAST_SCROLLER_TRACK_HEIGHT;
+  const fastScrollerTopInset = LIST_TOP_PADDING + controlsHeight;
   const previewRatio =
     filteredStamps.length > 1 ? (previewIndex - 1) / (filteredStamps.length - 1) : 0;
   const thumbHeight = FAST_SCROLLER_THUMB_HEIGHT;
@@ -734,7 +735,7 @@ export default function StampsScreen() {
           style={styles.list}
         />
         {hasScrollableList ? (
-          <View pointerEvents="box-none" style={styles.fastScrollerOverlay}>
+          <View pointerEvents="box-none" style={[styles.fastScrollerOverlay, { top: fastScrollerTopInset }]}>
             <View style={styles.fastScrollerRail}>
               <View
                 pointerEvents="none"
@@ -1031,7 +1032,7 @@ const styles = StyleSheet.create({
   },
   fastScrollerOverlay: {
     position: 'absolute',
-    top: 116,
+    top: 0,
     right: 0,
     bottom: 176,
     width: 74,
