@@ -20,6 +20,7 @@ import { FriendsList } from '@/components/friends-list';
 import { ProfileTimelineSummarySection } from '@/components/profile-timeline-summary-section';
 import { SkeletonBlock, SkeletonCircle } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
+import type { HapticStrength } from '@/lib/haptics-preferences';
 import { buildAuthenticatedImageSource } from '@/lib/images';
 import type { ProfileVisitEntry, Stampbox } from '@/lib/api';
 
@@ -128,6 +129,15 @@ export type ProfileViewModel = {
     label: string;
     onPress: () => void;
   }[];
+  hapticSettings?: {
+    value: HapticStrength;
+    options: {
+      key: HapticStrength;
+      label: string;
+    }[];
+    onChange: (value: HapticStrength) => void;
+    onTest?: () => void;
+  };
   onRefresh?: () => void;
   refreshing?: boolean;
   refreshHint?: string;
@@ -943,6 +953,38 @@ export function ProfileView({ data }: { data: ProfileViewModel }) {
           ) : null}
         </ProfileSection>
 
+        {data.hapticSettings ? (
+          <ProfileSection title="Haptik">
+            <Text style={styles.settingsLabel}>Vibrationsstaerke</Text>
+            <View style={styles.hapticChipRow}>
+              {data.hapticSettings.options.map((option) => {
+                const isActive = data.hapticSettings.value === option.key;
+                return (
+                  <Pressable
+                    key={option.key}
+                    onPress={() => data.hapticSettings.onChange(option.key)}
+                    style={({ pressed }) => [
+                      styles.hapticChip,
+                      isActive && styles.hapticChipActive,
+                      pressed && styles.pressed,
+                    ]}>
+                    <Text style={[styles.hapticChipLabel, isActive && styles.hapticChipLabelActive]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {data.hapticSettings.onTest ? (
+              <Pressable
+                onPress={data.hapticSettings.onTest}
+                style={({ pressed }) => [styles.hapticTestButton, pressed && styles.pressed]}>
+                <Text style={styles.hapticTestButtonLabel}>Testen</Text>
+              </Pressable>
+            ) : null}
+          </ProfileSection>
+        ) : null}
+
         {data.footerButtons?.length ? (
           <View style={styles.footerButtonStack}>
             {data.footerButtons.map((button) => (
@@ -1444,6 +1486,52 @@ const styles = StyleSheet.create({
   },
   countChipLabelBrown: {
     color: '#1e2a1e',
+  },
+  settingsLabel: {
+    color: '#5f6e5f',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  hapticChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  hapticChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d7cfbb',
+    backgroundColor: '#f2ebde',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  hapticChipActive: {
+    backgroundColor: '#2e6b4b',
+    borderColor: '#2e6b4b',
+  },
+  hapticChipLabel: {
+    color: '#3d4a3d',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  hapticChipLabelActive: {
+    color: '#f5f3ee',
+  },
+  hapticTestButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    backgroundColor: '#2e6b4b',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  hapticTestButtonLabel: {
+    color: '#f5f3ee',
+    fontSize: 13,
+    fontWeight: '700',
   },
   countChipLabelSubtle: {
     color: '#7a6a4a',

@@ -1,6 +1,5 @@
 import { Feather } from '@expo/vector-icons';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
-import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ExpoLinking from 'expo-linking';
@@ -36,6 +35,7 @@ import {
 } from '@/lib/api';
 import { useAuth, useIdTokenClaims } from '@/lib/auth';
 import { buildAuthenticatedImageSource } from '@/lib/images';
+import { triggerHaptic } from '@/lib/haptics-preferences';
 import {
   getPreGeneratedMapMarkerFallbackImageSource,
   getPreGeneratedMapMarkerImageSource,
@@ -1868,7 +1868,7 @@ export default function TourDetailScreen() {
       poiAddedFeedbackProgress.setValue(1);
     }, 800);
 
-    void Haptics.selectionAsync().catch(() => {
+    void triggerHaptic('poiAdded').catch(() => {
       // Ignore non-critical haptic errors to keep add-flow robust.
     });
   }, [addPoiButtonScale, poiAddedFeedbackProgress]);

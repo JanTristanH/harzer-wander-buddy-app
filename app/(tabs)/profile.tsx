@@ -9,6 +9,13 @@ import {
   type ProfileViewModel,
 } from '@/components/profile-view';
 import { useAdminAccess, useAuth, useIdTokenClaims } from '@/lib/auth';
+import {
+  DEFAULT_HAPTIC_STRENGTH,
+  type HapticStrength,
+  loadHapticStrengthPreference,
+  setHapticStrengthPreference,
+  triggerHaptic,
+} from '@/lib/haptics-preferences';
 import { OFFLINE_REFRESH_MESSAGE } from '@/lib/offline-write';
 import { buildTimelinePreview } from '@/lib/profile-timeline';
 import { useProfileOverviewQuery } from '@/lib/queries';
@@ -31,8 +38,42 @@ export default function ProfileScreen() {
     claims?.sub && currentUserProfile?.id === claims.sub ? currentUserProfile : null;
   const [activeStampFilter, setActiveStampFilter] = useState<StampFilter>('visited');
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const [hapticStrength, setHapticStrength] = useState<HapticStrength>(DEFAULT_HAPTIC_STRENGTH);
   const { data, error, isFetching, isPending, isPlaceholderData, refetch } = useProfileOverviewQuery();
   const blockingError = !data ? error : null;
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    void (async () => {
+      const storedStrength = await loadHapticStrengthPreference();
+      if (!isCancelled) {
+        setHapticStrength(storedStrength);
+      }
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const updateHapticStrength = React.useCallback((nextStrength: HapticStrength) => {
+    setHapticStrength(nextStrength);
+    void (async () => {
+      try {
+        await setHapticStrengthPreference(nextStrength);
+        if (nextStrength !== 'off') {
+          await triggerHaptic('poiAdded');
+        }
+      } catch {
+        // Ignore haptic setting persistence errors to keep profile usable.
+      }
+    })();
+  }, []);
+
+  const testHapticStrength = React.useCallback(() => {
+    void triggerHaptic('poiAdded').catch(() => {
+      // Ignore non-critical haptic errors in manual test action.
+    });
+  }, []);
 
   const viewModel = useMemo<ProfileViewModel | null>(() => {
     if (!data) {
@@ -155,6 +196,17 @@ export default function ProfileScreen() {
           },
         },
       ],
+      hapticSettings: {
+        value: hapticStrength,
+        options: [
+          { key: 'off', label: 'Aus' },
+          { key: 'light', label: 'Leicht' },
+          { key: 'medium', label: 'Mittel' },
+          { key: 'strong', label: 'Stark' },
+        ],
+        onChange: updateHapticStrength,
+        onTest: testHapticStrength,
+      },
     };
   }, [
     activeStampFilter,
@@ -170,10 +222,13 @@ export default function ProfileScreen() {
     isPending,
     isPlaceholderData,
     isPullRefreshing,
+    hapticStrength,
     logout,
     refetch,
     resetApp,
     router,
+    testHapticStrength,
+    updateHapticStrength,
   ]);
 
   if (isPending && !data) {

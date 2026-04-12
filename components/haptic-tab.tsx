@@ -1,6 +1,7 @@
 import { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import { PlatformPressable } from '@react-navigation/elements';
-import * as Haptics from 'expo-haptics';
+
+import { triggerHaptic } from '@/lib/haptics-preferences';
 
 export function HapticTab(props: BottomTabBarButtonProps) {
   return (
@@ -8,8 +9,9 @@ export function HapticTab(props: BottomTabBarButtonProps) {
       {...props}
       onPress={(ev) => {
         if (!props.accessibilityState?.selected) {
-          // Give subtle feedback only when changing to a different tab.
-          Haptics.selectionAsync();
+          void triggerHaptic('tabChange').catch(() => {
+            // Keep tab navigation robust when haptics are unavailable.
+          });
         }
         props.onPress?.(ev);
       }}
