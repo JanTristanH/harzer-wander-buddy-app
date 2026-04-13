@@ -4,19 +4,22 @@ import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { jwtDecode } from 'jwt-decode';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, type AppStateStatus, Platform } from 'react-native';
 
 import { extractRolesFromClaims, hasAdminRole } from '@/lib/admin-access';
 import { fetchCurrentUserProfile, type CurrentUserProfileData } from '@/lib/api';
-import { appConfig, getMissingConfig } from '@/lib/config';
+import { appConfig, getAuth0ClientIdForPlatform, getMissingConfig } from '@/lib/config';
 import { useConnectivity } from '@/lib/connectivity';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { queryClient } from '@/lib/query-client';
 
-WebBrowser.maybeCompleteAuthSession();
+if (typeof WebBrowser.maybeCompleteAuthSession === 'function') {
+  WebBrowser.maybeCompleteAuthSession();
+}
 
 const TOKEN_STORAGE_KEY = 'hwb-auth-token-response';
 const ONBOARDING_STORAGE_KEY = 'hwb-auth-onboarding-complete';
+const inMemoryStorage = new Map<string, string>();
 
 type AuthState = {
   accessToken: string;
@@ -88,6 +91,12 @@ function getRedirectUri(path?: string | null) {
   const configScheme = Constants.expoConfig?.scheme;
   const scheme = Array.isArray(configScheme) ? configScheme[0] : configScheme;
 
+  if (Platform.OS === 'web') {
+    return AuthSession.makeRedirectUri({
+      path: normalizePath(path),
+    });
+  }
+
   return AuthSession.makeRedirectUri({
     scheme: scheme ?? 'harzerwanderbuddyapp',
     path: normalizePath(path),
@@ -106,6 +115,97 @@ function decodeJwt<T>(token: string | undefined): T | null {
   }
 }
 
+function hasSecureStoreApi() {
+  return (
+    typeof SecureStore.getItemAsync === 'function' &&
+    typeof SecureStore.setItemAsync === 'function' &&
+    typeof SecureStore.deleteItemAsync === 'function'
+  );
+}
+
+function getLocalStorageOrNull() {
+  if (typeof globalThis === 'undefined' || !('localStorage' in globalThis)) {
+    return null;
+  }
+
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function getWebStorageOrNull() {
+  const storage = getLocalStorageOrNull();
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const probeKey = '__hwb_storage_probe__';
+    storage.setItem(probeKey, '1');
+    storage.removeItem(probeKey);
+    return storage;
+  } catch {
+    return null;
+  }
+}
+
+async function setStoredValue(key: string, value: string) {
+  if (Platform.OS !== 'web' && hasSecureStoreApi()) {
+    try {
+      await SecureStore.setItemAsync(key, value);
+      return;
+    } catch (error) {
+      console.warn('Failed to write to SecureStore. Falling back to web/in-memory storage.', error);
+    }
+  }
+
+  const webStorage = getWebStorageOrNull();
+  if (webStorage) {
+    webStorage.setItem(key, value);
+    return;
+  }
+
+  inMemoryStorage.set(key, value);
+}
+
+async function getStoredValue(key: string) {
+  if (Platform.OS !== 'web' && hasSecureStoreApi()) {
+    try {
+      return await SecureStore.getItemAsync(key);
+    } catch (error) {
+      console.warn('Failed to read from SecureStore. Falling back to web/in-memory storage.', error);
+    }
+  }
+
+  const webStorage = getWebStorageOrNull();
+  if (webStorage) {
+    return webStorage.getItem(key);
+  }
+
+  return inMemoryStorage.get(key) ?? null;
+}
+
+async function deleteStoredValue(key: string) {
+  if (Platform.OS !== 'web' && hasSecureStoreApi()) {
+    try {
+      await SecureStore.deleteItemAsync(key);
+      return;
+    } catch (error) {
+      console.warn('Failed to delete from SecureStore. Falling back to web/in-memory storage.', error);
+    }
+  }
+
+  const webStorage = getWebStorageOrNull();
+  if (webStorage) {
+    webStorage.removeItem(key);
+    return;
+  }
+
+  inMemoryStorage.delete(key);
+}
+
 async function saveTokenResponse(tokenResponse: AuthSession.TokenResponse) {
   const payload: StoredTokenState = {
     accessToken: tokenResponse.accessToken,
@@ -117,40 +217,43 @@ async function saveTokenResponse(tokenResponse: AuthSession.TokenResponse) {
     expiresIn: tokenResponse.expiresIn,
   };
 
-  await SecureStore.setItemAsync(TOKEN_STORAGE_KEY, JSON.stringify(payload));
+  await setStoredValue(TOKEN_STORAGE_KEY, JSON.stringify(payload));
 }
 
 async function loadTokenResponse() {
-  const storedValue = await SecureStore.getItemAsync(TOKEN_STORAGE_KEY);
+  const storedValue = await getStoredValue(TOKEN_STORAGE_KEY);
   if (!storedValue) {
     return null;
   }
 
-  const parsed = JSON.parse(storedValue) as StoredTokenState;
-  return new AuthSession.TokenResponse({
-    accessToken: parsed.accessToken,
-    tokenType: parsed.tokenType,
-    scope: parsed.scope,
-    idToken: parsed.idToken,
-    refreshToken: parsed.refreshToken,
-    issuedAt: parsed.issuedAt,
-    expiresIn: parsed.expiresIn,
-  });
+  try {
+    const parsed = JSON.parse(storedValue) as StoredTokenState;
+    return new AuthSession.TokenResponse({
+      accessToken: parsed.accessToken,
+      tokenType: parsed.tokenType,
+      scope: parsed.scope,
+      idToken: parsed.idToken,
+      refreshToken: parsed.refreshToken,
+      issuedAt: parsed.issuedAt,
+      expiresIn: parsed.expiresIn,
+    });
+  } catch (error) {
+    console.warn('Failed to parse stored token response. Clearing persisted token state.', error);
+    await deleteStoredValue(TOKEN_STORAGE_KEY);
+    return null;
+  }
 }
 
 async function clearTokenResponse() {
-  await SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY);
+  await deleteStoredValue(TOKEN_STORAGE_KEY);
 }
 
 async function saveOnboardingState(hasCompletedOnboarding: boolean) {
-  await SecureStore.setItemAsync(
-    ONBOARDING_STORAGE_KEY,
-    hasCompletedOnboarding ? 'true' : 'false'
-  );
+  await setStoredValue(ONBOARDING_STORAGE_KEY, hasCompletedOnboarding ? 'true' : 'false');
 }
 
 async function loadOnboardingState() {
-  const storedValue = await SecureStore.getItemAsync(ONBOARDING_STORAGE_KEY);
+  const storedValue = await getStoredValue(ONBOARDING_STORAGE_KEY);
   return storedValue === 'true';
 }
 
@@ -248,6 +351,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const missingConfig = getMissingConfig().filter((key) => key !== 'auth0LogoutReturnPath');
   const configError =
     missingConfig.length > 0 ? `Missing Expo config: ${missingConfig.join(', ')}` : null;
+  const auth0ClientId = getAuth0ClientIdForPlatform();
 
   const resolveDiscovery = useCallback(async () => {
     if (configError) {
@@ -305,7 +409,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         } satisfies ResolveValidTokenResponseResult;
       }
 
-      if (!tokenResponse.refreshToken || !appConfig.auth0ClientId) {
+      if (!tokenResponse.refreshToken || !auth0ClientId) {
         return {
           tokenResponse,
           sessionMode: isOffline ? 'offline_grace' : 'online',
@@ -320,7 +424,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
 
         const refreshedTokenResponse = await AuthSession.refreshAsync(
           {
-            clientId: appConfig.auth0ClientId,
+            clientId: auth0ClientId,
             refreshToken: tokenResponse.refreshToken,
           },
           discovery
@@ -342,7 +446,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
         throw error;
       }
     },
-    [isOffline, resolveDiscovery]
+    [auth0ClientId, isOffline, resolveDiscovery]
   );
 
   const getValidAccessToken = useCallback(async () => {
@@ -503,6 +607,10 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   }, [configError, isOffline, preloadCurrentUserProfileForToken, resolveValidTokenResponse]);
 
   useEffect(() => {
+    if (Platform.OS === 'web' || typeof AppState.addEventListener !== 'function') {
+      return undefined;
+    }
+
     const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
       if (status !== 'active') {
         return;
@@ -535,7 +643,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
 
       const redirectUri = getRedirectUri('auth/callback');
       const request = new AuthSession.AuthRequest({
-        clientId: appConfig.auth0ClientId,
+        clientId: auth0ClientId,
         scopes: appConfig.auth0Scope.split(' '),
         redirectUri,
         responseType: AuthSession.ResponseType.Code,
@@ -561,7 +669,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
 
       const tokenResponse = await AuthSession.exchangeCodeAsync(
         {
-          clientId: appConfig.auth0ClientId,
+          clientId: auth0ClientId,
           code: result.params.code,
           redirectUri,
           extraParams: {
@@ -588,7 +696,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     } finally {
       setIsLoading(false);
     }
-  }, [configError, preloadCurrentUserProfileForToken, resolveDiscovery]);
+  }, [auth0ClientId, configError, preloadCurrentUserProfileForToken, resolveDiscovery]);
 
   const login = useCallback(async () => {
     await authenticate('login');
@@ -613,17 +721,24 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     setCurrentUserProfile(null);
 
     try {
-      if (!configError && appConfig.auth0ClientId && appConfig.auth0Domain) {
+      if (!configError && auth0ClientId && appConfig.auth0Domain) {
         const returnTo = getRedirectUri(appConfig.auth0LogoutReturnPath);
         const logoutUrl =
-          `${getIssuer()}/v2/logout?client_id=${encodeURIComponent(appConfig.auth0ClientId)}` +
+          `${getIssuer()}/v2/logout?client_id=${encodeURIComponent(auth0ClientId ?? '')}` +
           `&returnTo=${encodeURIComponent(returnTo)}`;
-        await WebBrowser.openAuthSessionAsync(logoutUrl, returnTo);
+
+        if (typeof WebBrowser.openAuthSessionAsync === 'function') {
+          await WebBrowser.openAuthSessionAsync(logoutUrl, returnTo);
+        } else if (typeof WebBrowser.openBrowserAsync === 'function') {
+          await WebBrowser.openBrowserAsync(logoutUrl);
+        } else if (Platform.OS === 'web' && typeof globalThis.location?.assign === 'function') {
+          globalThis.location.assign(logoutUrl);
+        }
       }
     } catch (error) {
       console.error('Auth0 logout failed', error);
     }
-  }, [configError]);
+  }, [auth0ClientId, configError]);
 
   const resetApp = useCallback(async () => {
     await saveOnboardingState(false);

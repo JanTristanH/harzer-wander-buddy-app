@@ -7,6 +7,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,10 +15,10 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MapSelectionSheet } from '@/components/map-selection-sheet';
+import MapView, { Marker, type MapViewRef, type Region } from '@/components/maps/map-primitives';
 import { StampingSuccessToast } from '@/components/stamping-success-toast';
 import {
   createStamping,
@@ -144,10 +145,33 @@ const VISIT_FILTERS: { key: VisitFilter; label: string }[] = [
   { key: 'open', label: 'Unbesucht' },
 ];
 
-function hasCoordinate<T extends { latitude?: number; longitude?: number }>(
-  value?: T
-): value is T & Coordinate {
-  return typeof value?.latitude === 'number' && typeof value?.longitude === 'number';
+function toFiniteCoordinateNumber(value?: number | string) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().replace(',', '.');
+    if (!normalized) {
+      return null;
+    }
+
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function extractCoordinate(value?: { latitude?: number | string; longitude?: number | string }): Coordinate | null {
+  const latitude = toFiniteCoordinateNumber(value?.latitude);
+  const longitude = toFiniteCoordinateNumber(value?.longitude);
+
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return { latitude, longitude };
 }
 
 function formatVisitDate(value?: string) {
@@ -485,7 +509,7 @@ export default function MapScreen() {
   const claims = useIdTokenClaims<AuthClaims>();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapViewRef | null>(null);
   const searchInputRef = useRef<TextInput | null>(null);
   const requestedStampId = Array.isArray(params.stampId) ? params.stampId[0] : params.stampId;
   const requestedParkingId = Array.isArray(params.parkingId) ? params.parkingId[0] : params.parkingId;
@@ -557,18 +581,25 @@ export default function MapScreen() {
     }
 
     return data.stamps
-      .filter(hasCoordinate)
-      .map((stamp) => ({
-        id: `stamp:${stamp.ID}`,
-        kind: stamp.kind,
-        coordinate: { latitude: stamp.latitude, longitude: stamp.longitude },
-        title: `${stamp.number || '--'} • ${stamp.name}`,
-        description: stamp.description?.trim() || undefined,
-        imageUrl: stamp.heroImageUrl?.trim() || stamp.image?.trim() || undefined,
-        number: stamp.number,
-        stampId: stamp.ID,
-        visitedAt: stamp.visitedAt,
-      }));
+      .map((stamp) => {
+        const coordinate = extractCoordinate(stamp);
+        if (!coordinate) {
+          return null;
+        }
+
+        return {
+          id: `stamp:${stamp.ID}`,
+          kind: stamp.kind,
+          coordinate,
+          title: `${stamp.number || '--'} • ${stamp.name}`,
+          description: stamp.description?.trim() || undefined,
+          imageUrl: stamp.heroImageUrl?.trim() || stamp.image?.trim() || undefined,
+          number: stamp.number,
+          stampId: stamp.ID,
+          visitedAt: stamp.visitedAt,
+        } satisfies StampMarkerItem;
+      })
+      .filter((item): item is StampMarkerItem => item !== null);
   }, [data]);
 
   const parkingItems = useMemo<ParkingMarkerItem[]>(() => {
@@ -577,15 +608,22 @@ export default function MapScreen() {
     }
 
     return data.parkingSpots
-      .filter(hasCoordinate)
-      .map((parkingSpot) => ({
-        id: `parking:${parkingSpot.ID}`,
-        kind: 'parking',
-        coordinate: { latitude: parkingSpot.latitude, longitude: parkingSpot.longitude },
-        title: parkingSpot.name?.trim() || 'Parkplatz',
-        description: parkingSpot.description?.trim() || undefined,
-        parkingId: parkingSpot.ID,
-      }));
+      .map((parkingSpot) => {
+        const coordinate = extractCoordinate(parkingSpot);
+        if (!coordinate) {
+          return null;
+        }
+
+        return {
+          id: `parking:${parkingSpot.ID}`,
+          kind: 'parking',
+          coordinate,
+          title: parkingSpot.name?.trim() || 'Parkplatz',
+          description: parkingSpot.description?.trim() || undefined,
+          parkingId: parkingSpot.ID,
+        } satisfies ParkingMarkerItem;
+      })
+      .filter((item): item is ParkingMarkerItem => item !== null);
   }, [data]);
 
   const visibleStampItems = useMemo(() => {
@@ -628,7 +666,7 @@ export default function MapScreen() {
   );
 
   const renderedStampMarkers = useMemo(
-    () => createClusterMarkers(visibleStampItems, region, clusteringEnabled),
+    () => createClusterMarkers(visibleStampItems, region, clusteringEnabled && Platform.OS !== 'web'),
     [clusteringEnabled, region, visibleStampItems]
   );
 

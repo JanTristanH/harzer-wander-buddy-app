@@ -9,6 +9,7 @@
 | P3 | Defektmeldungen aus der App heraus machen | Hoch | M | Core Feature | Offen | Schließt den Datenkreislauf und hält Defektstatus schneller aktuell. |
 | P3 | Detaillierte Routenansicht (optional) | Mittel | M-L | Feature | Offen | Optionales Feature, erst nach Kernqualität. |
 | P3 | Alternative map tiles | Mittel | L | Feature | Offen | Optionales Feature, erst nach Kernqualität. |
+| P3 | Zeitpunkt tracken: App zuletzt geöffnet | Mittel | S | Ops | Offen | Beobachten können ob User die App nutzen. |
 
 ## ✅ Bereits erledigt / gepusht
 

@@ -67,7 +67,9 @@ Join our community of developers creating universal apps.
 ```
       "backendUrl": "http://localhost:4004", => change to remote url when deploying
       "auth0Domain": "dev-ijucl08spdudaszc.us.auth0.com",
-      "auth0ClientId": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh", => needs to be a naitve app (can run parallel to web auth)
+      "auth0ClientId": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh", => legacy fallback
+      "auth0ClientIdNative": "Pf0WY4b3Q2yu6CllOGaZC4RIlolcd4xh", => needs to be a native app
+      "auth0ClientIdWeb": "YOUR_WEB_CLIENT_ID", => needs to be a SPA app
       "auth0Audience": "https://app.harzer-wander-buddy.de/api/v2/",
       "auth0Scope": "openid profile email offline_access",
       "auth0LogoutReturnPath": "auth/logout",

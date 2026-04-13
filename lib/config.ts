@@ -5,6 +5,8 @@ type ExtraConfig = {
   backendUrl?: string;
   auth0Domain?: string;
   auth0ClientId?: string;
+  auth0ClientIdNative?: string;
+  auth0ClientIdWeb?: string;
   auth0Audience?: string;
   auth0Scope?: string;
   auth0LogoutReturnPath?: string;
@@ -37,6 +39,12 @@ export const appConfig = {
   backendUrl,
   auth0Domain: readConfig('auth0Domain', process.env.EXPO_PUBLIC_AUTH0_DOMAIN),
   auth0ClientId: readConfig('auth0ClientId', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID),
+  auth0ClientIdNative:
+    readConfig('auth0ClientIdNative', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID_NATIVE) ||
+    readConfig('auth0ClientId', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID),
+  auth0ClientIdWeb:
+    readConfig('auth0ClientIdWeb', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID_WEB) ||
+    readConfig('auth0ClientId', process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID),
   auth0Audience: readConfig('auth0Audience', process.env.EXPO_PUBLIC_AUTH0_AUDIENCE),
   auth0Scope:
     readConfig('auth0Scope', process.env.EXPO_PUBLIC_AUTH0_SCOPE) ||
@@ -46,8 +54,21 @@ export const appConfig = {
     'auth/logout',
 } as const;
 
+export function getAuth0ClientIdForPlatform(
+  platform: 'web' | 'native' = Platform.OS === 'web' ? 'web' : 'native'
+) {
+  return platform === 'web' ? appConfig.auth0ClientIdWeb : appConfig.auth0ClientIdNative;
+}
+
 export function getMissingConfig() {
-  return Object.entries(appConfig)
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
+  const requiredEntries: Array<[string, string | undefined]> = [
+    ['backendUrl', appConfig.backendUrl],
+    ['auth0Domain', appConfig.auth0Domain],
+    ['auth0Audience', appConfig.auth0Audience],
+    ['auth0Scope', appConfig.auth0Scope],
+    ['auth0LogoutReturnPath', appConfig.auth0LogoutReturnPath],
+    ['auth0ClientId', getAuth0ClientIdForPlatform()],
+  ];
+
+  return requiredEntries.filter(([, value]) => !value).map(([key]) => key);
 }

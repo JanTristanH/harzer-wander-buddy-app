@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import { Platform } from 'react-native';
 
 export type HapticStrength = 'off' | 'light' | 'medium' | 'strong';
 export type HapticEvent = 'poiAdded' | 'tabChange';
@@ -52,10 +53,43 @@ export async function loadHapticStrengthPreference() {
 export async function setHapticStrengthPreference(strength: HapticStrength) {
   cachedStrength = strength;
   hasLoadedStrength = true;
-  await AsyncStorage.setItem(HAPTIC_STRENGTH_STORAGE_KEY, strength);
+
+  try {
+    await AsyncStorage.setItem(HAPTIC_STRENGTH_STORAGE_KEY, strength);
+  } catch {
+    // Preference is still cached in memory for this session.
+  }
+}
+
+async function safeSelectionAsync() {
+  if (typeof Haptics.selectionAsync !== 'function') {
+    return;
+  }
+
+  await Haptics.selectionAsync();
+}
+
+async function safeImpactAsync(style: Haptics.ImpactFeedbackStyle) {
+  if (typeof Haptics.impactAsync !== 'function') {
+    return;
+  }
+
+  await Haptics.impactAsync(style);
+}
+
+async function safeNotificationAsync(type: Haptics.NotificationFeedbackType) {
+  if (typeof Haptics.notificationAsync !== 'function') {
+    return;
+  }
+
+  await Haptics.notificationAsync(type);
 }
 
 export async function triggerHaptic(event: HapticEvent) {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
   const strength = await loadHapticStrengthPreference();
 
   if (strength === 'off') {
@@ -64,28 +98,28 @@ export async function triggerHaptic(event: HapticEvent) {
 
   if (event === 'poiAdded') {
     if (strength === 'light') {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await safeImpactAsync(Haptics.ImpactFeedbackStyle.Light);
       return;
     }
 
     if (strength === 'medium') {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await safeImpactAsync(Haptics.ImpactFeedbackStyle.Medium);
       return;
     }
 
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await safeNotificationAsync(Haptics.NotificationFeedbackType.Success);
     return;
   }
 
   if (strength === 'light') {
-    await Haptics.selectionAsync();
+    await safeSelectionAsync();
     return;
   }
 
   if (strength === 'medium') {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await safeImpactAsync(Haptics.ImpactFeedbackStyle.Light);
     return;
   }
 
-  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  await safeImpactAsync(Haptics.ImpactFeedbackStyle.Medium);
 }

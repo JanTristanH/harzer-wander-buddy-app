@@ -20,10 +20,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import MapView, { Marker, Polyline, type MapViewRef, type Region } from '@/components/maps/map-primitives';
 import { SkeletonBlock } from '@/components/skeleton';
 import {
   HttpStatusError,
@@ -396,8 +396,33 @@ function markerBadgeZIndex(kind: TourMapMarkerKind, isSelected: boolean) {
   return isSelected ? MARKER_Z_INDEX_SELECTED_BADGE : MARKER_Z_INDEX_BADGE;
 }
 
-function hasCoordinate(value?: { latitude?: number; longitude?: number }): value is Coordinate {
-  return typeof value?.latitude === 'number' && typeof value?.longitude === 'number';
+function toFiniteCoordinateNumber(value?: number | string) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().replace(',', '.');
+    if (!normalized) {
+      return null;
+    }
+
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function extractCoordinate(value?: { latitude?: number | string; longitude?: number | string }): Coordinate | null {
+  const latitude = toFiniteCoordinateNumber(value?.latitude);
+  const longitude = toFiniteCoordinateNumber(value?.longitude);
+
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return { latitude, longitude };
 }
 
 function cleanText(value?: string | null) {
@@ -749,7 +774,7 @@ export default function TourDetailScreen() {
   const [tracksOverlayViewChanges, setTracksOverlayViewChanges] = useState(true);
   const [showPoiAddedFeedback, setShowPoiAddedFeedback] = useState(false);
 
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapViewRef | null>(null);
   const hasAppliedAutoStartEditModeRef = useRef(false);
   const regionRef = useRef<Region>(HARZ_REGION);
   const lastMarkerPressAtRef = useRef(0);
@@ -935,7 +960,8 @@ export default function TourDetailScreen() {
     const itemsById = new Map<string, TourMapItem>();
 
     for (const stamp of mapData?.stamps ?? []) {
-      if (!hasCoordinate(stamp)) {
+      const coordinate = extractCoordinate(stamp);
+      if (!coordinate) {
         continue;
       }
 
@@ -947,15 +973,16 @@ export default function TourDetailScreen() {
         markerLabel,
         stampNumber: extractStampToken(markerLabel) || undefined,
         kind: stamp.kind,
-        latitude: stamp.latitude,
-        longitude: stamp.longitude,
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
         description: cleanText(stamp.description),
         imageUrl: cleanText(stamp.heroImageUrl || stamp.image),
       });
     }
 
     for (const parkingSpot of mapData?.parkingSpots ?? []) {
-      if (!hasCoordinate(parkingSpot)) {
+      const coordinate = extractCoordinate(parkingSpot);
+      if (!coordinate) {
         continue;
       }
 
@@ -965,8 +992,8 @@ export default function TourDetailScreen() {
         typeLabel: 'Parkplatz',
         markerLabel: 'P',
         kind: 'parking',
-        latitude: parkingSpot.latitude,
-        longitude: parkingSpot.longitude,
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
         description: cleanText(parkingSpot.description),
         imageUrl: cleanText(parkingSpot.image),
       });
