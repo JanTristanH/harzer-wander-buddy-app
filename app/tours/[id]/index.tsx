@@ -68,6 +68,8 @@ const MAP_EDGE_PADDING = {
 
 const MIN_ZOOM_DELTA = 0.008;
 const MAX_ZOOM_DELTA = 1.2;
+const CAMERA_MIN_ZOOM = 2;
+const CAMERA_MAX_ZOOM = 19;
 const FOCUS_TARGET_DELTA = 0.08;
 const SEARCH_RESULT_LIMIT = 5;
 const REMOTE_SEARCH_DEBOUNCE_MS = 350;
@@ -782,6 +784,7 @@ export default function TourDetailScreen() {
   const queuedPoiIdsRef = useRef<string[] | null>(null);
   const latestDraftPoiIdsRef = useRef<string[]>([]);
   const poiAutosaveDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchBlurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAutoSaveRunningRef = useRef(false);
   const wasEditModeRef = useRef(false);
   const renameDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -858,6 +861,10 @@ export default function TourDetailScreen() {
       clearTimeout(poiAddedFeedbackTimeoutRef.current);
       poiAddedFeedbackTimeoutRef.current = null;
     }
+    if (searchBlurTimeoutRef.current) {
+      clearTimeout(searchBlurTimeoutRef.current);
+      searchBlurTimeoutRef.current = null;
+    }
     poiAddedFeedbackProgress.stopAnimation();
     poiAddedFeedbackProgress.setValue(1);
     tourMetricsGlowProgress.stopAnimation();
@@ -871,6 +878,10 @@ export default function TourDetailScreen() {
       if (poiAddedFeedbackTimeoutRef.current) {
         clearTimeout(poiAddedFeedbackTimeoutRef.current);
         poiAddedFeedbackTimeoutRef.current = null;
+      }
+      if (searchBlurTimeoutRef.current) {
+        clearTimeout(searchBlurTimeoutRef.current);
+        searchBlurTimeoutRef.current = null;
       }
       poiAddedFeedbackProgress.stopAnimation();
       tourMetricsGlowProgress.stopAnimation();
@@ -1562,22 +1573,47 @@ export default function TourDetailScreen() {
   }, [allMapItems, isEditMode, isMapReady, routeCoordinates]);
 
   const handleZoomBy = useCallback((factor: number) => {
-    if (!mapRef.current) {
+    const map = mapRef.current;
+    if (!map) {
       return;
     }
 
-    const nextRegion: Region = {
-      ...regionRef.current,
-      latitudeDelta: clampDelta(regionRef.current.latitudeDelta * factor),
-      longitudeDelta: clampDelta(regionRef.current.longitudeDelta * factor),
-    };
+    void (async () => {
+      try {
+        const camera = await map.getCamera();
+        if (typeof camera.zoom === 'number' && Number.isFinite(camera.zoom)) {
+          const zoomDelta = -Math.log2(Math.max(0.000001, factor));
+          const nextZoom = Math.max(CAMERA_MIN_ZOOM, Math.min(CAMERA_MAX_ZOOM, camera.zoom + zoomDelta));
+          map.animateCamera(
+            {
+              center: camera.center,
+              zoom: nextZoom,
+            },
+            { duration: 180 }
+          );
+          return;
+        }
+      } catch {
+        // Fall back to region animation when camera zoom is unavailable.
+      }
 
-    regionRef.current = nextRegion;
-    setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
-    mapRef.current.animateToRegion(nextRegion, 180);
+      const nextRegion: Region = {
+        ...regionRef.current,
+        latitudeDelta: clampDelta(regionRef.current.latitudeDelta * factor),
+        longitudeDelta: clampDelta(regionRef.current.longitudeDelta * factor),
+      };
+
+      regionRef.current = nextRegion;
+      setMapCenter({ latitude: nextRegion.latitude, longitude: nextRegion.longitude });
+      map.animateToRegion(nextRegion, 180);
+    })();
   }, []);
 
   const focusMapItemOnMap = useCallback((item: TourMapItem, options?: { updateSearchQuery?: boolean }) => {
+    if (searchBlurTimeoutRef.current) {
+      clearTimeout(searchBlurTimeoutRef.current);
+      searchBlurTimeoutRef.current = null;
+    }
     lastMarkerPressAtRef.current = Date.now();
 
     const nextRegion: Region = {
@@ -1599,6 +1635,10 @@ export default function TourDetailScreen() {
   }, []);
 
   const focusExternalPlaceOnMap = useCallback((place: ExternalPlaceSearchCandidate) => {
+    if (searchBlurTimeoutRef.current) {
+      clearTimeout(searchBlurTimeoutRef.current);
+      searchBlurTimeoutRef.current = null;
+    }
     lastMarkerPressAtRef.current = Date.now();
 
     const nextRegion: Region = {
@@ -2388,9 +2428,25 @@ export default function TourDetailScreen() {
           <View style={styles.mapSearchWrap}>
             <Feather color="#6d7d6e" name="search" size={14} />
             <TextInput
-              onBlur={() => setIsSearchFocused(false)}
+              onBlur={() => {
+                if (searchBlurTimeoutRef.current) {
+                  clearTimeout(searchBlurTimeoutRef.current);
+                }
+
+                searchBlurTimeoutRef.current = setTimeout(() => {
+                  setIsSearchFocused(false);
+                  searchBlurTimeoutRef.current = null;
+                }, 140);
+              }}
               onChangeText={setPoiSearchQuery}
-              onFocus={() => setIsSearchFocused(true)}
+              onFocus={() => {
+                if (searchBlurTimeoutRef.current) {
+                  clearTimeout(searchBlurTimeoutRef.current);
+                  searchBlurTimeoutRef.current = null;
+                }
+
+                setIsSearchFocused(true);
+              }}
               placeholder="Punkte auf der Karte suchen"
               placeholderTextColor="#7b8776"
               style={styles.mapSearchInput}

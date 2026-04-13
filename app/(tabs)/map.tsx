@@ -117,8 +117,10 @@ const HARZ_REGION: Region = {
 const CLUSTER_MIN_LONGITUDE_DELTA = 0.16;
 const CLUSTER_EXPANDED_LONGITUDE_DELTA = 0.08;
 const PARKING_HIDE_LONGITUDE_DELTA = 0.18;
-const MIN_ZOOM_DELTA = 0.0075;
+const MIN_ZOOM_DELTA = 0.0018;
 const MAX_ZOOM_DELTA = 1.2;
+const CAMERA_MIN_ZOOM = 2;
+const CAMERA_MAX_ZOOM = 19;
 const MAP_EDGE_PADDING = { top: 140, right: 64, bottom: 260, left: 64 };
 const ZOOM_CONTROLS_GAP = 16;
 const SEARCH_RESULT_LIMIT = 6;
@@ -519,6 +521,7 @@ export default function MapScreen() {
   const lastMarkerPressAtRef = useRef(0);
   const handledRequestedStampIdRef = useRef<string | null>(null);
   const handledRequestedParkingIdRef = useRef<string | null>(null);
+  const searchBlurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data, error, isFetching, isPending, isPlaceholderData } = useMapDataQuery();
   const [region, setRegion] = useState<Region>(initialRegion);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -674,6 +677,15 @@ export default function MapScreen() {
     () => visibleItems.find((item) => item.id === selectedItemId) ?? null,
     [selectedItemId, visibleItems]
   );
+
+  useEffect(() => {
+    return () => {
+      if (searchBlurTimeoutRef.current) {
+        clearTimeout(searchBlurTimeoutRef.current);
+        searchBlurTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1032,9 +1044,34 @@ export default function MapScreen() {
 
   const zoomBy = useCallback(
     (factor: number) => {
-      const nextRegion = zoomRegion(regionRef.current, factor);
-      updateMapRegion(nextRegion);
-      mapRef.current?.animateToRegion(nextRegion, 180);
+      const map = mapRef.current;
+      if (!map) {
+        return;
+      }
+
+      void (async () => {
+        try {
+          const camera = await map.getCamera();
+          if (typeof camera.zoom === 'number' && Number.isFinite(camera.zoom)) {
+            const zoomDelta = -Math.log2(Math.max(0.000001, factor));
+            const nextZoom = Math.max(CAMERA_MIN_ZOOM, Math.min(CAMERA_MAX_ZOOM, camera.zoom + zoomDelta));
+            map.animateCamera(
+              {
+                center: camera.center,
+                zoom: nextZoom,
+              },
+              { duration: 180 }
+            );
+            return;
+          }
+        } catch {
+          // Fall back to region animation when camera zoom is unavailable.
+        }
+
+        const nextRegion = zoomRegion(regionRef.current, factor);
+        updateMapRegion(nextRegion);
+        map.animateToRegion(nextRegion, 180);
+      })();
     },
     [updateMapRegion]
   );
@@ -1439,6 +1476,10 @@ export default function MapScreen() {
   }, [accessToken, canPerformWrites, claims?.sub, data?.stamps, isStamping, logout, queryClient, selectedItem]);
 
   const focusItemOnMap = useCallback((item: MarkerItem) => {
+    if (searchBlurTimeoutRef.current) {
+      clearTimeout(searchBlurTimeoutRef.current);
+      searchBlurTimeoutRef.current = null;
+    }
     lastMarkerPressAtRef.current = Date.now();
     setSelectedExternalPlace(null);
     if (selectedItemId !== item.id) {
@@ -1468,6 +1509,10 @@ export default function MapScreen() {
   }, [selectedItemId, suppressSelectionSheetCompactionForSelectionMove, updateMapRegion]);
 
   const focusExternalPlaceOnMap = useCallback((place: PlaceSearchResult) => {
+    if (searchBlurTimeoutRef.current) {
+      clearTimeout(searchBlurTimeoutRef.current);
+      searchBlurTimeoutRef.current = null;
+    }
     lastMarkerPressAtRef.current = Date.now();
     setSelectedItemId(null);
     setSelectedExternalPlace(place);
@@ -1836,15 +1881,31 @@ export default function MapScreen() {
         ) : null}
       </MapView>
 
-      <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+      <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, styles.overlayUiLayer]}>
         <View style={[styles.topControls, { top: insets.top + 12 }]}>
           <View style={styles.searchBarWrap}>
             <View style={styles.searchBar}>
               <TextInput
                 ref={searchInputRef}
-                onBlur={() => setIsSearchFocused(false)}
+                onBlur={() => {
+                  if (searchBlurTimeoutRef.current) {
+                    clearTimeout(searchBlurTimeoutRef.current);
+                  }
+
+                  searchBlurTimeoutRef.current = setTimeout(() => {
+                    setIsSearchFocused(false);
+                    searchBlurTimeoutRef.current = null;
+                  }, 140);
+                }}
                 onChangeText={setSearchQuery}
-                onFocus={() => setIsSearchFocused(true)}
+                onFocus={() => {
+                  if (searchBlurTimeoutRef.current) {
+                    clearTimeout(searchBlurTimeoutRef.current);
+                    searchBlurTimeoutRef.current = null;
+                  }
+
+                  setIsSearchFocused(true);
+                }}
                 placeholder="Suche Stempel oder Parkplatz"
                 placeholderTextColor="#7b8776"
                 style={styles.searchInput}
@@ -1928,10 +1989,10 @@ export default function MapScreen() {
             ]}>
             <Feather color={userLocation ? '#2e3a2e' : '#9ba59a'} name="crosshair" size={19} />
           </Pressable>
-          <Pressable onPress={() => zoomBy(0.6)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
+          <Pressable onPress={() => zoomBy(0.8)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
             <Text style={styles.zoomButtonLabel}>+</Text>
           </Pressable>
-          <Pressable onPress={() => zoomBy(1.6)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
+          <Pressable onPress={() => zoomBy(1.25)} style={({ pressed }) => [styles.zoomButton, pressed && styles.pressed]}>
             <Text style={styles.zoomButtonLabel}>−</Text>
           </Pressable>
         </View>
@@ -2078,6 +2139,10 @@ const styles = StyleSheet.create({
     color: '#2e6b4b',
     fontSize: 13,
     fontWeight: '600',
+  },
+  overlayUiLayer: {
+    zIndex: 1000,
+    elevation: 1000,
   },
   errorBanner: {
     position: 'absolute',

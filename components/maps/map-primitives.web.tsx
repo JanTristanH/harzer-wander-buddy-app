@@ -1,10 +1,10 @@
 import type { Map as LeafletMap } from 'leaflet';
 import L from 'leaflet';
-import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
-  MapContainer,
   Marker as LeafletMarker,
   Polyline as LeafletPolyline,
+  MapContainer,
   TileLayer,
   useMap,
   useMapEvents,
@@ -98,6 +98,8 @@ const TILE_ATTRIBUTION = '&copy; OpenStreetMap contributors';
 const FALLBACK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 const FALLBACK_TILE_ATTRIBUTION =
   '&copy; OpenStreetMap contributors &copy; CARTO';
+const WEB_MARKER_SIZE = 48;
+const WEB_MARKER_SIZE_COMPACT = 24;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 19;
 const LEAFLET_STYLE_TAG_ID = 'hwb-leaflet-runtime-css';
@@ -192,26 +194,110 @@ function coordinateToTuple(coordinate: LatLng): [number, number] {
   return [coordinate.latitude, coordinate.longitude];
 }
 
-function createPinSvg(color: string, size: number) {
+function escapeXmlText(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function normalizeMarkerLabel(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, 4);
+}
+
+function extractMarkerLabel(children: React.ReactNode): string | null {
+  if (children == null || typeof children === 'boolean') {
+    return null;
+  }
+
+  if (typeof children === 'string' || typeof children === 'number') {
+    const text = String(children).trim();
+    return text || null;
+  }
+
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const nestedText = extractMarkerLabel(child);
+      if (nestedText) {
+        return nestedText;
+      }
+    }
+    return null;
+  }
+
+  if (React.isValidElement(children)) {
+    return extractMarkerLabel((children.props as { children?: React.ReactNode }).children);
+  }
+
+  return null;
+}
+
+function createPinSvg(color: string, size: number, label?: string | null) {
   if (size <= 18) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="${color}" stroke="white" stroke-width="2"/></svg>`;
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${Math.round(size * 1.35)}" viewBox="0 0 28 38"><path fill="${color}" d="M14 1C6.82 1 1 6.82 1 14c0 9.94 12.01 22.45 12.52 22.98a.7.7 0 0 0 .96 0C14.99 36.45 27 23.94 27 14 27 6.82 21.18 1 14 1Zm0 18.25A5.25 5.25 0 1 1 14 8.75a5.25 5.25 0 0 1 0 10.5Z"/></svg>`;
+  const escapedLabel = normalizeMarkerLabel(label ?? null);
+  const renderedLabel = escapedLabel ? escapeXmlText(escapedLabel) : null;
+  const labelFontSize = renderedLabel && renderedLabel.length >= 3 ? 8.4 : 9.6;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${Math.round(size * 1.35)}" viewBox="0 0 28 38"><path fill="${color}" d="M14 1C6.82 1 1 6.82 1 14c0 9.94 12.01 22.45 12.52 22.98a.7.7 0 0 0 .96 0C14.99 36.45 27 23.94 27 14 27 6.82 21.18 1 14 1Z"/>${
+    renderedLabel
+      ? `<circle cx="14" cy="14" r="7.1" fill="white"/><text x="14" y="14.6" fill="#1f2f1f" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="${labelFontSize}" font-weight="700" text-anchor="middle" dominant-baseline="middle">${renderedLabel}</text>`
+      : '<circle cx="14" cy="14" r="5.25" fill="white"/>'
+  }</svg>`;
 }
 
-function resolveImageUri(source: unknown): string | null {
+type ResolvedImageSource = {
+  uri: string;
+  width?: number;
+  height?: number;
+};
+
+function resolveImageSource(source: unknown): ResolvedImageSource | null {
   if (!source) {
     return null;
   }
 
+  if (typeof source === 'string') {
+    return { uri: source };
+  }
+
   if (typeof source === 'number') {
-    return Image.resolveAssetSource(source)?.uri ?? null;
+    const resolved = Image.resolveAssetSource(source);
+    if (!resolved?.uri) {
+      return null;
+    }
+
+    return {
+      height: typeof resolved.height === 'number' ? resolved.height : undefined,
+      uri: resolved.uri,
+      width: typeof resolved.width === 'number' ? resolved.width : undefined,
+    };
   }
 
   if (typeof source === 'object' && source !== null && 'uri' in source) {
-    const candidate = (source as { uri?: unknown }).uri;
-    return typeof candidate === 'string' ? candidate : null;
+    const candidate = source as { uri?: unknown; width?: unknown; height?: unknown };
+    if (typeof candidate.uri !== 'string') {
+      return null;
+    }
+
+    return {
+      height: typeof candidate.height === 'number' ? candidate.height : undefined,
+      uri: candidate.uri,
+      width: typeof candidate.width === 'number' ? candidate.width : undefined,
+    };
   }
 
   return null;
@@ -221,17 +307,30 @@ function createIcon(options: {
   anchor?: { x: number; y: number };
   color: string;
   imageUri?: string | null;
+  imageSize?: { height?: number; width?: number } | null;
+  label?: string | null;
   size: number;
 }) {
-  const { anchor, color, imageUri, size } = options;
+  const { anchor, color, imageSize, imageUri, label, size } = options;
   const width = size;
-  const height = size <= 18 ? size : Math.round(size * 1.35);
+  const inferredImageRatio =
+    imageSize?.width && imageSize?.height && imageSize.width > 0 && imageSize.height > 0
+      ? imageSize.height / imageSize.width
+      : null;
+  const height = inferredImageRatio
+    ? Math.round(width * inferredImageRatio)
+    : size <= 18
+      ? size
+      : Math.round(size * 1.35);
   const iconAnchor: [number, number] = [
     Math.round((anchor?.x ?? 0.5) * width),
     Math.round((anchor?.y ?? 1) * height),
   ];
 
-  const cacheKey = `${imageUri ?? 'svg'}:${color}:${size}:${iconAnchor[0]}:${iconAnchor[1]}`;
+  const normalizedLabel = normalizeMarkerLabel(label ?? null);
+  const cacheKey = `${imageUri ?? 'svg'}:${color}:${size}:${iconAnchor[0]}:${iconAnchor[1]}:${normalizedLabel ?? ''}:${
+    imageSize?.width ?? ''
+  }x${imageSize?.height ?? ''}`;
   const existing = iconCache.get(cacheKey);
   if (existing) {
     return existing;
@@ -246,7 +345,7 @@ function createIcon(options: {
     : L.icon({
         iconAnchor,
         iconSize: [width, height],
-        iconUrl: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(createPinSvg(color, size))}`,
+        iconUrl: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(createPinSvg(color, size, normalizedLabel))}`,
       });
 
   iconCache.set(cacheKey, icon);
@@ -290,10 +389,21 @@ function MapEventBridge(props: {
 function MapInstanceBridge(props: { onMapReady?: (map: LeafletMap) => void }) {
   const { onMapReady } = props;
   const map = useMap();
+  const hasReportedReadyRef = useRef(false);
+  const onMapReadyRef = useRef(onMapReady);
 
   useEffect(() => {
-    onMapReady?.(map);
-  }, [map, onMapReady]);
+    onMapReadyRef.current = onMapReady;
+  }, [onMapReady]);
+
+  useEffect(() => {
+    if (hasReportedReadyRef.current) {
+      return;
+    }
+
+    hasReportedReadyRef.current = true;
+    onMapReadyRef.current?.(map);
+  }, [map]);
 
   return null;
 }
@@ -459,6 +569,7 @@ const MapView = forwardRef<MapViewRef, MapViewProps>(function MapView(props, ref
         center={centerTuple}
         style={MAP_CONTAINER_STYLE}
         zoom={initialZoom}
+        zoomSnap={0}
         zoomControl={false}>
         <MapInstanceBridge
           onMapReady={(nextMap) => {
@@ -521,22 +632,24 @@ function Marker(props: InternalMarkerProps) {
     zIndex,
   } = props;
 
-  const imageUri = resolveImageUri(image);
+  const imageSource = resolveImageSource(image);
+  const imageUri = imageSource?.uri ?? null;
   const isDecorativeOverlayMarker = Boolean(children) && !imageUri && !pinColor && !onPress;
   if (isDecorativeOverlayMarker) {
     return null;
   }
 
-  const shouldUseCompactMarker = Boolean(children) && !imageUri;
+  const markerLabel = imageUri ? null : extractMarkerLabel(children);
+  const shouldUseCompactMarker = Boolean(children) && !imageUri && !markerLabel;
   const derivedColor =
     pinColor ?? (typeof zIndex === 'number' && zIndex <= 14 ? '#2f7dd7' : '#2e6b4b');
   const icon = createIcon({
     anchor,
     color: derivedColor,
-    // Raster marker assets from react-native-maps are not reliably resolvable on web.
-    // Keep markers visible by using generated SVG pins instead.
-    imageUri: null,
-    size: shouldUseCompactMarker ? 14 : 30,
+    imageSize: imageSource,
+    imageUri,
+    label: markerLabel,
+    size: shouldUseCompactMarker ? WEB_MARKER_SIZE_COMPACT : WEB_MARKER_SIZE,
   });
 
   return (

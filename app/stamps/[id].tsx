@@ -86,6 +86,7 @@ type CarouselImageItem = {
 const CAROUSEL_DOUBLE_TAP_DELAY_MS = 280;
 const CAROUSEL_ZOOM_SCALE = 2;
 const CAROUSEL_PAN_THRESHOLD = 2;
+const WEB_CAROUSEL_MIN_HEIGHT = 320;
 const WEBSITE_BASE_URL = 'https://www.harzer-wander-buddy.de';
 const STAMP_NOTE_MAX_LENGTH = 500;
 const emptyNearbyStampsIllustration = require('@/assets/images/buddy/telescope.png');
@@ -315,6 +316,7 @@ function StampDetailContent() {
   const [isImageCarouselVisible, setIsImageCarouselVisible] = useState(false);
   const [activeCarouselIndex, setActiveCarouselIndex] = useState(0);
   const [zoomedImageId, setZoomedImageId] = useState<string | null>(null);
+  const [webCarouselFailedImageIds, setWebCarouselFailedImageIds] = useState<Record<string, true>>({});
   const [carouselImageViewport, setCarouselImageViewport] = useState({ width: windowWidth, height: windowHeight });
   const [locationState, setLocationState] = useState<'idle' | 'loading' | 'granted' | 'denied'>('idle');
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -1154,6 +1156,7 @@ function StampDetailContent() {
 
     const nextIndex = Math.min(Math.max(0, startIndex), carouselImages.length - 1);
     setActiveCarouselIndex(nextIndex);
+    setWebCarouselFailedImageIds({});
     setZoomedImageId(null);
     carouselImagePanOffsetRef.current = { x: 0, y: 0 };
     carouselImagePan.setValue({ x: 0, y: 0 });
@@ -1164,11 +1167,33 @@ function StampDetailContent() {
   const closeImageCarousel = useCallback(() => {
     setIsImageCarouselVisible(false);
     setActiveCarouselIndex(0);
+    setWebCarouselFailedImageIds({});
     setZoomedImageId(null);
     carouselImagePanOffsetRef.current = { x: 0, y: 0 };
     carouselImagePan.setValue({ x: 0, y: 0 });
     lastCarouselTapRef.current = { timestamp: 0, imageId: null };
   }, [carouselImagePan]);
+
+  const goToPreviousCarouselImage = useCallback(() => {
+    setActiveCarouselIndex((current) => Math.max(0, current - 1));
+  }, []);
+
+  const goToNextCarouselImage = useCallback(() => {
+    setActiveCarouselIndex((current) => Math.min(Math.max(0, carouselImages.length - 1), current + 1));
+  }, [carouselImages.length]);
+
+  const openCarouselImageInNewTab = useCallback(async () => {
+    const activeItem = carouselImages[activeCarouselIndex];
+    if (!activeItem?.uri) {
+      return;
+    }
+
+    try {
+      await Linking.openURL(activeItem.uri);
+    } catch {
+      Alert.alert('Bild konnte nicht geöffnet werden', 'Bitte versuche es später erneut.');
+    }
+  }, [activeCarouselIndex, carouselImages]);
 
   const clampCarouselPan = useCallback((x: number, y: number) => {
     const viewportWidth = carouselImageViewport.width || windowWidth;
@@ -1340,6 +1365,34 @@ function StampDetailContent() {
     [activeCarouselIndex, getCarouselScrollIndex, resetCarouselPan]
   );
 
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isImageCarouselVisible) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        goToPreviousCarouselImage();
+        return;
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        goToNextCarouselImage();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeImageCarousel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeImageCarousel, goToNextCarouselImage, goToPreviousCarouselImage, isImageCarouselVisible]);
+
   const showLeaveDialog = useCallback((onDiscard: () => void, onSave: () => void) => {
     Alert.alert(
       'Aenderungen speichern?',
@@ -1481,7 +1534,10 @@ function StampDetailContent() {
   const { stamp } = detail;
   const visited = !!stamp.hasVisited;
   const showDeferredSkeletons = isFetching && isPlaceholderData;
-  const activeCarouselItem = carouselImages[activeCarouselIndex];
+  const activeCarouselItem = carouselImages[activeCarouselIndex] ?? null;
+  const isWebCarousel = Platform.OS === 'web';
+  const isActiveCarouselImageFailed =
+    activeCarouselItem ? Boolean(webCarouselFailedImageIds[activeCarouselItem.id]) : false;
   const showNearbyCarouselPill =
     isImageCarouselVisible && activeCarouselItem?.kind === 'nearby';
   const bottomInset = Math.max(insets.bottom, 0);
@@ -1932,63 +1988,79 @@ function StampDetailContent() {
         statusBarTranslucent
         visible={isImageCarouselVisible}>
         <View style={styles.carouselScreen}>
-          <FlatList
-            data={carouselImages}
-            getItemLayout={(_, index) => ({
-              index,
-              length: windowWidth,
-              offset: windowWidth * index,
-            })}
-            horizontal
-            initialNumToRender={1}
-            keyExtractor={(item) => item.id}
-            onScroll={handleCarouselScroll}
-            onMomentumScrollEnd={handleCarouselScrollEnd}
-            pagingEnabled
-            ref={carouselListRef}
-            scrollEventThrottle={16}
-            scrollEnabled={zoomedImageId === null}
-            renderItem={({ item }) => (
-              <View style={[styles.carouselSlide, { width: windowWidth }]}>
-                <Pressable
-                  onLayout={handleCarouselImageLayout}
-                  onPress={(event) => handleCarouselImagePress(item.id, event)}
-                  style={styles.carouselImagePressable}>
-                  <Animated.View
-                    style={[
-                      styles.carouselImageTransform,
-                      zoomedImageId === item.id
-                        ? {
-                            transform: [
-                              { translateX: carouselImagePan.x },
-                              { translateY: carouselImagePan.y },
-                            ],
+          {isWebCarousel ? (
+            <View style={styles.webCarouselContent}>
+              <View style={styles.webCarouselStage}>
+                {activeCarouselItem ? (
+                  isActiveCarouselImageFailed ? (
+                    <View style={styles.webCarouselFallback}>
+                      <Text style={styles.webCarouselFallbackTitle}>Bild konnte nicht geladen werden</Text>
+                      <Pressable
+                        onPress={() => void openCarouselImageInNewTab()}
+                        style={({ pressed }) => [
+                          styles.webCarouselFallbackButton,
+                          pressed && styles.topButtonPressed,
+                        ]}>
+                        <Feather color="#b4d6ff" name="external-link" size={14} />
+                        <Text style={styles.webCarouselFallbackButtonLabel}>Originalbild öffnen</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Image
+                      cachePolicy="disk"
+                      contentFit="contain"
+                      onError={() => {
+                        setWebCarouselFailedImageIds((current) => {
+                          if (current[activeCarouselItem.id]) {
+                            return current;
                           }
-                        : undefined,
-                    ]}
-                    {...(zoomedImageId === item.id ? carouselPanResponder.panHandlers : {})}>
-                    <Animated.View
-                      style={[
-                        styles.carouselImageScaleLayer,
-                        zoomedImageId === item.id
-                          ? { transform: [{ scale: CAROUSEL_ZOOM_SCALE }] }
-                          : undefined,
-                      ]}>
-                      <Image
-                        cachePolicy="disk"
-                        contentFit="contain"
-                        source={buildAuthenticatedImageSource(item.uri, accessToken)}
-                        style={styles.carouselImage}
-                      />
-                    </Animated.View>
-                  </Animated.View>
+
+                          return {
+                            ...current,
+                            [activeCarouselItem.id]: true,
+                          };
+                        });
+                      }}
+                      source={buildAuthenticatedImageSource(activeCarouselItem.uri, accessToken)}
+                      style={styles.webCarouselImage}
+                    />
+                  )
+                ) : null}
+              </View>
+
+              <View style={styles.webCarouselNavRow}>
+                <Pressable
+                  disabled={activeCarouselIndex <= 0}
+                  onPress={goToPreviousCarouselImage}
+                  style={({ pressed }) => [
+                    styles.webCarouselNavButton,
+                    activeCarouselIndex <= 0 && styles.webCarouselNavButtonDisabled,
+                    pressed && activeCarouselIndex > 0 && styles.topButtonPressed,
+                  ]}>
+                  <Feather color="#f5f3ee" name="chevron-left" size={18} />
+                  <Text style={styles.webCarouselNavButtonLabel}>Zurück</Text>
                 </Pressable>
+
+                <Pressable
+                  disabled={activeCarouselIndex >= carouselImages.length - 1}
+                  onPress={goToNextCarouselImage}
+                  style={({ pressed }) => [
+                    styles.webCarouselNavButton,
+                    activeCarouselIndex >= carouselImages.length - 1 && styles.webCarouselNavButtonDisabled,
+                    pressed && activeCarouselIndex < carouselImages.length - 1 && styles.topButtonPressed,
+                  ]}>
+                  <Text style={styles.webCarouselNavButtonLabel}>Weiter</Text>
+                  <Feather color="#f5f3ee" name="chevron-right" size={18} />
+                </Pressable>
+              </View>
+
+              {activeCarouselItem ? (
                 <View style={styles.carouselCaptionWrap}>
-                  <Text style={styles.carouselCaptionTitle}>{item.title}</Text>
-                  {item.subtitle ? (
-                    <Text style={styles.carouselCaptionSubtitle}>{item.subtitle}</Text>
+                  <Text style={styles.carouselCaptionTitle}>{activeCarouselItem.title}</Text>
+                  {activeCarouselItem.subtitle ? (
+                    <Text style={styles.carouselCaptionSubtitle}>{activeCarouselItem.subtitle}</Text>
                   ) : null}
-                  {item.imageCaption ? (
+                  {activeCarouselItem.imageCaption ? (
                     <Markdown
                       style={{
                         body: styles.carouselCaptionBody,
@@ -1997,14 +2069,87 @@ function StampDetailContent() {
                         strong: styles.carouselCaptionStrong,
                         link: styles.carouselCaptionLink,
                       }}>
-                      {item.imageCaption}
+                      {activeCarouselItem.imageCaption}
                     </Markdown>
                   ) : null}
                 </View>
-              </View>
-            )}
-            showsHorizontalScrollIndicator={false}
-          />
+              ) : null}
+            </View>
+          ) : (
+            <FlatList
+              data={carouselImages}
+              getItemLayout={(_, index) => ({
+                index,
+                length: windowWidth,
+                offset: windowWidth * index,
+              })}
+              horizontal
+              initialNumToRender={1}
+              keyExtractor={(item) => item.id}
+              onScroll={handleCarouselScroll}
+              onMomentumScrollEnd={handleCarouselScrollEnd}
+              pagingEnabled
+              ref={carouselListRef}
+              scrollEventThrottle={16}
+              scrollEnabled={zoomedImageId === null}
+              renderItem={({ item }) => (
+                <View style={[styles.carouselSlide, { width: windowWidth }]}>
+                  <Pressable
+                    onLayout={handleCarouselImageLayout}
+                    onPress={(event) => handleCarouselImagePress(item.id, event)}
+                    style={styles.carouselImagePressable}>
+                    <Animated.View
+                      style={[
+                        styles.carouselImageTransform,
+                        zoomedImageId === item.id
+                          ? {
+                              transform: [
+                                { translateX: carouselImagePan.x },
+                                { translateY: carouselImagePan.y },
+                              ],
+                            }
+                          : undefined,
+                      ]}
+                      {...(zoomedImageId === item.id ? carouselPanResponder.panHandlers : {})}>
+                      <Animated.View
+                        style={[
+                          styles.carouselImageScaleLayer,
+                          zoomedImageId === item.id
+                            ? { transform: [{ scale: CAROUSEL_ZOOM_SCALE }] }
+                            : undefined,
+                        ]}>
+                        <Image
+                          cachePolicy="disk"
+                          contentFit="contain"
+                          source={buildAuthenticatedImageSource(item.uri, accessToken)}
+                          style={styles.carouselImage}
+                        />
+                      </Animated.View>
+                    </Animated.View>
+                  </Pressable>
+                  <View style={styles.carouselCaptionWrap}>
+                    <Text style={styles.carouselCaptionTitle}>{item.title}</Text>
+                    {item.subtitle ? (
+                      <Text style={styles.carouselCaptionSubtitle}>{item.subtitle}</Text>
+                    ) : null}
+                    {item.imageCaption ? (
+                      <Markdown
+                        style={{
+                          body: styles.carouselCaptionBody,
+                          paragraph: styles.carouselCaptionParagraph,
+                          text: styles.carouselCaptionBody,
+                          strong: styles.carouselCaptionStrong,
+                          link: styles.carouselCaptionLink,
+                        }}>
+                        {item.imageCaption}
+                      </Markdown>
+                    ) : null}
+                  </View>
+                </View>
+              )}
+              showsHorizontalScrollIndicator={false}
+            />
+          )}
 
           <View style={[styles.carouselTopBar, { top: insets.top + 12 }]}>
             <Pressable
@@ -2504,6 +2649,86 @@ const styles = StyleSheet.create({
   carouselScreen: {
     flex: 1,
     backgroundColor: '#0f1310',
+  },
+  webCarouselContent: {
+    flex: 1,
+    paddingTop: 68,
+    paddingBottom: 30,
+  },
+  webCarouselStage: {
+    flex: 1,
+    minHeight: WEB_CAROUSEL_MIN_HEIGHT,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+  },
+  webCarouselImage: {
+    flex: 1,
+    width: '100%',
+    minHeight: WEB_CAROUSEL_MIN_HEIGHT,
+  },
+  webCarouselFallback: {
+    flex: 1,
+    minHeight: WEB_CAROUSEL_MIN_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(29, 38, 31, 0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 214, 255, 0.22)',
+    paddingHorizontal: 16,
+  },
+  webCarouselFallbackTitle: {
+    color: '#f5f3ee',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  webCarouselFallbackButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(180, 214, 255, 0.44)',
+    backgroundColor: 'rgba(38, 50, 42, 0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  webCarouselFallbackButtonLabel: {
+    color: '#b4d6ff',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  webCarouselNavRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+  },
+  webCarouselNavButton: {
+    minHeight: 38,
+    borderRadius: 10,
+    backgroundColor: 'rgba(29, 38, 31, 0.88)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    gap: 6,
+    minWidth: 110,
+  },
+  webCarouselNavButtonDisabled: {
+    opacity: 0.5,
+  },
+  webCarouselNavButtonLabel: {
+    color: '#f5f3ee',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '600',
   },
   carouselTopBar: {
     position: 'absolute',
