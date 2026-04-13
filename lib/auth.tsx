@@ -19,6 +19,7 @@ if (typeof WebBrowser.maybeCompleteAuthSession === 'function') {
 
 const TOKEN_STORAGE_KEY = 'hwb-auth-token-response';
 const ONBOARDING_STORAGE_KEY = 'hwb-auth-onboarding-complete';
+const WEB_AUTH_PENDING_KEY = 'hwb-auth-pending-web-request';
 const inMemoryStorage = new Map<string, string>();
 
 type AuthState = {
@@ -46,6 +47,12 @@ type ResolveValidTokenResponseResult = {
   sessionMode: SessionMode;
 };
 
+type PendingWebAuthState = {
+  codeVerifier: string;
+  redirectUri: string;
+  state: string;
+};
+
 type AuthContextValue = {
   accessToken: string | null;
   idToken: string | null;
@@ -63,6 +70,7 @@ type AuthContextValue = {
   configError: string | null;
   login: () => Promise<void>;
   signup: () => Promise<void>;
+  completeWebRedirectAuth: () => Promise<boolean>;
   getValidAccessToken: () => Promise<string | null>;
   completeOnboarding: () => Promise<void>;
   logout: () => Promise<void>;
@@ -149,6 +157,14 @@ function getWebStorageOrNull() {
   } catch {
     return null;
   }
+}
+
+function shouldUseWebRedirectAuth() {
+  if (Platform.OS !== 'web' || typeof globalThis.navigator?.userAgent !== 'string') {
+    return false;
+  }
+
+  return /android|iphone|ipad|ipod|mobile/i.test(globalThis.navigator.userAgent);
 }
 
 async function setStoredValue(key: string, value: string) {
@@ -347,6 +363,8 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const refreshPromiseRef = useRef<Promise<ResolveValidTokenResponseResult> | null>(null);
+  const discoveryRef = useRef<AuthSession.DiscoveryDocument | null>(null);
+  const discoveryPromiseRef = useRef<Promise<AuthSession.DiscoveryDocument | null> | null>(null);
 
   const missingConfig = getMissingConfig().filter((key) => key !== 'auth0LogoutReturnPath');
   const configError =
@@ -358,8 +376,35 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       return null;
     }
 
-    return AuthSession.fetchDiscoveryAsync(getIssuer());
+    if (discoveryRef.current) {
+      return discoveryRef.current;
+    }
+
+    if (!discoveryPromiseRef.current) {
+      discoveryPromiseRef.current = AuthSession.fetchDiscoveryAsync(getIssuer())
+        .then((discovery) => {
+          discoveryRef.current = discovery;
+          return discovery;
+        })
+        .finally(() => {
+          discoveryPromiseRef.current = null;
+        });
+    }
+
+    return discoveryPromiseRef.current;
   }, [configError]);
+
+  useEffect(() => {
+    if (configError) {
+      discoveryRef.current = null;
+      discoveryPromiseRef.current = null;
+      return;
+    }
+
+    void resolveDiscovery().catch((error) => {
+      console.warn('Failed to preload Auth0 discovery document.', error);
+    });
+  }, [configError, resolveDiscovery]);
 
   const preloadCurrentUserProfileForToken = useCallback(async (accessToken: string | null) => {
     if (!accessToken) {
@@ -657,6 +702,28 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       await request.makeAuthUrlAsync(discovery);
       console.log(`Auth0 ${mode} redirect URI:`, redirectUri);
 
+      if (shouldUseWebRedirectAuth()) {
+        if (!request.url || !request.codeVerifier || !request.state) {
+          setAuthError(`Auth0 ${mode} request could not be prepared.`);
+          return;
+        }
+
+        const pendingState: PendingWebAuthState = {
+          codeVerifier: request.codeVerifier,
+          redirectUri,
+          state: request.state,
+        };
+
+        await setStoredValue(WEB_AUTH_PENDING_KEY, JSON.stringify(pendingState));
+
+        if (typeof globalThis.location?.assign === 'function') {
+          globalThis.location.assign(request.url);
+          return;
+        }
+
+        throw new Error('This browser cannot perform redirect-based authentication.');
+      }
+
       const result = await request.promptAsync(discovery);
       console.log(`Auth0 ${mode} prompt result type:`, result.type);
 
@@ -698,6 +765,98 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
     }
   }, [auth0ClientId, configError, preloadCurrentUserProfileForToken, resolveDiscovery]);
 
+  const completeWebRedirectAuth = useCallback(async () => {
+    if (Platform.OS !== 'web' || !auth0ClientId) {
+      return false;
+    }
+
+    const pendingValue = await getStoredValue(WEB_AUTH_PENDING_KEY);
+    if (!pendingValue) {
+      return false;
+    }
+
+    const href = globalThis.location?.href;
+    if (!href) {
+      return false;
+    }
+
+    let pendingState: PendingWebAuthState;
+    try {
+      pendingState = JSON.parse(pendingValue) as PendingWebAuthState;
+    } catch (error) {
+      console.warn('Failed to parse pending web auth state. Clearing state.', error);
+      await deleteStoredValue(WEB_AUTH_PENDING_KEY);
+      return false;
+    }
+
+    const callbackUrl = new URL(href);
+    const code = callbackUrl.searchParams.get('code');
+    const state = callbackUrl.searchParams.get('state');
+    const authErrorCode = callbackUrl.searchParams.get('error');
+    const authErrorDescription = callbackUrl.searchParams.get('error_description');
+
+    if (authErrorCode) {
+      await deleteStoredValue(WEB_AUTH_PENDING_KEY);
+      const message = authErrorDescription
+        ? `${authErrorCode}: ${authErrorDescription}`
+        : authErrorCode;
+      setAuthError(message);
+      return false;
+    }
+
+    if (!code || !state) {
+      return false;
+    }
+
+    if (
+      !pendingState.codeVerifier ||
+      !pendingState.redirectUri ||
+      !pendingState.state ||
+      state !== pendingState.state
+    ) {
+      await deleteStoredValue(WEB_AUTH_PENDING_KEY);
+      setAuthError('Auth0 returned an invalid authentication state.');
+      return false;
+    }
+
+    setAuthError(null);
+    setIsLoading(true);
+
+    try {
+      const discovery = await resolveDiscovery();
+      if (!discovery) {
+        setAuthError('Could not load Auth0 discovery.');
+        return false;
+      }
+
+      const tokenResponse = await AuthSession.exchangeCodeAsync(
+        {
+          clientId: auth0ClientId,
+          code,
+          redirectUri: pendingState.redirectUri,
+          extraParams: {
+            code_verifier: pendingState.codeVerifier,
+          },
+        },
+        discovery
+      );
+
+      await saveTokenResponse(tokenResponse);
+      await deleteStoredValue(WEB_AUTH_PENDING_KEY);
+      setCurrentUserProfile(null);
+      setSessionMode('online');
+      setAuthState(toAuthState(tokenResponse));
+      await preloadCurrentUserProfileForToken(tokenResponse.accessToken);
+      return true;
+    } catch (error) {
+      console.error('Auth0 web redirect completion failed', error);
+      setAuthError(error instanceof Error ? error.message : 'Auth0 web redirect completion failed');
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [auth0ClientId, preloadCurrentUserProfileForToken, resolveDiscovery]);
+
   const login = useCallback(async () => {
     await authenticate('login');
   }, [authenticate]);
@@ -714,6 +873,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
   const logout = useCallback(async () => {
     setAuthError(null);
     await clearTokenResponse();
+    await deleteStoredValue(WEB_AUTH_PENDING_KEY);
     await clearPersistedQueryCache();
     queryClient.clear();
     setAuthState(null);
@@ -766,6 +926,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       completeOnboarding,
       login,
       signup,
+      completeWebRedirectAuth,
       getValidAccessToken,
       logout,
       resetApp,
@@ -782,6 +943,7 @@ export function AuthProvider({ children }: React.PropsWithChildren) {
       sessionMode,
       configError,
       completeOnboarding,
+      completeWebRedirectAuth,
       currentUserProfile,
       getValidAccessToken,
       isOffline,
